@@ -1,0 +1,19 @@
+.tmp/
+node_modules/
+dist/
+
+# Rust / Tauri build output
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Local runtime data: personal calibration (glyph bitmaps, character name/job),
+# captured samples and any backups. Everything here is machine-specific.
+data/
+
+# Local agent/tooling state
+.commandcode/
+
+# OS junk
+Thumbs.db
+desktop.ini
+.DS_Store
