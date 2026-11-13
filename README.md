@@ -43,8 +43,8 @@ Tray menu offers the same actions plus Quit.
 ## Calibrating
 
 1. Attach the game window (`Ctrl+Alt+T`, or tray → *Choose game window…*).
-2. Open calibration: tray → *Calibrate boxes…*, or the **Calibrate** button in the picker.
-3. **Freeze frame**, then drag boxes on the preview: EXP text, level digits, and optionally map label, character name and job. **Save boxes**. Draw the EXP box with a few pixels of slack on the right — the number grows and gains a digit at 100,000, which would otherwise clip the trailing `]` and make parsing fail.
+2. Open calibration: tray → *Calibrate boxes…*, the **Calibrate** button in the picker, or the **calibrate** button the overlay shows when the running client size has no profile yet. The overlay reports the reason; it never opens the window by itself.
+3. **Freeze frame**, then drag boxes on the preview: the EXP text, and optionally the map label and one **Name / Job** box drawn loosely around the two stacked lines under the bars (job over name — the app splits them). The level needs no box: it is derived from the EXP value and the percentage. **Save boxes**. A client size the app ships a preset for (`src-tauri/presets/`, or a `data/presets/` override) already has its boxes filled in, so the only step left is learning the digits. Otherwise draw the EXP box with a few pixels of slack on the right — the number grows and gains a digit at 100,000, which would otherwise clip the trailing `]` and make parsing fail.
 4. Type exactly what the EXP box shows (for example `86,813 [55.81%]`) and press **Learn digits**. The card shows what is learned and which digits are still missing.
 5. Teach the map, character name and job once by typing their labels.
 6. **Test parse** reads the frozen frame with the saved boxes — it must match what is on screen before you rely on it.

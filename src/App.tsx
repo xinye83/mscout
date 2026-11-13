@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { CaptureStatus, Profile, Sample, TargetStatus } from "./types";
@@ -9,11 +9,18 @@ import ExpChart from "./ExpChart";
 const MAP_MAX = 30;
 const MAX_SAMPLES = 5400;
 
-function dotClass(status: CaptureStatus | null) {
+function joinWords(words: string[]): string {
+  if (words.length <= 1) return words[0] ?? "";
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+function dotClass(status: CaptureStatus | null, unrecognised: boolean) {
   if (!status) return "off";
   if (status.state === "lost") return "lost";
+  if (status.state === "uncalibrated") return "uncalibrated";
   if (status.state === "degraded") return "degraded";
-  return "reading";
+  // The figures are good but something the overlay shows could not be recognised.
+  return unrecognised ? "nomap" : "reading";
 }
 
 function lastGainAt(samples: Sample[]): number | null {
@@ -100,7 +107,14 @@ export default function App() {
     void invoke("set_mode", { expanded }).catch(() => undefined);
   }, [expanded]);
 
-  const current = samples[samples.length - 1];
+  // Only a reading captured during this run counts as live. On-disk history is
+  // loaded for the chart and rates, but must never be shown as the current
+  // value: with no game attached the overlay holds placeholders instead.
+  const current =
+    capture?.state === "lost"
+      ? undefined
+      : samples.filter((sample) => sample.t >= sessionStart).at(-1);
+
   const derived = useMemo(() => {
     if (!current) return null;
 
@@ -142,21 +156,62 @@ export default function App() {
           : target.process || target.title || "attached"
         : "not found";
 
-  const dot = dotClass(capture);
+  const mapUnknown = current?.map === "unknown";
+  // Anything the overlay cannot show because it was never recognised. `profile` is
+  // null until the first reading arrives, so it is not treated as missing.
+  const unrecognised: string[] = [];
+  if (mapUnknown) unrecognised.push("map");
+  if (profile && !profile.name) unrecognised.push("name");
+  if (profile && !profile.job) unrecognised.push("job");
+
+  const dot = dotClass(capture, unrecognised.length > 0);
+  const lastHeight = useRef(0);
+
+  // The window is created at a fixed size, and content that wraps (a multi-line
+  // warning) used to overlap the rows below it. Let the panel decide the height and
+  // push it to the window instead.
+  useEffect(() => {
+    const panel = document.querySelector<HTMLElement>(".panel");
+    if (!panel) return;
+    lastHeight.current = 0;
+
+    const push = () => {
+      const height = Math.ceil(panel.getBoundingClientRect().height);
+      if (Math.abs(height - lastHeight.current) < 1) return;
+      lastHeight.current = height;
+      void invoke("resize_overlay", { height }).catch(() => undefined);
+    };
+
+    push();
+    const observer = new ResizeObserver(push);
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [expanded, current !== undefined]);
+  const uncalibrated = capture?.state === "uncalibrated";
+  // Both of these are fixable from the calibration window, so both get the
+  // buttons. `lost` does not: there is no frame to calibrate against.
+  const needsAttention = uncalibrated || capture?.state === "degraded";
+
 
   if (!current || !derived) {
+    // Whenever nothing is being read, say why. Uncalibrated, lost and degraded
+    // all carry a reason, so a failed parse explains itself instead of leaving a
+    // bare status dot. A healthy "reading" that has no sample yet needs no text.
+    const message =
+      capture && capture.state !== "reading"
+        ? capture.reason ??
+          (uncalibrated ? "not calibrated for this size" : "not reading")
+        : "";
+
     return (
       <div className={`panel ${expanded ? "expanded" : ""} ${interactive ? "active" : ""}`}>
         <div className="row head" data-tauri-drag-region>
           <span className={`dot ${dot}`} />
-          <span className="map" data-tauri-drag-region>
-            {capture?.state === "lost"
-              ? capture.reason ?? "not reading"
-              : "waiting for readings"}
+          <span className="map placeholder-msg" data-tauri-drag-region>
+            {message}
           </span>
-          {interactive && <span className="chip">interactive</span>}
         </div>
-        {interactive && (
+        {(needsAttention || interactive) && (
           <div className="foot">
             <button
               className="ghost"
@@ -164,7 +219,10 @@ export default function App() {
             >
               window
             </button>
-            <button className="ghost" onClick={() => void invoke("open_calibration")}>
+            <button
+              className={`ghost ${needsAttention ? "on" : ""}`}
+              onClick={() => void invoke("open_calibration")}
+            >
               calibrate
             </button>
           </div>
@@ -173,10 +231,13 @@ export default function App() {
     );
   }
 
+  // The label is stored as "street\nmap name". The map name (last line) is what
+  // actually identifies the map, so it is the headline; the street is context.
   const mapLines = current.map.split("\n");
+  const mapName = mapLines[mapLines.length - 1];
   const mapLabel =
-    mapLines[0].length > MAP_MAX ? `${mapLines[0].slice(0, MAP_MAX - 1)}…` : mapLines[0];
-  const mapSub = mapLines[1] ?? null;
+    mapName.length > MAP_MAX ? `${mapName.slice(0, MAP_MAX - 1)}…` : mapName;
+  const mapSub = mapLines.length > 1 ? mapLines[0] : null;
   const pct = Math.max(0, Math.min(100, current.pct));
   const requirement = expRequired(current.lv);
 
@@ -187,11 +248,16 @@ export default function App() {
         <span className="map" data-tauri-drag-region>
           {mapLabel}
         </span>
-        {interactive && <span className="chip">interactive</span>}
         {capture && capture.state !== "reading" && (
           <span className={`state ${capture.state}`}>{capture.state}</span>
         )}
       </div>
+
+      {expanded && capture && capture.state !== "reading" && capture.reason && (
+        <div className={`row status-reason ${capture.state}`}>
+          <span>{capture.reason}</span>
+        </div>
+      )}
 
       {mapSub && (
         <div className="row map-sub" data-tauri-drag-region>
@@ -199,12 +265,23 @@ export default function App() {
         </div>
       )}
 
-      {profile && (profile.name || profile.job) && (
-        <div className="row identity">
-          <span>{profile.name ?? "—"}</span>
-          <span>{profile.job ?? "—"}</span>
+      {unrecognised.length > 0 && (
+        <div className="row status-reason unrecognised">
+          <span>
+            <strong>{joinWords(unrecognised)}</strong> not recognised — teach{" "}
+            {unrecognised.length > 1 ? "them" : "it"} in Calibration
+          </span>
         </div>
       )}
+
+      <div className="row identity">
+        <span className={profile?.name ? undefined : "muted"}>
+          {profile?.name ?? "unknown"}
+        </span>
+        <span className={profile?.job ? undefined : "muted"}>
+          {profile?.job ?? "unknown"}
+        </span>
+      </div>
 
       <div className="row">
         <span className="level">Lv {current.lv}</span>
@@ -259,11 +336,25 @@ export default function App() {
         </>
       )}
 
-      {!expanded && interactive && (
+      {!expanded && (
         <div className="foot">
           <button className="ghost" onClick={() => setExpanded(true)}>
             more
           </button>
+          <span className="foot-actions">
+            <button
+              className="ghost"
+              onClick={() => void invoke("open_target_window")}
+            >
+              pick
+            </button>
+            <button
+              className="ghost"
+              onClick={() => void invoke("open_calibration")}
+            >
+              calibrate
+            </button>
+          </span>
         </div>
       )}
     </div>

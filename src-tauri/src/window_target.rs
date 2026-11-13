@@ -371,7 +371,22 @@ pub fn open_target_window<R: Runtime>(app: AppHandle<R>) {
     open_target_picker(&app);
 }
 
+/// Open (or reveal) the target picker.
+///
+/// The window must be built from the event loop, never synchronously inside the
+/// IPC message handler: a webview created there comes up blank. Calling
+/// `run_on_main_thread` directly is not enough because from the main thread it
+/// runs the closure inline, still inside the handler — so hop through a thread
+/// first, which guarantees the build is queued to the loop.
 pub fn open_target_picker<R: Runtime>(app: &AppHandle<R>) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let inner = handle.clone();
+        let _ = handle.run_on_main_thread(move || open_target_picker_on_main(&inner));
+    });
+}
+
+fn open_target_picker_on_main<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("target") {
         let _ = window.unminimize();
         let _ = window.show();

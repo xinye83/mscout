@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { Sample } from "./types";
+import type { RepairSummary, Sample } from "./types";
 import { formatRate, total } from "./rates";
 import ExpChart, { type ChartPoint } from "./ExpChart";
 
@@ -25,6 +25,8 @@ function downsample(points: ChartPoint[], max: number): ChartPoint[] {
 export default function History() {
   const [days, setDays] = useState(7);
   const [samples, setSamples] = useState<Sample[] | null>(null);
+  const [reload, setReload] = useState(0);
+  const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
     const now = Math.floor(Date.now() / 1000);
@@ -32,7 +34,22 @@ export default function History() {
     invoke<Sample[]>("read_samples", { from: now - days * 86_400, to: now })
       .then(setSamples)
       .catch(() => setSamples([]));
-  }, [days]);
+  }, [days, reload]);
+
+  const repair = async () => {
+    setNote(null);
+    try {
+      const summary = await invoke<RepairSummary>("repair_history");
+      setNote(
+        summary.flagged === 0
+          ? `Checked ${summary.checked.toLocaleString()} rows — none needed flagging.`
+          : `Flagged ${summary.flagged.toLocaleString()} misread rows of ${summary.checked.toLocaleString()} checked. They are skipped from now on, not deleted.`,
+      );
+      setReload((value) => value + 1);
+    } catch (cause) {
+      setNote(String(cause));
+    }
+  };
 
   const points = useMemo(() => {
     if (!samples) return [];
@@ -78,6 +95,9 @@ export default function History() {
           <p className="muted">Recorded EXP samples, wall-clock time.</p>
         </div>
         <div className="presets">
+          <button className="ghost" onClick={() => void repair()}>
+            repair history
+          </button>
           {RANGES.map((range) => (
             <button
               key={range.days}
@@ -89,6 +109,8 @@ export default function History() {
           ))}
         </div>
       </header>
+
+      {note && <p className="muted small">{note}</p>}
 
       {samples === null && <div className="empty">loading…</div>}
 

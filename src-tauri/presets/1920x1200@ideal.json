@@ -1,0 +1,340 @@
+{
+  "clientW": 1920,
+  "clientH": 1200,
+  "calibration": {
+    "clientW": 1920,
+    "clientH": 1200,
+    "exp": {
+      "x": 1023,
+      "y": 1170,
+      "w": 90,
+      "h": 11
+    },
+    "level": null,
+    "map": null,
+    "name": {
+      "x": 645,
+      "y": 1181,
+      "w": 96,
+      "h": 15
+    },
+    "job": {
+      "x": 645,
+      "y": 1166,
+      "w": 96,
+      "h": 15
+    }
+  },
+  "atlas": {
+    "cellW": 12,
+    "cellH": 16,
+    "glyphs": [
+      {
+        "ch": "X",
+        "w": 11,
+        "h": 16,
+        "cell": "ffffff000000000000ffff00ffffff00000000ffffffffffffffffff000000ffffffffffffffffffffffffffffffff0000ffffffffffffffffff000000ffffffffffffffffff00000000ffffffffffffff0000000000ffffffffffffff0000000000ffffffffffffff0000000000ffffffffffffff00000000ffffffffffffffffff0000ffffffffffffffffffffff00ffffffffff0000ffffffff00ffffffff000000ffffffffffffffff0000000000ffffffffff0000000000000000000000"
+      },
+      {
+        "ch": "P",
+        "w": 11,
+        "h": 15,
+        "cell": "00ffffffffffffff00000000ffffffffffffffffffffff00ffffffffffffffffffffff00ffffffff000000ffffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff000000ffffffffffffffffffffffffffffffff00ffffffffffffffffffffff00ffffffffffffffffffffff00ffffffffffffffffff000000ffffffff0000000000000000ffffffff0000000000000000ffffffff00000000ffffff00ffffffff00000000ffffff00ffffffff00000000ffffff00"
+      },
+      {
+        "ch": "8",
+        "w": 8,
+        "h": 11,
+        "cell": "000000ffffffffffff00000000ffffffffffffffffff000000ffffffffffffffffff0000ffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffff000000ffffffffffffffffff000000ffffffffffffffffff000000ffffffffffffffffff000000000000000000ffffff000000000000000000ffffffffffff000000000000ffffff00ffffffffffffffffffffff00ffffffffffffffffffffff000000ffffffffffffff0000"
+      },
+      {
+        "ch": "5",
+        "w": 9,
+        "h": 11,
+        "cell": "00ffffffffffffffffffff00ffffffffffffffffffffff00ffffffffffffffffffffff00ffffff000000000000000000ffffff000000000000000000ffffff00000000000000000000ffff000000000000000000000000ffffffffffff000000000000ffffffffffff00000000000000ffffffffffffff00000000000000000000ffffff000000000000000000ffffff00ffff000000000000ffffff00ffffffffffffffffffff0000ffffffffffffffffffff00000000ffffffffffff000000"
+      },
+      {
+        "ch": "9",
+        "w": 8,
+        "h": 11,
+        "cell": "000000ffffffffffff00000000ffffffffffffffffff000000ffffffffffffffffff0000ffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffff00ffffffffffffffffffffff00ffffffffffffffffffffff000000ffffffffffffffffff000000000000000000ffffff000000000000000000ffffffff0000000000000000ffffffffffffffffffffffffff0000ffffffffffffffffffff000000ffffffffffffffff000000"
+      },
+      {
+        "ch": "[",
+        "w": 2,
+        "h": 10,
+        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "ch": "0",
+        "w": 8,
+        "h": 11,
+        "cell": "00ffffffffffffffff00000000ffffffffffffffffff000000ffffffffffffffffff0000ffffff000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffffffffffffffffffffff0000ffffffffffffffffffff000000ffffffffffffffff000000"
+      },
+      {
+        "ch": ".",
+        "w": 1,
+        "h": 1,
+        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "ch": "5",
+        "w": 8,
+        "h": 11,
+        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000000000ffffffffffffff0000000000ffffffffffffff0000000000ffffffffffffffffff000000000000000000ffffff000000000000000000ffffffffffff000000000000ffffff00ffffffffffffffffffffff00ffffffffffffffffffffff000000ffffffffffffff0000"
+      },
+      {
+        "ch": "5",
+        "w": 8,
+        "h": 11,
+        "cell": "ffffffffffffffffffff0000ffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000000ff0000000000000000000000ff0000000000000000000000ffffff00000000000000000000ffffffffffffffff00000000ffffffffffffffff000000000000ffffffffffffff0000000000000000000000ffffff000000000000000000ffffffff0000000000000000ffffffffffffffffffffffffff0000ffffffffffffffffffff000000ffffffffffffffff000000"
+      },
+      {
+        "ch": "%",
+        "w": 11,
+        "h": 11,
+        "cell": "0000ff0000000000000000ff00ffffff000000000000ffff00ffffff000000000000ffffffff00ffff00000000ffff0000ffffff00000000ffff000000ffffff00000000ffff00000000ff00000000ffff0000000000000000ffffff000000000000000000ffffff0000000000000000ffffff0000ff0000000000ffff00000000ffff00000000ffff00000000ffff000000ffff000000ffff00ffff00ffff0000000000ffffffff00ffff0000000000ffffffffffff00000000000000ffff00"
+      },
+      {
+        "ch": "]",
+        "w": 2,
+        "h": 10,
+        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "ch": "7",
+        "w": 8,
+        "h": 11,
+        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff00000000000000ffffffffff00000000000000ffffff000000000000000000ffffff000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff0000000000"
+      },
+      {
+        "ch": ",",
+        "w": 3,
+        "h": 3,
+        "cell": "0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffffffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000"
+      },
+      {
+        "ch": "4",
+        "w": 8,
+        "h": 11,
+        "cell": "00000000000000ffff000000000000000000ffffff000000000000000000ffffff00000000000000ffffffffff000000000000ffffffffffff000000000000ffffffffffff00000000ffffff000000ffff000000ffffff00000000ffff000000ffffff00000000ffff000000ffffffffffffffffffff0000ffffffffffffffffffffffffffffffffffffffffffffffff000000000000ffffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff000000"
+      },
+      {
+        "ch": "8",
+        "w": 8,
+        "h": 11,
+        "cell": "000000ffffffffffff00000000ffffffffffffffffff000000ffffffffffffffffff0000ffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffff00ffffffffffffffff00000000ffffffffffffffff000000ffffffffffffffffffff0000ffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffffffffffffffffff0000ffffffffffffffffffff000000ffffffffffffffff000000"
+      },
+      {
+        "ch": ".",
+        "w": 2,
+        "h": 2,
+        "cell": "ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "ch": "1",
+        "w": 3,
+        "h": 11,
+        "cell": "00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff"
+      },
+      {
+        "ch": ",",
+        "w": 4,
+        "h": 3,
+        "cell": "000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000"
+      },
+      {
+        "ch": "1",
+        "w": 4,
+        "h": 11,
+        "cell": "000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffffffffffffffffffffffffffff000000ffffffffffffffffff000000ffffffffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff"
+      },
+      {
+        "ch": "3",
+        "w": 8,
+        "h": 11,
+        "cell": "00ffffffffffffffff00000000ffffffffffffffffff000000ffffffffffffffffff0000ffffff000000000000ffffffff0000000000000000ffffffff0000000000000000ffffff000000000000000000ffffff00000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff0000000000000000000000ffffff000000000000000000ffffffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffff00ffffffffffffffff000000"
+      },
+      {
+        "ch": "%",
+        "w": 12,
+        "h": 11,
+        "cell": "0000ffff000000000000ffff0000ffffff00000000ffffff0000ffffff00000000ffffffffffff00ffff0000ffff000000ffffffff0000ffffff000000ffffffff0000ffffff00000000ffff0000ffffff0000000000000000ffff00000000000000000000ffff000000000000000000ffffff0000ff000000000000ffff0000ffff000000000000ffff0000ffff00000000ffff000000ffff00ffff00ffffff000000ffffffff0000ffffff000000ffffffff0000ff000000000000ffff0000"
+      },
+      {
+        "ch": "[",
+        "w": 3,
+        "h": 11,
+        "cell": "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffffffffffff"
+      },
+      {
+        "ch": "]",
+        "w": 3,
+        "h": 11,
+        "cell": "ffffffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff00000000ffffffffffffffff00000000ffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "ch": "4",
+        "w": 9,
+        "h": 11,
+        "cell": "00000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000ffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffff0000ffff000000ffffff00000000ffff000000ffffff00000000ffff000000ffffffffffffffffffffff00ffffffffffffffffffffffffffffffffffffffffffffffff00000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff000000"
+      },
+      {
+        "ch": "5",
+        "w": 9,
+        "h": 11,
+        "cell": "00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff0000000000000000000000ffffffffffff000000000000ffffffffffff00000000000000ffffffffffffff00000000000000000000ffffff000000000000000000ffffff00ffff000000000000ffffff00ffffffffffffffffffff0000ffffffffffffffffffff00000000ffffffffffff000000"
+      },
+      {
+        "ch": "7",
+        "w": 9,
+        "h": 11,
+        "cell": "ffffffffffffffffffffff00ffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000ffffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff0000000000000000ffffff0000000000000000ffff00000000000000000000ffff0000000000000000ffffff0000000000000000ffffff000000000000000000ffffff000000000000000000ffffff0000000000"
+      },
+      {
+        "ch": "8",
+        "w": 8,
+        "h": 11,
+        "cell": "000000ffffffffffffff000000ffffffffffffffffff000000ffffffffffffffffff0000ffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffff000000ffffffffffffff0000000000ffffffffffffff000000ffffffffffffffffffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffff00ffffffffffffffffffffff00ffffffffffffffffffffff000000ffffffffffffff0000"
+      },
+      {
+        "ch": ".",
+        "w": 2,
+        "h": 1,
+        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "ch": "3",
+        "w": 8,
+        "h": 11,
+        "cell": "000000ffffffffffffff000000ffffffffffffffffff000000ffffffffffffffffff0000ffffff000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff00000000ffffffffffff000000000000ffffffffffff0000000000000000ffffffffffff000000000000000000ffffff000000000000000000ffffffffffff000000000000ffffff00ffffffffffffffffffffff00ffffffffffffffffffffff000000ffffffffffffff0000"
+      },
+      {
+        "ch": "2",
+        "w": 8,
+        "h": 11,
+        "cell": "000000ffffffffffff00000000ffffffffffffffffff000000ffffffffffffffffff0000ffffff000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff00000000000000ffffff000000000000000000ffffff0000000000000000ffffff00000000000000ffffff000000000000000000ffffff0000000000000000ffffff00000000000000ffffffffffffffffff000000ffffffffffffffffff0000ffffffffffffffffffffffff"
+      },
+      {
+        "ch": "1",
+        "w": 4,
+        "h": 11,
+        "cell": "000000000000ffffff000000000000ffffffffffffffffff000000ffffffffffffffffffffffffffffffffffffffffff000000ffffffffffffffffff000000ffffffffffffffffff000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000"
+      },
+      {
+        "ch": "2",
+        "w": 9,
+        "h": 11,
+        "cell": "000000ffffffffffff000000000000ffffffffffffffff00000000ffffffffffffffff00ffffffff0000000000ffffff00ffff000000000000ffffff00ffff000000000000ffffff000000000000000000ffffff00000000000000ffff00000000000000000000ffff0000000000000000ffffffff0000000000000000ffff00000000000000000000ffff0000000000000000ffff0000000000000000ffffffffffffffffffff0000ffffffffffffffffffff0000ffffffffffffffffffffff"
+      },
+      {
+        "ch": "9",
+        "w": 9,
+        "h": 11,
+        "cell": "000000ffffffffffff000000000000ffffffffffffffff00000000ffffffffffffffff00ffffffff0000000000ffffffffffffff0000000000ffffffffffffff0000000000ffffff00ffffff00000000ffffffff000000ffffffffffffffffff000000ffffffffffffffffff00000000ffffffffffffffff000000000000000000ffffff000000000000000000ffffff00ffff000000000000ffffff00ffffffffffffffffffff0000ffffffffffffffffffff00000000ffffffffffff000000"
+      },
+      {
+        "ch": "]",
+        "w": 3,
+        "h": 11,
+        "cell": "00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffffffffffffffffffffffffffff"
+      },
+      {
+        "ch": ".",
+        "w": 2,
+        "h": 2,
+        "cell": "000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "ch": "4",
+        "w": 8,
+        "h": 11,
+        "cell": "000000000000ffffff000000000000000000ffffff000000000000000000ffffff00000000000000ffffffffff00000000ffffffffffffffff00000000ffffffffffffffff00000000ffffff0000ffffff000000ffffff000000ffffff000000ffffff000000ffffff000000ffffffffffffffffffff0000ffffffffffffffffffffffffffffffffffffffffffffffff000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000"
+      },
+      {
+        "ch": "0",
+        "w": 9,
+        "h": 11,
+        "cell": "000000ffffffffffff00000000ffffffffffffffff00000000ffffffffffffffff000000ffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffff00ffffffffffffffffffff0000ffffffffffffffffffff00000000ffffffffffff000000"
+      },
+      {
+        "ch": "4",
+        "w": 5,
+        "h": 7,
+        "cell": "00000000000000ffffff000000000000000000ffffff00000000000000ffffffffff00000000000000ffffffffff00000000000000ffffffffff00000000ffffff0000ffffff00000000ffffff0000ffffff0000ffff0000000000ffffff0000ffff0000000000ffffff0000ffffffffffffffffffffffffffffffffffffffffffffffff00000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff0000"
+      },
+      {
+        "ch": "7",
+        "w": 5,
+        "h": 7,
+        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000ffffff000000000000000000ffffff00000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff0000000000"
+      },
+      {
+        "ch": ",",
+        "w": 2,
+        "h": 2,
+        "cell": "000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffffffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000"
+      },
+      {
+        "ch": "0",
+        "w": 5,
+        "h": 7,
+        "cell": "0000ffffffffffffffff00000000ffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffff00000000ffffffffffffffff0000"
+      },
+      {
+        "ch": "9",
+        "w": 5,
+        "h": 7,
+        "cell": "0000ffffffffffffffff00000000ffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffffffff0000ffffffffffffffffffff00000000000000000000ffff00000000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffff00000000ffffffffffffffff0000"
+      },
+      {
+        "ch": "[",
+        "w": 2,
+        "h": 7,
+        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "ch": "2",
+        "w": 5,
+        "h": 7,
+        "cell": "0000ffffffffffffffff00000000ffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000ffffff000000000000000000ffffff00000000000000ffff00000000000000000000ffff00000000000000ffffff000000000000000000ffffff000000000000000000ffffff00000000000000ffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "ch": "3",
+        "w": 5,
+        "h": 7,
+        "cell": "0000ffffffffffffffff00000000ffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff00000000000000000000ffff00000000000000000000ffff0000000000ffffffffff00000000000000ffffffffff000000000000000000000000ffff00000000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffff00000000ffffffffffffffff0000"
+      },
+      {
+        "ch": "%",
+        "w": 7,
+        "h": 7,
+        "cell": "0000ff00000000000000ffff0000ff00000000000000ffffffff00ffff00000000ff0000ffff00ffff00000000ff0000ffff00ffff00000000ff00000000ff00000000ffff0000000000ff00000000ffff0000000000000000ffff00000000000000000000ffff0000000000000000ffff00000000ff0000000000ffff00000000ff00000000ff00000000ffff00ffff0000ff00000000ffff00ffff0000ff00000000ffff00ffffffff00000000000000ff0000ffff00000000000000ff0000"
+      },
+      {
+        "ch": "]",
+        "w": 2,
+        "h": 7,
+        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "ch": "1",
+        "w": 2,
+        "h": 7,
+        "cell": "000000000000ffffffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff"
+      },
+      {
+        "ch": "6",
+        "w": 5,
+        "h": 7,
+        "cell": "0000ffffffffffffffff00000000ffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff00000000000000000000ffff00000000000000000000ffffffffffffffffffff0000ffffffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffff00000000ffffffffffffffff0000"
+      }
+    ]
+  },
+  "maps": [],
+  "identities": {
+    "name": null,
+    "job": null
+  },
+  "uiMode": "ideal"
+}

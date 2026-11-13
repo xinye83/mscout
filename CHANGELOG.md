@@ -4,6 +4,28 @@ All notable changes to MScout are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the major version is `0`, the minor version is bumped for features and the patch for fixes; anything may still change between `0.x` releases.
 
+## [0.2.0] - 2026-11-13
+
+### Added
+- Profiles and presets keyed by client size **and** the game's UI Size option, with a picker in Calibration. The default mode keeps the bare `1920x1200` name; the others take `@filtered` and `@ideal`.
+- Shipped presets for 1920×1200 in all three UI modes and for 1366×768. A preset carries the boxes and the glyph set, including the name/job boxes, so a known size only needs its two labels typed.
+- Minimap names read as text from a letter atlas taught by the same step that records a map, with fuzzy snapping and the position-aware structure of the EXP readout. An exact fingerprint takes precedence, because it cannot be mislabelled.
+- Review frames: every rejected read saves its EXP box, with a panel in Calibration to label it once and turn it into a glyph.
+- `repair history` flags recorded rows that break the invariants instead of deleting them; every reader skips flagged rows.
+- A detected minimap-label preview in Calibration, and a `data/debug.log` trail for the teach path.
+
+### Changed
+- Validation tied to the percentage's own precision: the level derivation and the EXP/percentage cross-check now use the two-decimal floor rather than a flat 2% and 0.25 pp.
+- A derived level may never decrease, the drop guard is carried across restarts, and an all-empty calibration save is refused.
+- Glyph matching tolerates a one-pixel raster difference (centre-weighted comparison, proportionate size penalty), so a rendering no longer needs its own learned variant.
+- The overlay sizes itself to its content, and reports each unrecognised item (map, name, job) on one line.
+
+### Fixed
+- Calibration and Target windows coming up blank and unclosable — a webview built inside the IPC handler.
+- Teaches saving a window's stale box state back over boxes the profile already had, wiping them.
+- The level derivation accepting truncated EXP numbers, which is what put dips in the history.
+- Ideal Ratio glyphs never separating: a gradient background first, then a full-width rule, both defeating the adaptive threshold.
+
 ## [Unreleased]
 
 ### Planned

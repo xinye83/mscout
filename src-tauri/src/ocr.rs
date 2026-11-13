@@ -6,16 +6,34 @@ pub const CELL_H: usize = 16;
 pub const CELL_LEN: usize = CELL_W * CELL_H;
 
 const MATCH_THRESHOLD: f64 = 30.0;
-const MATCH_MARGIN: f64 = 12.0;
 const MIN_GLYPH_PIXELS: usize = 1;
+/// Two shapes of the same character closer than this are the same variant.
+const VARIANT_DISTANCE: f64 = 8.0;
+/// How far a sample may slide within its cell when matching (sub-pixel drift).
+const SHIFT_SEARCH: i32 = 1;
 
 pub type Cell = [u8; CELL_LEN];
 
 #[derive(Clone, Copy, Debug)]
 pub struct Segment {
     pub cell: Cell,
+    pub x: i32,
+    pub y: i32,
     pub w: u32,
     pub h: u32,
+}
+
+/// One segmented shape and what the atlas thinks it is.
+#[derive(Clone, Copy, Debug)]
+pub struct Guess {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    pub ch: char,
+    pub distance: f64,
+    pub known: bool,
+    pub cell: Cell,
 }
 
 #[derive(Clone, Debug)]
@@ -116,6 +134,15 @@ fn foreground(gray: &Gray) -> Vec<bool> {
     gray.px.iter().map(|&pixel| pixel > threshold).collect()
 }
 
+fn foreground_with_floor(gray: &Gray, floor: u8) -> Vec<bool> {
+    let threshold = otsu_threshold(gray).max(floor);
+    gray.px.iter().map(|&pixel| pixel > threshold).collect()
+}
+
+/// Threshold used when the adaptive one collapses a readout into one blob. These
+/// renderings draw near-white text, so anything this bright is text.
+const TEXT_FLOOR: u8 = 170;
+
 fn normalize(
     mask: &[bool],
     stride: usize,
@@ -139,8 +166,80 @@ fn normalize(
     cell
 }
 
-pub fn segments(gray: &Gray) -> Vec<Segment> {
+/// How many foreground pixels sit in each column of `gray`. Splitting on the empty
+/// columns is how `segments` finds glyphs, so this shows whether a rendering keeps
+/// them apart at all.
+pub fn column_ink(gray: &Gray) -> Vec<u32> {
+    ink_of(&foreground(gray), gray.w, gray.h)
+}
+
+/// The same, with the fixed threshold the blob fallback uses.
+pub fn column_ink_floor(gray: &Gray, floor: u8) -> Vec<u32> {
+    ink_of(&foreground_with_floor(gray, floor), gray.w, gray.h)
+}
+
+/// The thresholded crop as text, one line per row, for eyeballing a rendering the
+/// reader cannot segment.
+pub fn shape_art(gray: &Gray) -> Vec<String> {
     let mask = foreground(gray);
+    (0..gray.h)
+        .map(|y| {
+            (0..gray.w)
+                .map(|x| if mask[y * gray.w + x] { '#' } else { '.' })
+                .collect()
+        })
+        .collect()
+}
+
+/// The same, per row. Used to find where two stacked lines meet when the gap
+/// between them is too thin for `text_lines` to see.
+pub fn row_ink(gray: &Gray) -> Vec<u32> {
+    let mask = foreground(gray);
+    (0..gray.h)
+        .map(|y| {
+            (0..gray.w)
+                .filter(|x| mask[y * gray.w + x])
+                .count() as u32
+        })
+        .collect()
+}
+
+fn ink_of(mask: &[bool], w: usize, h: usize) -> Vec<u32> {
+    let mut columns = vec![0u32; w];
+    for y in 0..h {
+        for x in 0..w {
+            if mask[y * w + x] {
+                columns[x] += 1;
+            }
+        }
+    }
+    columns
+}
+
+pub fn segments(gray: &Gray) -> Vec<Segment> {
+    let found = split_shapes(gray, None);
+    if found.len() > 1 {
+        return found;
+    }
+
+    // A rendering whose background reaches the same brightness as the text makes
+    // OTSU split the gradient instead of the text, and the whole line comes back as
+    // a single shape — which is what the Ideal Ratio HUD does. These readouts are
+    // near-white, so a high fixed threshold separates them where the adaptive one
+    // cannot. Only used as a fallback, so renderings that already work are untouched.
+    let bright = split_shapes(gray, Some(TEXT_FLOOR));
+    if bright.len() > found.len() {
+        bright
+    } else {
+        found
+    }
+}
+
+fn split_shapes(gray: &Gray, floor: Option<u8>) -> Vec<Segment> {
+    let mask = match floor {
+        Some(floor) => foreground_with_floor(gray, floor),
+        None => foreground(gray),
+    };
     let mut columns = vec![0u32; gray.w];
     for y in 0..gray.h {
         for x in 0..gray.w {
@@ -183,6 +282,8 @@ pub fn segments(gray: &Gray) -> Vec<Segment> {
 
         out.push(Segment {
             cell: normalize(&mask, gray.w, start, top, end - start, bottom - top),
+            x: start as i32,
+            y: top as i32,
             w: (end - start) as u32,
             h: (bottom - top) as u32,
         });
@@ -191,16 +292,159 @@ pub fn segments(gray: &Gray) -> Vec<Segment> {
     out
 }
 
+/// Bounding boxes of the horizontal text lines in `gray`, top to bottom, as
+/// `(x, y, w, h)` relative to the crop. A run of blank rows splits the lines; a
+/// run shorter than `LINE_GAP` is treated as inside the same line, so a gap
+/// between glyphs (or a descender row) does not fragment it.
+pub fn text_lines(gray: &Gray) -> Vec<(i32, i32, i32, i32)> {
+    const LINE_GAP: usize = 2;
+    // Shorter than any glyph line: a panel border or separator caught by a
+    // generous box edge, not text.
+    const MIN_LINE_H: usize = 4;
+
+    let mask = foreground(gray);
+    let mut occupied = vec![false; gray.h];
+    for y in 0..gray.h {
+        for x in 0..gray.w {
+            if mask[y * gray.w + x] {
+                occupied[y] = true;
+                break;
+            }
+        }
+    }
+
+    let mut lines = Vec::new();
+    let mut y = 0;
+    while y < gray.h {
+        if !occupied[y] {
+            y += 1;
+            continue;
+        }
+
+        let start = y;
+        let mut last = y;
+        let mut blank = 0;
+        while y < gray.h {
+            if occupied[y] {
+                last = y;
+                blank = 0;
+            } else {
+                blank += 1;
+                if blank > LINE_GAP {
+                    break;
+                }
+            }
+            y += 1;
+        }
+
+        let mut min_x = usize::MAX;
+        let mut max_x = 0;
+        for row in start..=last {
+            for x in 0..gray.w {
+                if mask[row * gray.w + x] {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x);
+                }
+            }
+        }
+        let height = last - start + 1;
+        if min_x != usize::MAX && height >= MIN_LINE_H {
+            lines.push((
+                min_x as i32,
+                start as i32,
+                (max_x - min_x + 1) as i32,
+                height as i32,
+            ));
+        }
+    }
+
+    lines
+}
+
+/// Blur a cell before comparing it. The game rasterises the same character a
+/// pixel wider or narrower from one frame to the next, and against a sharp cell
+/// that shows up as a large distance — which is what made a glyph need its own
+/// learned variant per rendering. Softening both sides keeps such differences
+/// proportionate while leaving genuinely different characters distinct.
+fn soften(cell: &Cell) -> Cell {
+    let mut out = [0u8; CELL_LEN];
+    for y in 0..CELL_H {
+        for x in 0..CELL_W {
+            // Centre-weighted: a full box blur also merges narrow shapes — a `1`
+            // starts reading as the `]` bracket, which is the same kind of bar.
+            let mut total = cell[y * CELL_W + x] as u32 * 4;
+            let mut count = 4u32;
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let sx = x as i32 + dx;
+                    let sy = y as i32 + dy;
+                    if sx < 0 || sy < 0 || sx >= CELL_W as i32 || sy >= CELL_H as i32 {
+                        continue;
+                    }
+                    total += cell[sy as usize * CELL_W + sx as usize] as u32;
+                    count += 1;
+                }
+            }
+            out[y * CELL_W + x] = (total / count) as u8;
+        }
+    }
+    out
+}
+
 fn cell_distance(a: &Cell, b: &Cell) -> f64 {
-    let total: u64 = a
+    let left = soften(a);
+    let right = soften(b);
+    let total: u64 = left
         .iter()
-        .zip(b)
+        .zip(&right)
         .map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs() as u64)
         .sum();
     total as f64 / CELL_LEN as f64
 }
 
-const SIZE_PENALTY: f64 = 18.0;
+/// Cell distance allowing the sample to slide by `search` cells in each
+/// direction. The game rasterises the readout at sub-pixel positions, so the same
+/// character comes back a fraction of a cell off from one frame to the next.
+fn cell_distance_shifted(a: &Cell, b: &Cell, search: i32) -> f64 {
+    let left = soften(a);
+    let right = soften(b);
+    let mut best = f64::MAX;
+
+    for dy in -search..=search {
+        for dx in -search..=search {
+            let mut total: u64 = 0;
+            for y in 0..CELL_H {
+                for x in 0..CELL_W {
+                    let sx = x as i32 - dx;
+                    let sy = y as i32 - dy;
+                    if sx < 0 || sy < 0 || sx >= CELL_W as i32 || sy >= CELL_H as i32 {
+                        continue;
+                    }
+                    let a_pixel = left[y * CELL_W + x] as i32;
+                    let b_pixel = right[sy as usize * CELL_W + sx as usize] as i32;
+                    total += (a_pixel - b_pixel).unsigned_abs() as u64;
+                }
+            }
+            let distance = total as f64 / CELL_LEN as f64;
+            if distance < best {
+                best = distance;
+            }
+        }
+    }
+
+    best
+}
+
+/// Cost per pixel of size difference when matching. It exists to keep shapes
+/// that differ a lot in size apart — a period from a comma, a `1` from an `8` —
+/// but a glyph's own outline flickers by a pixel from frame to frame (anti-
+/// aliasing, and the Filter Applied rendering), so a one-pixel difference has to
+/// stay cheap. At the old value a single pixel added 18 and pushed a correct
+/// match past the threshold, which dropped the digit and failed the read.
+const SIZE_PENALTY: f64 = 4.0;
 
 #[derive(Clone, Debug, Default)]
 pub struct Atlas {
@@ -258,12 +502,21 @@ impl Atlas {
     }
 
     pub fn learn(&mut self, text: &str, gray: &Gray) -> Result<Vec<char>, String> {
-        let found = segments(gray);
+        let mut found = segments(gray);
         let chars: Vec<char> = text.chars().filter(|ch| !ch.is_whitespace()).collect();
 
         if chars.is_empty() {
             return Err("type the text shown in the box".into());
         }
+
+        // A box drawn around the whole readout also catches the "EXP" label. If
+        // there are extra shapes, drop them from the left — the label sits there —
+        // so typing just the number and percentage still lines up.
+        if found.len() > chars.len() {
+            let extra = found.len() - chars.len();
+            found.drain(0..extra);
+        }
+
         if found.len() != chars.len() {
             return Err(format!(
                 "found {} shapes but {} characters — drag a tighter box or type exactly what is shown",
@@ -279,18 +532,157 @@ impl Atlas {
                 w: segment.w,
                 h: segment.h,
             };
-            if let Some(existing) = self
-                .glyphs
-                .iter_mut()
-                .find(|known| known.ch == *ch && known.w == glyph.w && known.h == glyph.h)
-            {
-                *existing = glyph;
-            } else {
+            // Keep several shapes per character: the same digit can render a
+            // pixel or two differently depending on where it sits (scaling and
+            // hinting), and collapsing them loses whichever variant came second.
+            // Size is part of the identity because matching penalises it — if a
+            // shape is the same character at a different size it is a new variant,
+            // not something already known.
+            let known = self.glyphs.iter().any(|existing| {
+                existing.ch == *ch
+                    && existing.w == glyph.w
+                    && existing.h == glyph.h
+                    && cell_distance(&existing.cell, &glyph.cell) <= VARIANT_DISTANCE
+            });
+            if !known {
                 self.glyphs.push(glyph);
             }
         }
 
         Ok(chars)
+    }
+
+    fn distance_to(&self, segment: &Segment, glyph: &Glyph) -> f64 {
+        let size_penalty = SIZE_PENALTY
+            * ((segment.w as f64 - glyph.w as f64).abs()
+                + (segment.h as f64 - glyph.h as f64).abs());
+        cell_distance_shifted(&segment.cell, &glyph.cell, SHIFT_SEARCH) + size_penalty
+    }
+
+    /// Nearest glyph for a segment: (character, best distance, runner-up of a
+    /// *different* character). Another shape of the same character is a variant,
+    /// not ambiguity.
+    fn match_segment(&self, segment: &Segment) -> (char, f64, f64) {
+        let distance_to = |glyph: &Glyph| self.distance_to(segment, glyph);
+
+        let mut best = ('?', f64::MAX);
+        for glyph in &self.glyphs {
+            let distance = distance_to(glyph);
+            if distance < best.1 {
+                best = (glyph.ch, distance);
+            }
+        }
+
+        let mut other = f64::MAX;
+        for glyph in &self.glyphs {
+            if glyph.ch == best.0 {
+                continue;
+            }
+            let distance = distance_to(glyph);
+            if distance < other {
+                other = distance;
+            }
+        }
+
+        (best.0, best.1, other)
+    }
+
+    /// Nearest glyph whose character is one of `allowed`, or `None` when even the
+    /// closest of them is too far to trust.
+    fn match_segment_within(&self, segment: &Segment, allowed: &str) -> Option<(char, f64)> {
+        let mut best: Option<(char, f64)> = None;
+        for glyph in &self.glyphs {
+            if !allowed.contains(glyph.ch) {
+                continue;
+            }
+            let distance = self.distance_to(segment, glyph);
+            if best.map_or(true, |(_, closest)| distance < closest) {
+                best = Some((glyph.ch, distance));
+            }
+        }
+
+        best.filter(|(_, distance)| *distance <= MATCH_THRESHOLD)
+    }
+
+    /// Read an EXP-style readout — a number, then a bracketed percentage — using
+    /// the shape of the readout to restrict what each position may contain. The
+    /// closing bracket is only a candidate once the percentage has started, which
+    /// is what stops a `1` (the same narrow bar) being read as one.
+    pub fn recognize_readout(&self, gray: &Gray) -> Result<(String, f64), String> {
+        const NUMBER: &str = "0123456789,[";
+        const PERCENT: &str = "0123456789.%";
+        const CLOSE: &str = "]";
+
+        if self.glyphs.is_empty() {
+            return Err("no glyphs learned yet".into());
+        }
+
+        let mut text = String::new();
+        let mut confidence = 0.0;
+        let mut matched = 0usize;
+        let mut stage = 0usize;
+
+        for segment in segments(gray) {
+            let allowed = match stage {
+                0 => NUMBER,
+                1 => PERCENT,
+                _ => CLOSE,
+            };
+
+            let Some((ch, best)) = self.match_segment_within(&segment, allowed) else {
+                continue;
+            };
+            if ch == '[' {
+                stage = 1;
+            } else if ch == '%' {
+                stage = 2;
+            }
+
+            text.push(ch);
+            confidence += (1.0 - best / 255.0).max(0.0);
+            matched += 1;
+        }
+
+        if matched == 0 {
+            return Err("nothing recognizable in the box — learn the digits".into());
+        }
+
+        Ok((text, confidence / matched as f64))
+    }
+
+    /// Add a shape the player identified by hand. Stored as-is, so it matches the
+    /// exact pixels it was labelled from — including one-pixel shapes like `.`.
+    pub fn learn_glyph(&mut self, ch: char, cell: Cell, w: u32, h: u32) {
+        let known = self.glyphs.iter().any(|existing| {
+            existing.ch == ch
+                && existing.w == w
+                && existing.h == h
+                && cell_distance(&existing.cell, &cell) <= VARIANT_DISTANCE
+        });
+        if !known {
+            self.glyphs.push(Glyph { ch, cell, w, h });
+        }
+    }
+
+    /// Per-segment classification. `known` means the best match is close enough
+    /// to trust without asking the player.
+    pub fn explain(&self, gray: &Gray) -> Vec<Guess> {
+        segments(gray)
+            .into_iter()
+            .map(|segment| {
+                let (ch, best, _) = self.match_segment(&segment);
+                Guess {
+                    x: segment.x,
+                    y: segment.y,
+                    w: segment.w,
+                    h: segment.h,
+                    ch,
+                    distance: best,
+                    known: best <= MATCH_THRESHOLD,
+                    cell: segment.cell,
+                }
+            })
+            .collect()
     }
 
     pub fn recognize(&self, gray: &Gray) -> Result<(String, f64), String> {
@@ -303,40 +695,33 @@ impl Atlas {
             return Err("nothing readable in the box".into());
         }
 
-        let count = found.len();
-        let mut text = String::with_capacity(count);
+        let mut text = String::with_capacity(found.len());
         let mut confidence = 0.0;
+        let mut matched = 0usize;
 
         for segment in found {
-            let mut best = ('?', f64::MAX);
-            let mut second = f64::MAX;
+            let (ch, best, _) = self.match_segment(&segment);
 
-            for glyph in &self.glyphs {
-                let size_penalty = SIZE_PENALTY
-                    * ((segment.w as f64 - glyph.w as f64).abs()
-                        + (segment.h as f64 - glyph.h as f64).abs());
-                let distance = cell_distance(&segment.cell, &glyph.cell) + size_penalty;
-
-                if distance < best.1 {
-                    second = best.1;
-                    best = (glyph.ch, distance);
-                } else if distance < second {
-                    second = distance;
-                }
+            // Two cases are deliberately not errors here:
+            // - a shape that matches nothing is skipped (a box around the readout
+            //   also catches the "EXP" label, which is not in the glyph set);
+            // - a close runner-up is kept as the best match.
+            // Either way the EXP cross-check and the verify-reads gate reject a
+            // read where a digit was dropped or misread.
+            if best > MATCH_THRESHOLD {
+                continue;
             }
 
-            if best.1 > MATCH_THRESHOLD {
-                return Err("unrecognized glyph — learn the digits again".into());
-            }
-            if best.1 > 6.0 && second < f64::MAX && second - best.1 < MATCH_MARGIN {
-                return Err("ambiguous glyph — learn more digits".into());
-            }
-
-            text.push(best.0);
-            confidence += (1.0 - best.1 / 255.0).max(0.0);
+            text.push(ch);
+            confidence += (1.0 - best / 255.0).max(0.0);
+            matched += 1;
         }
 
-        Ok((text, confidence / count as f64))
+        if matched == 0 {
+            return Err("nothing recognizable in the box — learn the digits".into());
+        }
+
+        Ok((text, confidence / matched as f64))
     }
 }
 
@@ -385,8 +770,11 @@ const PANEL_MAX_W: i32 = 900;
 const PANEL_MIN_H: i32 = 20;
 const PANEL_MAX_H: i32 = 300;
 const PANEL_MIN_SOLIDITY: f64 = 30.0;
-const TITLE_BAR_H: i32 = 20;
-const ICON_GUTTER: i32 = 40;
+/// The title bar is the panel's top band and the minimap graphic sits on its
+/// left; both scale with the panel, so the name crop is proportional rather than
+/// a fixed number of pixels (which started inside the title bar and the graphic).
+const TITLE_BAR_FRACTION: f64 = 0.34;
+const GRAPHIC_GUTTER_FRACTION: f64 = 0.25;
 const TEXT_MIN_RGB: u8 = 225;
 
 pub fn resample(gray: &Gray, w: usize, h: usize) -> Gray {
@@ -514,10 +902,11 @@ pub fn detect_minimap_panel(frame: &Frame) -> Option<Region> {
 pub fn detect_map_label(frame: &Frame, panel: Region) -> Option<Region> {
     let w = frame.width as usize;
     let h = frame.height as usize;
-    let x_start = (panel.x + ICON_GUTTER).max(0) as usize;
+    let x_start = ((panel.x as f64 + panel.w as f64 * GRAPHIC_GUTTER_FRACTION) as i32).max(0)
+        as usize;
     let x_end = ((panel.x + panel.w) as usize).min(w);
     // Skip the panel's title bar; the map name is drawn below it.
-    let y_start = (panel.y + TITLE_BAR_H).max(0) as usize;
+    let y_start = ((panel.y as f64 + panel.h as f64 * TITLE_BAR_FRACTION) as i32).max(0) as usize;
     let y_end = ((panel.y + panel.h) as usize).min(h);
     if x_end <= x_start || y_end <= y_start {
         return None;
@@ -564,6 +953,124 @@ pub fn read_map_label(frame: &Frame) -> Option<Gray> {
         return None;
     }
     Some(resample(&gray, MAP_LABEL_W, MAP_LABEL_H))
+}
+
+/// The minimap label's text lines, cropped from the frame, top to bottom. The
+/// label is the street line followed by the map name.
+pub fn map_label_lines(frame: &Frame) -> Option<Vec<Gray>> {
+    let panel = detect_minimap_panel(frame)?;
+    let label = detect_map_label(frame, panel)?;
+    let gray = crop_gray(frame, label)?;
+    if gray.w < 8 || gray.h < 6 {
+        return None;
+    }
+
+    let mut out = Vec::new();
+    let bands = text_lines(&gray);
+    // The label's lines are all the same font, so the first band's height is the
+    // height of every later line. Without that cap a band runs on into the
+    // minimap graphic below the name and the crop swallows it.
+    let line_h = bands.first().map(|(_, _, _, h)| *h).unwrap_or(0);
+    for (x, y, w, h) in bands {
+        let region = Region {
+            x: label.x + x,
+            y: label.y + y,
+            w,
+            h: if line_h > 0 { h.min(line_h) } else { h },
+        };
+        if let Some(line) = crop_gray(frame, region) {
+            out.push(line);
+        }
+    }
+
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// The minimap label read as text, one string per line. `None` when the label
+/// cannot be found, no label glyphs have been learned yet, or too many shapes
+/// went unrecognised — a partly-read label would name the wrong map, so it is
+/// better to report nothing and fall back to a taught fingerprint.
+pub fn read_map_text(frame: &Frame, atlas: &Atlas) -> Option<Vec<String>> {
+    if atlas.glyphs.is_empty() {
+        return None;
+    }
+
+    let lines = map_label_lines(frame)?;
+
+    let mut unrecognised = 0usize;
+    let mut text = Vec::with_capacity(lines.len());
+    for line in &lines {
+        // One stray shape per line is tolerated: the crop can catch a minimap
+        // marker or an edge of the panel next to the text.
+        unrecognised += atlas
+            .explain(line)
+            .iter()
+            .filter(|guess| !guess.known)
+            .count();
+        text.push(
+            atlas
+                .recognize(line)
+                .map(|(text, _)| text)
+                .unwrap_or_default(),
+        );
+    }
+
+    if unrecognised > lines.len() || text.iter().all(|line| line.is_empty()) {
+        return None;
+    }
+
+    Some(text)
+}
+
+/// Drop a trailing channel marker: `Free Market <15>` and `Free Market <16>` are
+/// the same map on different channels.
+fn without_channel(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    match (lower.find('<'), lower.rfind('>')) {
+        (Some(open), Some(close)) if close > open => {
+            format!("{}{}", &text[..open], &text[close + 1..]).trim().to_string()
+        }
+        _ => text.trim().to_string(),
+    }
+}
+
+fn edit_distance(a: &[char], b: &[char]) -> usize {
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    let mut current = vec![0usize; b.len() + 1];
+    for (i, left) in a.iter().enumerate() {
+        current[0] = i + 1;
+        for (j, right) in b.iter().enumerate() {
+            let substitution = previous[j] + usize::from(left != right);
+            current[j + 1] = substitution.min(previous[j + 1] + 1).min(current[j] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[b.len()]
+}
+
+/// How close two labels are, 0..=1, ignoring case and the channel marker. Used to
+/// snap a mostly-correct read onto a name that was taught explicitly.
+pub fn label_similarity(a: &str, b: &str) -> f64 {
+    let a: Vec<char> = without_channel(a)
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    let b: Vec<char> = without_channel(b)
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+
+    let longest = a.len().max(b.len()) as f64;
+    1.0 - edit_distance(&a, &b) as f64 / longest
 }
 
 pub fn map_distance(crop: &Gray, template: &Gray) -> Option<f64> {
@@ -708,6 +1215,46 @@ mod tests {
         let (payload, _) = sample_pair();
         let mut atlas = Atlas::default();
         assert!(atlas.learn("012", &payload).is_err());
+    }
+
+    #[test]
+    fn same_character_at_a_new_size_is_a_new_variant() {
+        // A dot already known at 1x1, then the same character drawn at 2x2: it
+        // must be stored, otherwise matching keeps rejecting it on size.
+        let mut atlas = Atlas {
+            glyphs: vec![Glyph {
+                ch: '.',
+                cell: [255; CELL_LEN],
+                w: 1,
+                h: 1,
+            }],
+        };
+        let dot = Gray {
+            w: 2,
+            h: 2,
+            px: vec![255, 255, 255, 255],
+        };
+
+        atlas.learn(".", &dot).expect("learn");
+        assert_eq!(atlas.glyphs.len(), 2, "a new size is a new variant");
+        assert_eq!(
+            atlas.recognize(&dot).map(|(text, _)| text).as_deref(),
+            Ok(".")
+        );
+    }
+
+    #[test]
+    fn labels_snap_across_channels() {
+        assert_eq!(label_similarity("Free Market <15>", "Free Market <16>"), 1.0);
+
+        let near = label_similarity(
+            "Hidden Street\nFree Markei <15>",
+            "Hidden Street\nFree Market <15>",
+        );
+        assert!(near > 0.95, "one wrong letter should still snap: {near}");
+
+        assert!(label_similarity("Kerning City", "Victoria Road\nKerning City") < 0.6);
+        assert_eq!(label_similarity("", "x"), 0.0);
     }
 
     #[test]

@@ -43,6 +43,7 @@ Release binary is self-contained (frontend embedded). Useful environment variabl
 |---|---|
 | `MSCOUT_DATA_DIR` | Point the app at a different data folder |
 | `MSCOUT_OPEN_HISTORY` | Open the history window at startup (dev convenience) |
+| `MSCOUT_OPEN_CALIBRATION` | Open the calibration window at startup (dev convenience) |
 
 ## Window notes
 

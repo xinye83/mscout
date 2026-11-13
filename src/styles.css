@@ -20,7 +20,10 @@ body,
 }
 
 .panel {
-  height: 100%;
+  /* The window follows this height (see resize_overlay), so the panel must size to
+     its content. At height:100% the rows were squeezed and long warnings overlapped
+     the rows below them. */
+  height: auto;
   padding: 8px 10px;
   border-radius: 10px;
   background: rgba(9, 14, 26, 0.82);
@@ -58,6 +61,16 @@ body,
   color: #cbd5e1;
 }
 
+/* Status/error reasons can be a sentence; let them use two lines. */
+.placeholder-msg {
+  white-space: normal;
+  line-height: 1.3;
+  text-overflow: clip;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 .map-sub {
   margin-top: -3px;
   padding-left: 13px;
@@ -93,12 +106,22 @@ body,
   background: #facc15;
 }
 
+/* Reading fine, but the map could not be named — the same "needs attention"
+   yellow as degraded, because the fix is also a trip to Calibration. */
+.dot.nomap {
+  background: #facc15;
+}
+
 .dot.lost {
   background: #f87171;
 }
 
 .dot.off {
   background: #64748b;
+}
+
+.dot.uncalibrated {
+  background: #fbbf24;
 }
 
 .chip,
@@ -390,6 +413,32 @@ body.page-body #root {
   flex: none;
 }
 
+.status-reason {
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.status-reason.degraded {
+  color: #facc15;
+}
+
+.status-reason.lost {
+  color: #f87171;
+}
+
+.status-reason.uncalibrated {
+  color: #fbbf24;
+}
+
+/* One line per thing the overlay could not name, then what to do about it. */
+.unrecognised {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  color: #facc15;
+}
+
 .state.degraded {
   color: #facc15;
   border-color: rgba(250, 204, 21, 0.4);
@@ -482,20 +531,12 @@ body.page-body #root {
   background: #f59e0b;
 }
 
-.roi-name {
+.roi-identity {
   border-color: #c084fc;
 }
 
-.roi-name span {
+.roi-identity span {
   background: #c084fc;
-}
-
-.roi-job {
-  border-color: #f472b6;
-}
-
-.roi-job span {
-  background: #f472b6;
 }
 
 .roi-drag {
@@ -549,4 +590,191 @@ body.page-body #root {
 
 .cal-input:focus {
   outline: 1px solid rgba(74, 222, 128, 0.5);
+}
+
+.cal-textarea {
+  font-family: inherit;
+  resize: vertical;
+  min-height: 38px;
+}
+
+/* A disabled control has to look disabled: the Calibration buttons are gated on
+   having a box, and at full strength they read as clickable but did nothing. */
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.label-preview {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 6px 0;
+}
+
+.label-crop {
+  width: 226px;
+  height: auto;
+  image-rendering: pixelated;
+  background: #10141c;
+  border-radius: 4px;
+  flex: none;
+}
+
+/* The teach result has to stay visible: the buttons sit far down a long page, and a
+   message at the top of the page went unnoticed. */
+.cal-feedback {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(9, 14, 26, 0.96);
+}
+
+.cal-feedback p {
+  margin: 0;
+}
+
+.ui-mode-choices {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.review-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.review-crop {
+  width: 304px;
+  height: 44px;
+  image-rendering: pixelated;
+  background: #10141c;
+  border-radius: 4px;
+  flex: none;
+}
+
+.review-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.glyph-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+}
+
+.glyph-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: rgba(2, 6, 23, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  color: #cbd5e1;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.glyph-item:hover {
+  background: rgba(148, 163, 184, 0.18);
+}
+
+.glyph-item.on {
+  border-color: rgba(74, 222, 128, 0.7);
+  box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.3);
+}
+
+.glyph-crop {
+  image-rendering: pixelated;
+  background: #020617;
+}
+
+.profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.profile-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.07);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.profile-row.on {
+  border-color: rgba(74, 222, 128, 0.5);
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.profile-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.profile-meta strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.profile-tags {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.tag {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid;
+}
+
+.tag.active {
+  color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.4);
+}
+
+.tag.current {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.4);
+}
+
+.profile-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.ghost.danger {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.warn {
+  margin: 0;
+  color: #facc15;
 }

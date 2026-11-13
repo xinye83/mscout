@@ -361,6 +361,90 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "diagnostic: writes data/debug-frame.bmp plus an 8x view of a crop (MSCOUT_CROP=x,y,w,h)"]
+    fn dumps_exp_crop() {
+        let selector = crate::settings::WindowSelector {
+            title: "MapleStory".into(),
+            process: "MapleStory.exe".into(),
+        };
+        let window = crate::window_target::resolve_selector(&selector).expect("game window");
+        let frame = client_frame(window.hwnd).expect("capture failed");
+
+        let dir = crate::data_dir().expect("data dir");
+        let frame_name = std::env::var("MSCOUT_FRAME").unwrap_or_else(|_| "debug-frame.bmp".into());
+        write_bmp(&frame, &dir.join(&frame_name));
+
+        let region = match std::env::var("MSCOUT_CROP") {
+            Ok(spec) if spec == "panel" => {
+                crate::ocr::detect_minimap_panel(&frame).expect("minimap panel")
+            }
+            Ok(spec) if spec == "label" => {
+                let panel = crate::ocr::detect_minimap_panel(&frame).expect("minimap panel");
+                println!("panel {panel:?}");
+                crate::ocr::detect_map_label(&frame, panel).expect("map label")
+            }
+            Ok(spec) if spec.starts_with("line") => {
+                let index: usize = spec[4..].parse().expect("line index");
+                let panel = crate::ocr::detect_minimap_panel(&frame).expect("minimap panel");
+                let label = crate::ocr::detect_map_label(&frame, panel).expect("map label");
+                let gray = crate::ocr::crop_gray(&frame, label).expect("label crop");
+                let lines = crate::ocr::text_lines(&gray);
+                println!("label {label:?} -> {} lines {lines:?}", lines.len());
+                let (x, y, w, h) = lines[index];
+                crate::settings::Region {
+                    x: label.x + x,
+                    y: label.y + y,
+                    w,
+                    h,
+                }
+            }
+            Ok(spec) => {
+                let parts: Vec<i32> = spec.split(',').map(|p| p.trim().parse().expect("number")).collect();
+                crate::settings::Region {
+                    x: parts[0],
+                    y: parts[1],
+                    w: parts[2],
+                    h: parts[3],
+                }
+            }
+            Err(_) => {
+                let profile = crate::profile::load_for_mode(
+                    1920,
+                    1200,
+                    crate::settings::UiMode::Default,
+                )
+                .expect("1920x1200 profile");
+                profile.calibration.exp.expect("EXP box")
+            }
+        };
+        println!("crop {region:?}");
+        let gray = crate::ocr::crop_gray(&frame, region).expect("crop");
+
+        let scale = 8usize;
+        let (width, height) = (gray.w * scale, gray.h * scale);
+        let mut rgba = vec![0u8; width * height * 4];
+        for y in 0..height {
+            for x in 0..width {
+                let value = gray.px[(y / scale) * gray.w + (x / scale)];
+                let index = (y * width + x) * 4;
+                rgba[index] = value;
+                rgba[index + 1] = value;
+                rgba[index + 2] = value;
+                rgba[index + 3] = 255;
+            }
+        }
+
+        write_bmp(
+            &Frame {
+                width: width as u32,
+                height: height as u32,
+                rgba,
+            },
+            &dir.join("exp-crop.bmp"),
+        );
+    }
+
+    #[test]
     #[ignore = "diagnostic: captures a window to data/debug-window.bmp"]
     fn dumps_overlay() {
         let title = std::env::var("MSCOUT_DUMP_TITLE").unwrap_or_else(|_| "MScout".into());

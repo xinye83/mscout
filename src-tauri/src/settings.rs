@@ -91,6 +91,100 @@ impl Region {
     }
 }
 
+/// The game's Graphics → UI Size option. It rescales the whole HUD *and* the
+/// font, so every readout is keyed by it as well as by the client size.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UiMode {
+    #[default]
+    Default,
+    Filtered,
+    Ideal,
+}
+
+impl UiMode {
+    pub const ALL: [UiMode; 3] = [UiMode::Default, UiMode::Filtered, UiMode::Ideal];
+
+    /// Stable id: used in settings, profile summaries and IPC calls.
+    pub fn id(self) -> &'static str {
+        match self {
+            UiMode::Default => "default",
+            UiMode::Filtered => "filtered",
+            UiMode::Ideal => "ideal",
+        }
+    }
+
+    /// Filename suffix. The default mode keeps the bare `WxH` name, so sets
+    /// captured before UI Size was tracked keep working.
+    pub fn suffix(self) -> &'static str {
+        match self {
+            UiMode::Default => "",
+            UiMode::Filtered => "@filtered",
+            UiMode::Ideal => "@ideal",
+        }
+    }
+
+    /// The option as the game's Graphics menu names it.
+    pub fn label(self) -> &'static str {
+        match self {
+            UiMode::Default => "Default Ratio",
+            UiMode::Filtered => "Default Ratio (Filter Applied)",
+            UiMode::Ideal => "Ideal Ratio",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.id() == value)
+    }
+}
+
+/// The UI Size the player has chosen in the game. It is picked in the app
+/// rather than detected: the two non-default options move and rescale every
+/// readout, so guessing wrong reads nothing.
+pub fn ui_mode() -> UiMode {
+    read_raw()
+        .get("uiMode")
+        .and_then(|value| value.as_str())
+        .and_then(UiMode::parse)
+        .unwrap_or_default()
+}
+
+pub fn save_ui_mode(mode: UiMode) -> Result<(), String> {
+    update(move |object| {
+        object.insert("uiMode".into(), Value::String(mode.id().into()));
+    })
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiModeOption {
+    pub id: String,
+    pub label: String,
+    pub active: bool,
+}
+
+/// The three options the game offers, with the current one flagged, so the
+/// picker and the app cannot drift apart.
+#[tauri::command]
+pub fn ui_modes() -> Vec<UiModeOption> {
+    let current = ui_mode();
+    UiMode::ALL
+        .into_iter()
+        .map(|mode| UiModeOption {
+            id: mode.id().to_string(),
+            label: mode.label().to_string(),
+            active: mode == current,
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn set_ui_mode(mode: String) -> Result<(), String> {
+    let mode = UiMode::parse(&mode).ok_or_else(|| format!("unknown UI size mode {mode}"))?;
+    save_ui_mode(mode)
+}
+
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Calibration {
@@ -104,9 +198,10 @@ pub struct Calibration {
 }
 
 impl Calibration {
+    /// A read can be attempted once the EXP box is set. The level box is
+    /// optional: without it the level is derived from EXP and the percentage.
     pub fn is_ready(&self) -> bool {
         self.exp.map(|r| r.is_usable()).unwrap_or(false)
-            && self.level.map(|r| r.is_usable()).unwrap_or(false)
     }
 }
 
@@ -191,6 +286,25 @@ pub fn save_atlas(atlas: &Atlas) -> Result<(), String> {
     let atlas = atlas.clone();
     crate::profile::update(move |profile| {
         profile.atlas = atlas;
+    })
+    .map(|_| ())
+}
+
+pub fn load_map_atlas() -> Atlas {
+    let mut atlas = crate::profile::active()
+        .map(|profile| profile.map_atlas)
+        .unwrap_or_default();
+    if atlas.cell_w == 0 || atlas.cell_h == 0 {
+        atlas.cell_w = crate::ocr::CELL_W as u32;
+        atlas.cell_h = crate::ocr::CELL_H as u32;
+    }
+    atlas
+}
+
+pub fn save_map_atlas(atlas: &Atlas) -> Result<(), String> {
+    let atlas = atlas.clone();
+    crate::profile::update(move |profile| {
+        profile.map_atlas = atlas;
     })
     .map(|_| ())
 }

@@ -50,7 +50,7 @@ export type TargetStatus = {
   screen: Rect | null;
 };
 
-export type CaptureState = "reading" | "degraded" | "lost";
+export type CaptureState = "reading" | "degraded" | "lost" | "uncalibrated";
 
 export type CaptureStatus = {
   state: CaptureState;
@@ -73,6 +73,7 @@ export type Readings = {
 export type LearningInfo = {
   learned: string;
   coverage: string;
+  mapLetters: string;
   maps: string[];
   name: string | null;
   job: string | null;
@@ -81,6 +82,62 @@ export type LearningInfo = {
 export type Profile = {
   name: string | null;
   job: string | null;
+};
+
+export type GlyphGuess = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  ch: string;
+  distance: number;
+  known: boolean;
+  cell: string;
+};
+
+export type ProfileSummary = {
+  key: string;
+  clientW: number;
+  clientH: number;
+  uiMode: string;
+  calibrated: boolean;
+  glyphs: number;
+  maps: number;
+  name: string | null;
+  job: string | null;
+};
+
+/** One option of the game's Graphics → UI Size setting. */
+export type UiModeOption = {
+  id: string;
+  label: string;
+  active: boolean;
+};
+
+/** An EXP box the reader rejected, kept so it can be labelled by hand. */
+export type ReviewFrame = {
+  id: string;
+  t: number;
+  reason: string;
+  w: number;
+  h: number;
+  /** One hex byte per pixel, plain luminance. */
+  px: string;
+};
+
+export type RepairSummary = {
+  checked: number;
+  flagged: number;
+  files: number;
+};
+
+/** The minimap label as the app detects it, at full resolution. */
+export type LabelCrop = {
+  w: number;
+  h: number;
+  /** One hex byte per pixel, plain luminance. */
+  px: string;
+  lines: number;
 };
 
 export type Settings = {

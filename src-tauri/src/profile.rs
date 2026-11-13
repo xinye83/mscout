@@ -3,21 +3,27 @@ use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
-use crate::settings::{self, Atlas, Calibration, Identities, Template};
+use crate::settings::{self, Atlas, Calibration, Identities, Template, UiMode};
 
 /// Good consecutive reads required before a profile is trusted to record.
 pub const VERIFY_READS: usize = 3;
 
-/// One calibration set, scoped to a client size.
+/// One calibration set, scoped to a client size *and* a UI Size option.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub client_w: u32,
     pub client_h: u32,
     #[serde(default)]
+    pub ui_mode: UiMode,
+    #[serde(default)]
     pub calibration: Calibration,
     #[serde(default)]
     pub atlas: Atlas,
+    /// Glyphs of the minimap label font. Separate from `atlas` because the label
+    /// is a different size and rendering from the EXP readout.
+    #[serde(default)]
+    pub map_atlas: Atlas,
     #[serde(default)]
     pub maps: Vec<Template>,
     #[serde(default)]
@@ -26,15 +32,26 @@ pub struct Profile {
 
 impl Profile {
     pub fn new(client_w: u32, client_h: u32) -> Self {
+        Self::new_for_mode(client_w, client_h, UiMode::default())
+    }
+
+    pub fn new_for_mode(client_w: u32, client_h: u32, ui_mode: UiMode) -> Self {
         Self {
             client_w,
             client_h,
+            ui_mode,
             ..Default::default()
         }
     }
 
+    /// `1920x1200`, or `1920x1200@ideal` for a non-default UI Size.
     pub fn key(&self) -> String {
-        format!("{}x{}", self.client_w, self.client_h)
+        format!(
+            "{}x{}{}",
+            self.client_w,
+            self.client_h,
+            self.ui_mode.suffix()
+        )
     }
 
     pub fn is_calibrated(&self) -> bool {
@@ -50,6 +67,7 @@ impl Profile {
             key: self.key(),
             client_w: self.client_w,
             client_h: self.client_h,
+            ui_mode: self.ui_mode.id().to_string(),
             calibrated: self.is_calibrated(),
             glyphs: self.atlas.glyphs.len(),
             maps: self.maps.len(),
@@ -65,6 +83,7 @@ pub struct ProfileSummary {
     pub key: String,
     pub client_w: u32,
     pub client_h: u32,
+    pub ui_mode: String,
     pub calibrated: bool,
     pub glyphs: usize,
     pub maps: usize,
@@ -88,8 +107,11 @@ pub fn dir() -> Result<PathBuf, String> {
     Ok(crate::data_dir()?.join("profiles"))
 }
 
-pub fn path_for(client_w: u32, client_h: u32) -> Result<PathBuf, String> {
-    Ok(dir()?.join(format!("{client_w}x{client_h}.json")))
+pub fn path_for(client_w: u32, client_h: u32, ui_mode: UiMode) -> Result<PathBuf, String> {
+    Ok(dir()?.join(format!(
+        "{client_w}x{client_h}{}.json",
+        ui_mode.suffix()
+    )))
 }
 
 fn parse_profile(text: &str) -> Option<Profile> {
@@ -101,13 +123,21 @@ fn parse_profile(text: &str) -> Option<Profile> {
     Some(profile)
 }
 
+/// The set for the client size under the UI Size currently selected.
 pub fn load(client_w: u32, client_h: u32) -> Option<Profile> {
-    let path = path_for(client_w, client_h).ok()?;
+    load_for_mode(client_w, client_h, settings::ui_mode())
+}
+
+pub fn load_for_mode(client_w: u32, client_h: u32, ui_mode: UiMode) -> Option<Profile> {
+    let path = path_for(client_w, client_h, ui_mode).ok()?;
     let text = std::fs::read_to_string(path).ok()?;
-    let profile = parse_profile(&text)?;
+    let mut profile = parse_profile(&text)?;
     if profile.client_w != client_w || profile.client_h != client_h {
         return None;
     }
+    // The filename is authoritative: sets written before UI Size was tracked
+    // carry no `uiMode` field but still belong to their file's mode.
+    profile.ui_mode = ui_mode;
     Some(profile)
 }
 
@@ -116,7 +146,11 @@ pub fn save(profile: &Profile) -> Result<(), String> {
     let dir = dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let text = serde_json::to_string_pretty(profile).map_err(|e| e.to_string())?;
-    std::fs::write(path_for(profile.client_w, profile.client_h)?, text).map_err(|e| e.to_string())
+    std::fs::write(
+        path_for(profile.client_w, profile.client_h, profile.ui_mode)?,
+        text,
+    )
+    .map_err(|e| e.to_string())
 }
 
 pub fn list() -> Vec<ProfileSummary> {
@@ -156,10 +190,11 @@ pub fn active_key() -> Option<String> {
     lock(&ACTIVE).as_ref().map(|active| active.key.clone())
 }
 
-/// Make the profile for this client size active, creating an empty one when the
-/// size has never been seen. Returns the profile that is now active.
+/// Make the profile for this client size and UI Size active, creating an empty
+/// one when the pair has never been seen. Returns the profile now active.
 pub fn activate(client_w: u32, client_h: u32) -> Result<Profile, String> {
-    let key = format!("{client_w}x{client_h}");
+    let ui_mode = settings::ui_mode();
+    let key = format!("{client_w}x{client_h}{}", ui_mode.suffix());
     let mut active = lock(&ACTIVE);
     if let Some(current) = active.as_ref() {
         if current.key == key {
@@ -167,7 +202,19 @@ pub fn activate(client_w: u32, client_h: u32) -> Result<Profile, String> {
         }
     }
 
-    let profile = load(client_w, client_h).unwrap_or_else(|| Profile::new(client_w, client_h));
+    let profile = match load_for_mode(client_w, client_h, ui_mode) {
+        Some(profile) => profile,
+        // A known size starts from its shipped preset and is saved straight
+        // away, so it reads without any drawing and shows up as a normal,
+        // editable profile. Deleting it just restores this starting point.
+        None => match crate::preset::for_size(client_w, client_h, ui_mode) {
+            Some(profile) => {
+                let _ = save(&profile);
+                profile
+            }
+            None => Profile::new_for_mode(client_w, client_h, ui_mode),
+        },
+    };
     *active = Some(Active {
         key,
         profile: profile.clone(),
@@ -199,6 +246,26 @@ pub fn activate_with(profile: Profile) -> Result<Profile, String> {
         profile: profile.clone(),
     });
     Ok(profile)
+}
+
+/// Delete the saved set for a client size and UI Size. If that set is the active
+/// one, drop the active pointer so the engine re-derives it (as an empty
+/// profile) on the next tick. Missing files count as already removed.
+pub fn remove(client_w: u32, client_h: u32, ui_mode: UiMode) -> Result<(), String> {
+    let key = format!("{client_w}x{client_h}{}", ui_mode.suffix());
+
+    {
+        let mut active = lock(&ACTIVE);
+        if active.as_ref().map(|current| current.key.as_str()) == Some(key.as_str()) {
+            *active = None;
+        }
+    }
+
+    match std::fs::remove_file(path_for(client_w, client_h, ui_mode)?) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// Move the pre-profile `settings.json` sections into a size-scoped profile.
@@ -241,9 +308,10 @@ pub fn migrate_legacy() -> Option<String> {
         return None;
     }
 
-    let existing = load(client_w, client_h);
+    // The legacy sections predate UI Size, so they belong to the default mode.
+    let existing = load_for_mode(client_w, client_h, UiMode::Default);
     let profile = existing.unwrap_or_else(|| {
-        let mut profile = Profile::new(client_w, client_h);
+        let mut profile = Profile::new_for_mode(client_w, client_h, UiMode::Default);
         profile.calibration = calibration;
         profile.atlas = atlas;
         profile.maps = maps;
@@ -273,6 +341,21 @@ pub fn list_profiles() -> Vec<ProfileSummary> {
 #[tauri::command]
 pub fn active_profile() -> Option<ProfileSummary> {
     active().map(|profile| profile.summary())
+}
+
+#[tauri::command]
+pub fn delete_profile(
+    client_w: u32,
+    client_h: u32,
+    ui_mode: Option<String>,
+) -> Result<(), String> {
+    let ui_mode = match ui_mode.as_deref() {
+        Some(value) => {
+            UiMode::parse(value).ok_or_else(|| format!("unknown UI size mode {value}"))?
+        }
+        None => UiMode::default(),
+    };
+    remove(client_w, client_h, ui_mode)
 }
 
 #[cfg(test)]

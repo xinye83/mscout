@@ -1,9 +1,52 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { Calibration, LearningInfo, Readings, Region } from "./types";
+import { listen } from "@tauri-apps/api/event";
+import type {
+  Calibration,
+  GlyphGuess,
+  LabelCrop,
+  LearningInfo,
+  ProfileSummary,
+  Readings,
+  Region,
+  ReviewFrame,
+  TargetStatus,
+  UiModeOption,
+} from "./types";
 
-type Mode = "exp" | "level" | "map" | "name" | "job";
+type Mode = "exp" | "map" | "identity";
+
+function hexBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(Math.floor(hex.length / 2));
+  for (let index = 0; index < out.length; index += 1) {
+    out[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return out;
+}
+
+// Paint a grey crop at 1:1; the browser magnifies it with pixelated CSS.
+function paintReview(
+  canvas: HTMLCanvasElement | null,
+  frame: { w: number; h: number; px: string },
+) {
+  if (!canvas) return;
+  const context = canvas.getContext("2d");
+  if (!context) return;
+
+  const bytes = hexBytes(frame.px);
+  canvas.width = frame.w;
+  canvas.height = frame.h;
+
+  const image = context.createImageData(frame.w, frame.h);
+  for (let index = 0; index < bytes.length; index += 1) {
+    image.data[index * 4] = bytes[index];
+    image.data[index * 4 + 1] = bytes[index];
+    image.data[index * 4 + 2] = bytes[index];
+    image.data[index * 4 + 3] = 255;
+  }
+  context.putImageData(image, 0, 0);
+}
 
 type Preview = {
   width: number;
@@ -13,10 +56,8 @@ type Preview = {
 
 const MODE_LABEL: Record<Mode, string> = {
   exp: "EXP text",
-  level: "Level digits",
   map: "Map label",
-  name: "Name",
-  job: "Job",
+  identity: "Name / Job",
 };
 
 function normalize(a: { x: number; y: number }, b: { x: number; y: number }): Region {
@@ -38,10 +79,10 @@ function withRegion(
   region: Region | null,
 ): Calibration {
   if (key === "exp") return { ...current, exp: region };
-  if (key === "level") return { ...current, level: region };
   if (key === "map") return { ...current, map: region };
-  if (key === "name") return { ...current, name: region };
-  return { ...current, job: region };
+  // Identity is one drawn box that becomes the name and job regions, so it is
+  // applied as a pair by the caller, never through this single-region helper.
+  return current;
 }
 
 function Box({
@@ -70,6 +111,46 @@ function Box({
   );
 }
 
+const GLYPH_LABELS = "0123456789,.[]%".split("");
+
+/** A magnified crop of one segmented shape, so it can be identified by eye. */
+function GlyphCrop({
+  source,
+  serial,
+  guess,
+}: {
+  source: HTMLCanvasElement | null;
+  serial: number;
+  guess: GlyphGuess;
+}) {
+  const ref = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas || !source) return;
+    const scale = Math.max(2, Math.ceil(44 / Math.max(guess.w, guess.h)));
+    canvas.width = guess.w * scale;
+    canvas.height = guess.h * scale;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.imageSmoothingEnabled = false;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(
+      source,
+      guess.x,
+      guess.y,
+      guess.w,
+      guess.h,
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+    );
+  }, [source, serial, guess]);
+
+  return <canvas ref={ref} className="glyph-crop" />;
+}
+
 export default function Calibration() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
@@ -95,6 +176,98 @@ export default function Calibration() {
   const [probe, setProbe] = useState<Readings | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [activeProfile, setActiveProfile] = useState<ProfileSummary | null>(null);
+  const [uiModes, setUiModes] = useState<UiModeOption[]>([]);
+  const [sizeChoice, setSizeChoice] = useState<string | null>(null);
+  const [reviewFrames, setReviewFrames] = useState<ReviewFrame[]>([]);
+  const [labelCrop, setLabelCrop] = useState<LabelCrop | null>(null);
+  const [reviewId, setReviewId] = useState<string | null>(null);
+  const [reviewText, setReviewText] = useState("");
+  const [client, setClient] = useState<{ w: number; h: number } | null>(null);
+  const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [glyphs, setGlyphs] = useState<GlyphGuess[]>([]);
+  const [selectedGlyph, setSelectedGlyph] = useState<number | null>(null);
+
+  const refreshGlyphs = useCallback((serial: number) => {
+    invoke<GlyphGuess[]>("exp_glyphs", { serial })
+      .then(setGlyphs)
+      .catch(() => setGlyphs([]));
+  }, []);
+
+  const refreshProfiles = useCallback(() => {
+    invoke<ProfileSummary[]>("list_profiles")
+      .then(setProfiles)
+      .catch(() => undefined);
+    invoke<ProfileSummary | null>("active_profile")
+      .then(setActiveProfile)
+      .catch(() => undefined);
+    invoke<UiModeOption[]>("ui_modes")
+      .then(setUiModes)
+      .catch(() => undefined);
+    invoke<ReviewFrame[]>("review_frames")
+      .then(setReviewFrames)
+      .catch(() => undefined);
+  }, []);
+
+  const labelReview = async (frame: ReviewFrame) => {
+    setError(null);
+    setMessage(null);
+    try {
+      const info = await invoke<LearningInfo>("label_review", {
+        id: frame.id,
+        text: reviewText,
+      });
+      setLearning(info);
+      setMessage(`Learned ${reviewText.trim()} from the saved frame`);
+      setReviewId(null);
+      setReviewText("");
+      refreshProfiles();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+
+  const clearReview = async () => {
+    setError(null);
+    try {
+      const removed = await invoke<number>("clear_review");
+      setMessage(`Cleared ${removed} saved frames`);
+      setReviewId(null);
+      refreshProfiles();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+
+  // Switching UI Size swaps the whole set in use: boxes, digits and labels all
+  // have to be re-read for the newly selected mode.
+  const chooseUiMode = useCallback(
+    async (option: UiModeOption) => {
+      if (option.active) return;
+      setError(null);
+      setMessage(null);
+      try {
+        await invoke("set_ui_mode", { mode: option.id });
+        setMessage(`UI size set to ${option.label}`);
+        refreshProfiles();
+        invoke<Calibration>("get_calibration")
+          .then(setRegions)
+          .catch(() => undefined);
+        invoke<LearningInfo>("get_learning")
+          .then(setLearning)
+          .catch(() => undefined);
+        setPreview(null);
+        setGlyphs([]);
+        setSelectedGlyph(null);
+        setProbe(null);
+      } catch (cause) {
+        setError(String(cause));
+      }
+    },
+    [refreshProfiles],
+  );
 
   const freeze = useCallback(async () => {
     setError(null);
@@ -103,7 +276,15 @@ export default function Calibration() {
       const raw = await invoke<ArrayBuffer | number[]>("capture_preview");
       const bytes =
         raw instanceof ArrayBuffer ? new Uint8Array(raw) : new Uint8Array(raw);
-      const header = new DataView(bytes.buffer, bytes.byteOffset, 12);
+
+      // Header written by capture_preview: width u32, height u32, serial u64.
+      const HEADER = 16;
+      if (bytes.byteLength < HEADER) {
+        throw new Error(
+          `preview payload ${Object.prototype.toString.call(raw)} len=${bytes.byteLength}`,
+        );
+      }
+      const header = new DataView(bytes.buffer, bytes.byteOffset, HEADER);
       const width = header.getUint32(0, true);
       const height = header.getUint32(4, true);
       const serial = Number(header.getBigUint64(8, true));
@@ -114,17 +295,25 @@ export default function Calibration() {
 
       const pixels = new Uint8ClampedArray(
         bytes.buffer,
-        bytes.byteOffset + 12,
+        bytes.byteOffset + HEADER,
         width * height * 4,
       );
       canvas.width = width;
       canvas.height = height;
       context.putImageData(new ImageData(pixels, width, height), 0, 0);
       setPreview({ width, height, serial });
+      setSelectedGlyph(null);
+      refreshGlyphs(serial);
+      // The active profile can change under us (the engine picks it by client
+      // size), so re-read what is learned as well as the shapes.
+      invoke<LearningInfo>("get_learning").then(setLearning).catch(() => undefined);
+      invoke<LabelCrop>("map_label_crop", { serial })
+        .then(setLabelCrop)
+        .catch(() => setLabelCrop(null));
     } catch (cause) {
       setError(String(cause));
     }
-  }, []);
+  }, [refreshGlyphs]);
 
   useEffect(() => {
     invoke<Calibration>("get_calibration")
@@ -136,20 +325,106 @@ export default function Calibration() {
     void freeze();
   }, [freeze]);
 
-  const saveRegions = useCallback(async () => {
-    if (!preview) throw new Error("freeze a frame first");
+  useEffect(() => {
+    refreshProfiles();
+
+    const set = (status: TargetStatus) =>
+      setClient(status.client ? { w: status.client.w, h: status.client.h } : null);
+    invoke<TargetStatus>("get_target_status").then(set).catch(() => undefined);
+
+    const unlisten = listen<TargetStatus>("target-status", (event) => set(event.payload));
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [refreshProfiles]);
+
+  const save = useCallback(
+    async (toSave: Calibration) => {
+      if (!preview) throw new Error("freeze a frame first");
+      const saved = await invoke<Calibration>("set_calibration", {
+        clientW: preview.width,
+        clientH: preview.height,
+        exp: toSave.exp,
+        level: toSave.level,
+        map: toSave.map,
+        name: toSave.name,
+        job: toSave.job,
+      });
+      setRegions(saved);
+      refreshProfiles();
+      return saved;
+    },
+    [preview, refreshProfiles],
+  );
+
+  const saveRegions = useCallback(() => save(regions), [save, regions]);
+
+  // Before a teach, persist anything drawn in this window — but never remove a box
+  // the profile already has. Taking the stored boxes and overlaying only what this
+  // window knows means a window that opened before a profile or mode change can no
+  // longer wipe the boxes it never saw.
+  const teachSave = useCallback(async () => {
+    if (!preview) return;
+    const stored = await invoke<Calibration>("get_calibration");
     const saved = await invoke<Calibration>("set_calibration", {
       clientW: preview.width,
       clientH: preview.height,
-      exp: regions.exp,
-      level: regions.level,
-      map: regions.map,
-      name: regions.name,
-      job: regions.job,
+      exp: regions.exp ?? stored.exp,
+      level: regions.level ?? stored.level,
+      map: regions.map ?? stored.map,
+      name: regions.name ?? stored.name,
+      job: regions.job ?? stored.job,
     });
     setRegions(saved);
-    return saved;
   }, [preview, regions]);
+
+  // Restore the shipped preset for this size: boxes and glyph set.
+  const usePresetBoxes = async () => {
+    if (!preview) return;
+    setError(null);
+    setMessage(null);
+    try {
+      await invoke("apply_preset", {
+        clientW: preview.width,
+        clientH: preview.height,
+      });
+      const [cal, info] = await Promise.all([
+        invoke<Calibration>("get_calibration"),
+        invoke<LearningInfo>("get_learning"),
+      ]);
+      setRegions(cal);
+      setLearning(info);
+      refreshProfiles();
+      refreshGlyphs(preview.serial);
+      setSelectedGlyph(null);
+      setMessage("Reset to the preset boxes and glyphs");
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+
+  // Teach one segmented shape the character the player picks for it.
+  const labelGlyph = async (guess: GlyphGuess, label: string) => {
+    if (!preview) return;
+    setError(null);
+    setMessage(null);
+    try {
+      const info = await invoke<LearningInfo>("label_glyph", {
+        clientW: preview.width,
+        clientH: preview.height,
+        ch: label,
+        cell: guess.cell,
+        w: guess.w,
+        h: guess.h,
+      });
+      setLearning(info);
+      setSelectedGlyph(null);
+      refreshGlyphs(preview.serial);
+      setMessage(`Labeled a ${guess.w}×${guess.h} shape as ${label}`);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
 
   const point = (event: ReactPointerEvent) => {
     const element = previewRef.current;
@@ -182,13 +457,44 @@ export default function Calibration() {
     setDrag(normalize(startRef.current, point(event)));
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = async () => {
     if (!startRef.current) return;
     startRef.current = null;
-    if (drag && drag.w > 4 && drag.h > 4) {
-      setRegions((current) => withRegion(current, mode, drag));
-    }
+    const drawn = drag;
     setDrag(null);
+    if (!drawn || drawn.w <= 4 || drawn.h <= 4) return;
+
+    if (mode !== "identity") {
+      setRegions((current) => withRegion(current, mode, drawn));
+      return;
+    }
+
+    // One box around both lines: the game stacks job over name, so split the
+    // drawn box into its two text lines. If that fails, split it in half so the
+    // player still gets two boxes to nudge.
+    let pair: Region[] | null = null;
+    if (preview) {
+      try {
+        pair = await invoke<Region[]>("split_identity", {
+          serial: preview.serial,
+          x: drawn.x,
+          y: drawn.y,
+          w: drawn.w,
+          h: drawn.h,
+        });
+      } catch {
+        pair = null;
+      }
+    }
+    if (!pair || pair.length !== 2) {
+      const mid = drawn.y + Math.round(drawn.h / 2);
+      pair = [
+        { x: drawn.x, y: drawn.y, w: drawn.w, h: mid - drawn.y },
+        { x: drawn.x, y: mid, w: drawn.w, h: drawn.y + drawn.h - mid },
+      ];
+    }
+    const [job, name] = pair;
+    setRegions((current) => ({ ...current, job, name }));
   };
 
   const learn = async () => {
@@ -201,6 +507,7 @@ export default function Calibration() {
         text: typed,
       });
       setLearning(info);
+      refreshGlyphs(preview?.serial ?? 0);
       setMessage(`Learned: ${info.learned || "—"}`);
     } catch (cause) {
       setError(String(cause));
@@ -211,13 +518,16 @@ export default function Calibration() {
     setError(null);
     setMessage(null);
     try {
-      await saveRegions();
+      // Persist a box that was just drawn, without touching the others.
+      await teachSave();
       const info = await invoke<LearningInfo>("teach_map", {
         serial: preview?.serial ?? 0,
         name: mapName,
       });
       setLearning(info);
       setMessage(`Map taught: ${mapName.trim()}`);
+      invoke<Calibration>("get_calibration").then(setRegions).catch(() => undefined);
+      refreshProfiles();
     } catch (cause) {
       setError(String(cause));
     }
@@ -228,7 +538,7 @@ export default function Calibration() {
     setMessage(null);
     const label = kind === "name" ? nameLabel : jobLabel;
     try {
-      await saveRegions();
+      await teachSave();
       const info = await invoke<LearningInfo>("teach_identity", {
         serial: preview?.serial ?? 0,
         kind,
@@ -236,6 +546,24 @@ export default function Calibration() {
       });
       setLearning(info);
       setMessage(`${kind === "name" ? "Name" : "Job"} taught: ${label.trim()}`);
+      invoke<Calibration>("get_calibration").then(setRegions).catch(() => undefined);
+      refreshProfiles();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+
+  const clearMaps = async () => {
+    if (!preview) return;
+    setError(null);
+    setMessage(null);
+    try {
+      const info = await invoke<LearningInfo>("clear_maps", {
+        clientW: preview.width,
+        clientH: preview.height,
+      });
+      setLearning(info);
+      setMessage("Cleared taught maps");
     } catch (cause) {
       setError(String(cause));
     }
@@ -256,10 +584,71 @@ export default function Calibration() {
     }
   };
 
+  const clearProfile = async (profile: ProfileSummary) => {
+    setError(null);
+    setMessage(null);
+    setBusyKey(profile.key);
+    try {
+      await invoke("delete_profile", {
+        clientW: profile.clientW,
+        clientH: profile.clientH,
+        uiMode: profile.uiMode,
+      });
+      setConfirmKey(null);
+      setMessage(`Removed profile ${profile.key}`);
+      refreshProfiles();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
   const coverage = learning ? learning.coverage : "";
   const missing = "0123456789"
     .split("")
     .filter((digit) => !coverage.includes(digit));
+
+  const liveMode = uiModes.find((option) => option.active)?.id ?? "default";
+  const liveModeLabel =
+    uiModes.find((option) => option.active)?.label ?? "Default Ratio";
+  const liveSize = client ? `${client.w}x${client.h}` : null;
+  const sizeOptions = Array.from(
+    new Set([
+      ...(liveSize ? [liveSize] : []),
+      ...profiles.map((profile) => `${profile.clientW}x${profile.clientH}`),
+    ]),
+  ).sort();
+  const chosenSize = sizeChoice ?? liveSize ?? sizeOptions[0] ?? null;
+  const shownProfiles = profiles.filter(
+    (profile) =>
+      `${profile.clientW}x${profile.clientH}` === chosenSize &&
+      profile.uiMode === liveMode,
+  );
+  const sameSet = (profile: ProfileSummary) =>
+    client !== null &&
+    profile.clientW === client.w &&
+    profile.clientH === client.h &&
+    profile.uiMode === liveMode;
+
+  const unknownGlyphs = glyphs.filter((guess) => !guess.known);
+  const chosenGlyph =
+    selectedGlyph !== null ? unknownGlyphs[selectedGlyph] : undefined;
+
+  // The drawn identity box is stored as its two lines; show it back as one box.
+  const identityBox =
+    regions.name && regions.job
+      ? {
+          x: Math.min(regions.name.x, regions.job.x),
+          y: Math.min(regions.name.y, regions.job.y),
+          w:
+            Math.max(regions.name.x + regions.name.w, regions.job.x + regions.job.w) -
+            Math.min(regions.name.x, regions.job.x),
+          h:
+            Math.max(regions.name.y + regions.name.h, regions.job.y + regions.job.h) -
+            Math.min(regions.name.y, regions.job.y),
+        }
+      : regions.name ?? regions.job;
 
   return (
     <div className="page calibration">
@@ -294,6 +683,19 @@ export default function Calibration() {
         </span>
       </div>
 
+      {(error || message) && (
+        <div className="cal-feedback">
+          {error && <p className="error small">{error}</p>}
+          {message && <p className="ok small">{message}</p>}
+        </div>
+      )}
+      {!preview && (
+        <p className="warn small">
+          No frame frozen yet — press <strong>Freeze frame</strong>. Every teach button
+          stays disabled until there is one.
+        </p>
+      )}
+
       <div
         className="preview"
         ref={previewRef}
@@ -305,22 +707,16 @@ export default function Calibration() {
         {preview && regions.exp && (
           <Box region={regions.exp} preview={preview} className="roi-exp" label="EXP" />
         )}
-        {preview && regions.level && (
-          <Box
-            region={regions.level}
-            preview={preview}
-            className="roi-level"
-            label="LV"
-          />
-        )}
         {preview && regions.map && (
           <Box region={regions.map} preview={preview} className="roi-map" label="MAP" />
         )}
-        {preview && regions.name && (
-          <Box region={regions.name} preview={preview} className="roi-name" label="NAME" />
-        )}
-        {preview && regions.job && (
-          <Box region={regions.job} preview={preview} className="roi-job" label="JOB" />
+        {preview && identityBox && (
+          <Box
+            region={identityBox}
+            preview={preview}
+            className="roi-identity"
+            label="NAME / JOB"
+          />
         )}
         {preview && drag && (
           <Box region={drag} preview={preview} className="roi-drag" label={mode} />
@@ -332,8 +728,9 @@ export default function Calibration() {
         <section className="cal-card">
           <h2>Boxes</h2>
           <p className="muted small">
-            EXP text includes the number and percentage. Level must be digits only.
-            Map, name and job are optional fingerprints.
+            EXP text includes the number and percentage. The level is derived from
+            that, so it needs no box of its own. Name / Job is one box around both
+            lines (job over name) — the app splits them. Map is optional.
           </p>
           <div className="cal-row">
             {(Object.keys(MODE_LABEL) as Mode[]).map((key) => (
@@ -341,19 +738,32 @@ export default function Calibration() {
                 key={key}
                 className="ghost"
                 onClick={() =>
-                  setRegions((current) => withRegion(current, key, null))
+                  setRegions((current) =>
+                    key === "identity"
+                      ? { ...current, name: null, job: null }
+                      : withRegion(current, key, null),
+                  )
                 }
               >
                 clear {MODE_LABEL[key].toLowerCase()}
               </button>
             ))}
           </div>
-          <button
-            className="ghost on"
-            onClick={() => void saveRegions().catch((cause) => setError(String(cause)))}
-          >
-            Save boxes
-          </button>
+          <div className="cal-row">
+            <button
+              className="ghost on"
+              onClick={() => void saveRegions().catch((cause) => setError(String(cause)))}
+            >
+              Save boxes
+            </button>
+            <button
+              className="ghost"
+              onClick={() => void usePresetBoxes()}
+              disabled={!preview}
+            >
+              reset to preset
+            </button>
+          </div>
         </section>
 
         <section className="cal-card">
@@ -379,17 +789,45 @@ export default function Calibration() {
         <section className="cal-card">
           <h2>Labels</h2>
           <p className="muted small">Map, character name and job are taught once.</p>
-          <input
-            className="cal-input"
+          {labelCrop && (
+            <div className="label-preview">
+              <canvas
+                className="label-crop"
+                ref={(element) => paintReview(element, labelCrop)}
+              />
+              <span className="muted small">
+                {labelCrop.lines === 1 ? "One line" : `${labelCrop.lines} lines`} — type
+                exactly this, one row per line
+              </span>
+            </div>
+          )}
+          <textarea
+            className="cal-input cal-textarea"
             value={mapName}
-            placeholder="Map name (e.g. Kerning City)"
+            rows={2}
+            placeholder={"Map name — one line per line on screen\ne.g. Victoria Road\nKerning City"}
             onChange={(event) => setMapName(event.target.value)}
           />
-          <button className="ghost on" onClick={() => void teach()} disabled={!preview}>
-            Teach map
-          </button>
+          <div className="cal-row">
+            <button className="ghost on" onClick={() => void teach()} disabled={!preview}>
+              Teach map
+            </button>
+            <button
+              className="ghost"
+              onClick={() => void clearMaps()}
+              disabled={!preview}
+            >
+              clear maps
+            </button>
+          </div>
           <p className="muted small">
             Known maps: {learning?.maps.length ? learning.maps.join(", ") : "—"}
+          </p>
+          <p className="muted small">
+            Map letters learned: {learning?.mapLetters ? learning.mapLetters : "—"}
+            <br />
+            Each map you teach also teaches its letters. Once the alphabet is covered,
+            map names read as text and no longer need teaching.
           </p>
           <input
             className="cal-input"
@@ -400,7 +838,7 @@ export default function Calibration() {
           <button
             className="ghost on"
             onClick={() => void teachIdentity("name")}
-            disabled={!preview}
+            disabled={!preview || !regions.name}
           >
             Teach name
           </button>
@@ -413,10 +851,17 @@ export default function Calibration() {
           <button
             className="ghost on"
             onClick={() => void teachIdentity("job")}
-            disabled={!preview}
+            disabled={!preview || !regions.job}
           >
             Teach job
           </button>
+          {(!regions.name || !regions.job) && (
+            <p className="muted small">
+              Teaching the name or job needs a box first. Draw one around both lines
+              with the <strong>name / job</strong> box button above — the job sits
+              above the name, and the box is split for you.
+            </p>
+          )}
           <p className="muted small">
             Name: {learning?.name ?? "—"} · Job: {learning?.job ?? "—"}
           </p>
@@ -439,8 +884,211 @@ export default function Calibration() {
         </section>
       </div>
 
-      {message && <p className="ok small">{message}</p>}
-      {error && <p className="error small">{error}</p>}
+      <section className="cal-card">
+        <h2>Unknown shapes</h2>
+        {unknownGlyphs.length === 0 ? (
+          <p className="muted small">
+            {preview
+              ? "Everything in the EXP box is recognised — nothing to label."
+              : "Freeze a frame to see the shapes in the EXP box."}
+          </p>
+        ) : (
+          <>
+            <p className="muted small">
+              These shapes in the EXP box aren't recognised yet. Click one, then pick
+              the character it shows. It is remembered for this size, so each shape
+              only needs doing once.
+            </p>
+            <div className="glyph-list">
+              {unknownGlyphs.map((guess, index) => (
+                <button
+                  key={`${guess.x}-${guess.y}-${guess.w}x${guess.h}-${index}`}
+                  className={`glyph-item ${selectedGlyph === index ? "on" : ""}`}
+                  onClick={() => setSelectedGlyph(index)}
+                >
+                  <GlyphCrop
+                    source={canvasRef.current}
+                    serial={preview?.serial ?? 0}
+                    guess={guess}
+                  />
+                  <span>{guess.ch === "?" ? "?" : guess.ch}</span>
+                </button>
+              ))}
+            </div>
+            {chosenGlyph && (
+              <div className="cal-row">
+                {GLYPH_LABELS.map((label) => (
+                  <button
+                    key={label}
+                    className="ghost"
+                    onClick={() => void labelGlyph(chosenGlyph, label)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </section>
+
+      <section className="cal-card">
+        <h2>Review frames</h2>
+        <p className="muted small">
+          Reads the overlay rejected are kept here — each one is the EXP box exactly as
+          the reader saw it. Type what the box shows and the glyphs it could not read
+          are learned, so the same frame reads next time.
+        </p>
+
+        {reviewFrames.length === 0 && (
+          <span className="muted small">Nothing waiting — no rejected reads saved.</span>
+        )}
+
+        {reviewFrames.map((frame) => (
+          <div key={frame.id} className="review-row">
+            <canvas
+              className="review-crop"
+              ref={(element) => paintReview(element, frame)}
+            />
+            <div className="review-meta">
+              <span className="muted small">
+                {new Date(frame.t * 1000).toLocaleTimeString()} · {frame.reason}
+              </span>
+              {reviewId === frame.id ? (
+                <div className="cal-row">
+                  <input
+                    className="cal-input"
+                    value={reviewText}
+                    placeholder="what the box shows, e.g. 45,004 [25.83%]"
+                    onChange={(event) => setReviewText(event.target.value)}
+                  />
+                  <button
+                    className="ghost on"
+                    disabled={!reviewText.trim()}
+                    onClick={() => void labelReview(frame)}
+                  >
+                    learn
+                  </button>
+                  <button className="ghost" onClick={() => setReviewId(null)}>
+                    cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    setReviewId(frame.id);
+                    setReviewText("");
+                  }}
+                >
+                  label…
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {reviewFrames.length > 0 && (
+          <button className="ghost" onClick={() => void clearReview()}>
+            clear frames
+          </button>
+        )}
+      </section>
+
+      <section className="cal-card">
+        <h2>UI profiles</h2>
+        <p className="muted small">
+          Calibration, digits and labels are kept per game client size <em>and</em> per
+          UI Size option. The engine activates the set matching the live window; a pair
+          with no profile here records nothing until you calibrate it.
+        </p>
+        <p className="muted small">
+          {client
+            ? `Live game client: ${client.w}×${client.h} · ${liveModeLabel}`
+            : "Live game client: not attached"}
+          {preview ? ` · frame being calibrated: ${preview.width}×${preview.height}` : ""}
+        </p>
+
+        <div className="cal-row ui-mode-choices">
+          <span className="muted small">Resolution</span>
+          {sizeOptions.map((size) => (
+            <button
+              key={size}
+              className={`ghost ${size === chosenSize ? "on" : ""}`}
+              onClick={() => setSizeChoice(size)}
+            >
+              {size.replace("x", "×")}
+              {size === liveSize ? " (live)" : ""}
+            </button>
+          ))}
+        </div>
+
+        <div className="cal-row ui-mode-choices">
+          <span className="muted small">UI size</span>
+          {uiModes.map((option) => (
+            <button
+              key={option.id}
+              className={`ghost ${option.active ? "on" : ""}`}
+              onClick={() => void chooseUiMode(option)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="profile-list">
+          {shownProfiles.length === 0 && (
+            <span className="muted small">
+              No profile for{" "}
+              {chosenSize ? chosenSize.replace("x", "×") : "this client size"} ·{" "}
+              {liveModeLabel} yet — freeze a frame and save boxes to create one.
+            </span>
+          )}
+          {shownProfiles.map((profile) => (
+            <div
+              key={profile.key}
+              className={`profile-row ${activeProfile?.key === profile.key ? "on" : ""}`}
+            >
+              <div className="profile-meta">
+                <strong>{profile.key}</strong>
+                <span className="muted small">
+                  {uiModes.find((option) => option.id === profile.uiMode)?.label ??
+                    profile.uiMode}
+                  {" · "}
+                  {profile.calibrated ? "calibrated" : "boxes missing"}
+                  {` · ${profile.glyphs} digits · ${profile.maps} maps`}
+                  {profile.name ? ` · ${profile.name}` : ""}
+                  {profile.job ? ` · ${profile.job}` : ""}
+                </span>
+              </div>
+              <div className="profile-tags">
+                {sameSet(profile) && <span className="tag current">live</span>}
+                {activeProfile?.key === profile.key && (
+                  <span className="tag active">active</span>
+                )}
+              </div>
+              {confirmKey === profile.key ? (
+                <span className="profile-actions">
+                  <button
+                    className="ghost danger"
+                    disabled={busyKey === profile.key}
+                    onClick={() => void clearProfile(profile)}
+                  >
+                    {busyKey === profile.key ? "removing…" : "delete"}
+                  </button>
+                  <button className="ghost" onClick={() => setConfirmKey(null)}>
+                    cancel
+                  </button>
+                </span>
+              ) : (
+                <button className="ghost" onClick={() => setConfirmKey(profile.key)}>
+                  clear
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
