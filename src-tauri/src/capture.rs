@@ -468,4 +468,58 @@ mod tests {
         let path = crate::data_dir().expect("data dir").join(file);
         write_bmp(&frame, &path);
     }
+
+    fn magnify(gray: &crate::ocr::Gray, scale: usize) -> Frame {
+        let (w, h) = (gray.w * scale, gray.h * scale);
+        let mut rgba = vec![0u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let value = gray.px[(y / scale) * gray.w + (x / scale)];
+                let index = (y * w + x) * 4;
+                rgba[index] = value;
+                rgba[index + 1] = value;
+                rgba[index + 2] = value;
+                rgba[index + 3] = 255;
+            }
+        }
+        Frame {
+            width: w as u32,
+            height: h as u32,
+            rgba,
+        }
+    }
+
+    #[test]
+    #[ignore = "diagnostic: dumps the detected minimap panel and label, magnified"]
+    fn dumps_map_label() {
+        let selector = crate::settings::WindowSelector {
+            title: String::new(),
+            process: std::env::var("MSCOUT_DUMP_PROCESS").unwrap_or_else(|_| "MapleStory.exe".into()),
+        };
+        let window = crate::window_target::resolve_selector(&selector).expect("game window");
+        let frame = client_frame(window.hwnd).expect("capture failed");
+        let dir = crate::data_dir().expect("data dir");
+
+        let panel = crate::ocr::detect_minimap_panel(&frame).expect("minimap panel");
+        let label = crate::ocr::detect_map_label(&frame, panel).expect("map label");
+        println!("panel={panel:?} label={label:?}");
+
+        write_bmp(
+            &magnify(&crate::ocr::crop_gray(&frame, panel).expect("panel crop"), 3),
+            &dir.join("panel-crop.bmp"),
+        );
+        write_bmp(
+            &magnify(&crate::ocr::crop_gray(&frame, label).expect("label crop"), 5),
+            &dir.join("label-crop.bmp"),
+        );
+
+        for (index, line) in crate::ocr::map_label_lines(&frame)
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+        {
+            println!("line {index}: {}x{}", line.w, line.h);
+            write_bmp(&magnify(line, 5), &dir.join(format!("label-line-{index}.bmp")));
+        }
+    }
 }

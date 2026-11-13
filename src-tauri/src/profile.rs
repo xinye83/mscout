@@ -24,8 +24,18 @@ pub struct Profile {
     /// is a different size and rendering from the EXP readout.
     #[serde(default)]
     pub map_atlas: Atlas,
+    /// Glyphs of the level readout. Separate from `atlas` for the same reason as
+    /// `map_atlas`: the level is drawn at its own size, and sharing one atlas made
+    /// the two readers compete for the same characters, so learning a level glyph
+    /// could change how the EXP was read and vice versa.
+    #[serde(default)]
+    pub level_atlas: Atlas,
     #[serde(default)]
     pub maps: Vec<Template>,
+    /// Taught street lines (the top line of the minimap label). Separate from `maps`
+    /// because a street is shared by several maps and is matched on its own.
+    #[serde(default)]
+    pub streets: Vec<Template>,
     #[serde(default)]
     pub identities: Identities,
 }

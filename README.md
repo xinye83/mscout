@@ -71,6 +71,7 @@ Sample format and invariants are documented in [docs/DATA.md](docs/DATA.md).
 | [docs/ROADMAP.md](docs/ROADMAP.md) | What is built, what is next, acceptance criteria |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Decision log — why things are the way they are |
 | [docs/DATA.md](docs/DATA.md) | File formats, profiles, schema, invariants |
+| [docs/FONTS.md](docs/FONTS.md) | Client font findings and where the fonts live |
 | [docs/DEV.md](docs/DEV.md) | Environment gotchas, testing, layout |
 
 ## Repository layout

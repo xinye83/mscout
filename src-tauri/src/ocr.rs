@@ -143,7 +143,98 @@ fn foreground_with_floor(gray: &Gray, floor: u8) -> Vec<bool> {
 /// renderings draw near-white text, so anything this bright is text.
 const TEXT_FLOOR: u8 = 170;
 
+/// Reduce a shape to a CELL_W x CELL_H cell of its own ink.
+///
+/// This used to sample a binary foreground mask, which broke any character drawn on
+/// a light background: the level readout sits on pale tiles, so every whole tile was
+/// "foreground" and became a solid block. Both `3` and `5` then encoded identically
+/// and matched at distance 0.0 — which is why the level read `33` forever no matter
+/// how often it was taught, while the EXP (dark background) was unaffected.
+///
+/// Measuring intensity against the shape's own floor fixes it where the information
+/// actually lives: a dark background floors near 0 and the cell is unchanged, a pale
+/// tile floors at its own grey and the strokes are what stands out.
 fn normalize(
+    gray: &Gray,
+    mask: &[bool],
+    stride: usize,
+    x0: usize,
+    y0: usize,
+    w: usize,
+    h: usize,
+) -> Cell {
+    let mut cell = [0u8; CELL_LEN];
+    if w == 0 || h == 0 {
+        return cell;
+    }
+    let x_end = (x0 + w).min(gray.w);
+    let y_end = (y0 + h).min(gray.h);
+    if x0 >= x_end || y0 >= y_end {
+        return cell;
+    }
+
+    // How much of the shape the crop-wide threshold already calls ink. When nearly
+    // all of it is, that threshold has failed rather than found something: it is a
+    // character drawn on a pale tile, where the tile is "foreground" too and the
+    // whole shape would collapse to a solid block that matches every other tile.
+    //
+    // Only that case falls back to a threshold against the shape's own background.
+    // Applying the fallback everywhere was worse: a low-contrast shape has a tiny
+    // span, most pixels clear it, and the cell saturates into a blob — so one
+    // learned glyph matched the rest.
+    let mut ink = 0usize;
+    let mut total = 0usize;
+    for y in y0..y_end {
+        for x in x0..x_end {
+            total += 1;
+            if mask[y * stride + x] {
+                ink += 1;
+            }
+        }
+    }
+    let saturated = total > 0 && ink * 100 >= total * 85;
+
+    let mut floor = 0usize;
+    let mut span = 1usize;
+    if saturated {
+        let mut histogram = [0u32; 256];
+        for y in y0..y_end {
+            for x in x0..x_end {
+                histogram[gray.px[y * gray.w + x] as usize] += 1;
+            }
+        }
+        for (value, count) in histogram.iter().enumerate() {
+            if *count > histogram[floor] {
+                floor = value;
+            }
+        }
+        let peak = histogram
+            .iter()
+            .rposition(|count| *count > 0)
+            .unwrap_or(floor);
+        span = peak.saturating_sub(floor).max(1);
+    }
+
+    for gy in 0..CELL_H {
+        for gx in 0..CELL_W {
+            let sx = (x0 + ((gx as f64 + 0.5) * w as f64 / CELL_W as f64) as usize)
+                .min(x_end - 1);
+            let sy = (y0 + ((gy as f64 + 0.5) * h as f64 / CELL_H as f64) as usize)
+                .min(y_end - 1);
+            let on = if saturated {
+                let lifted = (gray.px[sy * gray.w + sx] as usize).saturating_sub(floor);
+                lifted * 2 >= span
+            } else {
+                mask[sy * stride + sx]
+            };
+            cell[gy * CELL_W + gx] = if on { 255 } else { 0 };
+        }
+    }
+    cell
+}
+
+/// Mask-sampled cell, kept only for the unwired split path below.
+fn normalize_mask(
     mask: &[bool],
     stride: usize,
     x0: usize,
@@ -280,8 +371,16 @@ fn split_shapes(gray: &Gray, floor: Option<u8>) -> Vec<Segment> {
             continue;
         }
 
+        // A shape as tall as the crop is a rule or a panel edge that the box caught,
+        // not a glyph: the box is sized to the text with margin above and below. Left
+        // in, such a shape shifts every label during a teach. Only applied to a crop
+        // tall enough to have margins at all.
+        if gray.h >= 4 && bottom - top >= gray.h {
+            continue;
+        }
+
         out.push(Segment {
-            cell: normalize(&mask, gray.w, start, top, end - start, bottom - top),
+            cell: normalize(gray, &mask, gray.w, start, top, end - start, bottom - top),
             x: start as i32,
             y: top as i32,
             w: (end - start) as u32,
@@ -446,9 +545,82 @@ fn cell_distance_shifted(a: &Cell, b: &Cell, search: i32) -> f64 {
 /// match past the threshold, which dropped the digit and failed the read.
 const SIZE_PENALTY: f64 = 4.0;
 
+/// How much better a two-glyph explanation has to be before a shape is cut in two.
+/// Small renderings leave neighbours touching; without a margin an ordinary glyph
+/// would be split down the middle.
+const SPLIT_MARGIN: f64 = 6.0;
+
+/// The shape made of the columns `x0..x1` of `mask`, trimmed to its own ink. Cuts
+/// one segment into two where the atlas says two glyphs meet.
+fn sub_segment(
+    mask: &[bool],
+    stride: usize,
+    height: usize,
+    x0: i32,
+    x1: i32,
+) -> Option<Segment> {
+    let x0 = x0.max(0) as usize;
+    let x1 = (x1.max(0) as usize).min(stride);
+    if x1 <= x0 {
+        return None;
+    }
+
+    let mut top = usize::MAX;
+    let mut bottom = 0usize;
+    let mut pixels = 0usize;
+    for y in 0..height {
+        for x in x0..x1 {
+            if mask[y * stride + x] {
+                pixels += 1;
+                top = top.min(y);
+                bottom = bottom.max(y + 1);
+            }
+        }
+    }
+    if pixels == 0 || bottom <= top {
+        return None;
+    }
+
+    Some(Segment {
+        cell: normalize_mask(mask, stride, x0, top, x1 - x0, bottom - top),
+        x: x0 as i32,
+        y: top as i32,
+        w: (x1 - x0) as u32,
+        h: (bottom - top) as u32,
+    })
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Atlas {
     pub glyphs: Vec<Glyph>,
+}
+
+/// Split shapes that hold two touching glyphs.
+///
+/// NOT WIRED IN: judging a split from the pixels alone cannot separate a shape that
+/// is genuinely two glyphs from one glyph that happens to match its own halves well,
+/// and a wrong split quietly corrupts every digit after it. It needs a stronger
+/// discriminator — the readout grammar, or the expected glyph advance — before it can
+/// be trusted. Kept here as the starting point for that work.
+#[allow(dead_code)]
+fn split_touching(atlas: &Atlas, gray: &Gray) -> Vec<Segment> {
+    let found = segments(gray);
+    if atlas.glyphs.is_empty() {
+        return found;
+    }
+
+    let mask = foreground(gray);
+    let mut out = Vec::with_capacity(found.len());
+    for segment in found {
+        match atlas.best_split(&mask, gray.w, gray.h, &segment) {
+            Some((left, right)) => {
+                out.push(left);
+                out.push(right);
+            }
+            None => out.push(segment),
+        }
+    }
+    out
 }
 
 impl Atlas {
@@ -550,6 +722,51 @@ impl Atlas {
         }
 
         Ok(chars)
+    }
+
+    /// Cut a shape in two where both halves are recognised and the pair is clearly a
+    /// better explanation than the shape as a whole. The atlas decides where the cut
+    /// goes — not a width guess — so a normal glyph is never halved.
+    fn best_split(
+        &self,
+        mask: &[bool],
+        stride: usize,
+        height: usize,
+        segment: &Segment,
+    ) -> Option<(Segment, Segment)> {
+        if self.glyphs.is_empty() || segment.w < 4 {
+            return None;
+        }
+
+        let (_, whole, _) = self.match_segment(segment);
+        let mut best: Option<(f64, Segment, Segment)> = None;
+
+        for cut in (segment.x + 2)..(segment.x + segment.w as i32 - 1) {
+            let end = segment.x + segment.w as i32;
+            let (Some(left), Some(right)) = (
+                sub_segment(mask, stride, height, segment.x, cut),
+                sub_segment(mask, stride, height, cut, end),
+            ) else {
+                continue;
+            };
+
+            let (_, left_distance, _) = self.match_segment(&left);
+            let (_, right_distance, _) = self.match_segment(&right);
+            if left_distance > MATCH_THRESHOLD || right_distance > MATCH_THRESHOLD {
+                continue;
+            }
+
+            let total = left_distance + right_distance;
+            if best.map_or(true, |(closest, _, _)| total < closest) {
+                best = Some((total, left, right));
+            }
+        }
+
+        let (total, left, right) = best?;
+        if total + SPLIT_MARGIN >= whole {
+            return None;
+        }
+        Some((left, right))
     }
 
     fn distance_to(&self, segment: &Segment, glyph: &Glyph) -> f64 {
@@ -776,6 +993,10 @@ const PANEL_MIN_SOLIDITY: f64 = 30.0;
 const TITLE_BAR_FRACTION: f64 = 0.34;
 const GRAPHIC_GUTTER_FRACTION: f64 = 0.25;
 const TEXT_MIN_RGB: u8 = 225;
+/// The minimap graphic is drawn with a near-black frame and dark map detail, while
+/// the name text is white (its drop shadow measured no darker than 82 here). Anything
+/// this dark in the name band is therefore the graphic, not the name.
+const LABEL_MAX_DARK: u8 = 40;
 
 pub fn resample(gray: &Gray, w: usize, h: usize) -> Gray {
     let mut px = Vec::with_capacity(w * h);
@@ -899,31 +1120,67 @@ pub fn detect_minimap_panel(frame: &Frame) -> Option<Region> {
 }
 
 /// Bounding box of the white map-name text inside the panel, excluding the icon.
+///
+/// The name is white; the minimap graphic beside it is the only thing in the band
+/// below the title bar that also carries dark (near-black) ink — its frame and map
+/// detail. So the name begins at the first white column that holds no dark pixel. A
+/// fixed left gutter (a quarter of the panel) instead assumed the graphic's width and
+/// clipped the name's first letters whenever the graphic was narrower than that.
 pub fn detect_map_label(frame: &Frame, panel: Region) -> Option<Region> {
     let w = frame.width as usize;
     let h = frame.height as usize;
-    let x_start = ((panel.x as f64 + panel.w as f64 * GRAPHIC_GUTTER_FRACTION) as i32).max(0)
-        as usize;
+    let x_from = (panel.x.max(0) as usize).min(w);
     let x_end = ((panel.x + panel.w) as usize).min(w);
     // Skip the panel's title bar; the map name is drawn below it.
     let y_start = ((panel.y as f64 + panel.h as f64 * TITLE_BAR_FRACTION) as i32).max(0) as usize;
     let y_end = ((panel.y + panel.h) as usize).min(h);
-    if x_end <= x_start || y_end <= y_start {
+    if x_end <= x_from || y_end <= y_start {
         return None;
     }
+
+    let is_white = |index: usize| {
+        frame.rgba[index] >= TEXT_MIN_RGB
+            && frame.rgba[index + 1] >= TEXT_MIN_RGB
+            && frame.rgba[index + 2] >= TEXT_MIN_RGB
+    };
+    let is_dark = |index: usize| {
+        frame.rgba[index] < LABEL_MAX_DARK
+            && frame.rgba[index + 1] < LABEL_MAX_DARK
+            && frame.rgba[index + 2] < LABEL_MAX_DARK
+    };
+
+    let mut column_white = vec![false; x_end - x_from];
+    let mut column_dark = vec![false; x_end - x_from];
+    for x in x_from..x_end {
+        for y in y_start..y_end {
+            let index = (y * w + x) * 4;
+            if is_white(index) {
+                column_white[x - x_from] = true;
+            }
+            if is_dark(index) {
+                column_dark[x - x_from] = true;
+            }
+        }
+    }
+
+    let start = (0..column_white.len())
+        .find(|&i| column_white[i] && !column_dark[i])
+        .map(|i| x_from + i)
+        // Nothing matched — no separate graphic, or one without dark ink. Keep the old
+        // proportional gutter so a panel that read before still reads.
+        .unwrap_or_else(|| {
+            ((panel.x as f64 + panel.w as f64 * GRAPHIC_GUTTER_FRACTION) as i32).max(0) as usize
+        })
+        .min(x_end);
 
     let mut min_x = usize::MAX;
     let mut max_x = 0usize;
     let mut min_y = usize::MAX;
     let mut max_y = 0usize;
-
     for y in y_start..y_end {
-        for x in x_start..x_end {
+        for x in start..x_end {
             let index = (y * w + x) * 4;
-            if frame.rgba[index] >= TEXT_MIN_RGB
-                && frame.rgba[index + 1] >= TEXT_MIN_RGB
-                && frame.rgba[index + 2] >= TEXT_MIN_RGB
-            {
+            if is_white(index) {
                 min_x = min_x.min(x);
                 max_x = max_x.max(x);
                 min_y = min_y.min(y);
@@ -942,6 +1199,19 @@ pub fn detect_map_label(frame: &Frame, panel: Region) -> Option<Region> {
         w: (max_x - min_x + 3) as i32,
         h: (max_y - min_y + 3) as i32,
     })
+}
+
+/// The map-label crop on the fixed fingerprint grid. A drawn box wins over
+/// detection: the box is placed around the label, while detection clips the ends
+/// of the name. Any difference between the crop taught and the crop read shows up
+/// as a distance, and a big enough one lets a neighbouring map name win.
+pub fn map_label(frame: &Frame, drawn: Option<Region>) -> Option<Gray> {
+    if let Some(region) = drawn.filter(Region::is_usable) {
+        if let Some(gray) = crop_gray(frame, region) {
+            return Some(resample(&gray, MAP_LABEL_W, MAP_LABEL_H));
+        }
+    }
+    read_map_label(frame)
 }
 
 /// The current map-label crop, normalised to the fixed fingerprint grid.

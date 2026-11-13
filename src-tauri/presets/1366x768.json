@@ -33,116 +33,17 @@
   "atlas": {
     "cellW": 12,
     "cellH": 16,
-    "glyphs": [
-      {
-        "ch": "8",
-        "w": 5,
-        "h": 7,
-        "cell": "0000ffffffffffffffff00000000ffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffff00000000ffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffff00000000ffffffffffffffff0000"
-      },
-      {
-        "ch": "6",
-        "w": 5,
-        "h": 7,
-        "cell": "0000ffffffffffffffff00000000ffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff00000000000000000000ffff00000000000000000000ffffffffffffffffffff0000ffffffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffff00000000ffffffffffffffff0000"
-      },
-      {
-        "ch": ",",
-        "w": 2,
-        "h": 2,
-        "cell": "000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffffffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000"
-      },
-      {
-        "ch": "9",
-        "w": 5,
-        "h": 7,
-        "cell": "0000ffffffffffffffff00000000ffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffffffff0000ffffffffffffffffffff00000000000000000000ffff00000000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffff00000000ffffffffffffffff0000"
-      },
-      {
-        "ch": "[",
-        "w": 2,
-        "h": 7,
-        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffff"
-      },
-      {
-        "ch": "5",
-        "w": 5,
-        "h": 7,
-        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff000000000000000000000000ffffffffffffffff00000000ffffffffffffffff000000000000000000000000ffff00000000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffff00000000ffffffffffffffff0000"
-      },
-      {
-        "ch": ".",
-        "w": 1,
-        "h": 1,
-        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-      },
-      {
-        "ch": "7",
-        "w": 5,
-        "h": 7,
-        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000ffffff000000000000000000ffffff00000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000000000ffff0000000000"
-      },
-      {
-        "ch": "4",
-        "w": 5,
-        "h": 7,
-        "cell": "00000000000000ffffff000000000000000000ffffff00000000000000ffffffffff00000000000000ffffffffff00000000000000ffffffffff00000000ffffff0000ffffff00000000ffffff0000ffffff0000ffff0000000000ffffff0000ffff0000000000ffffff0000ffffffffffffffffffffffffffffffffffffffffffffffff00000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff0000"
-      },
-      {
-        "ch": "%",
-        "w": 7,
-        "h": 7,
-        "cell": "0000ff00000000000000ffff0000ff00000000000000ffffffff00ffff00000000ff0000ffff00ffff00000000ff0000ffff00ffff00000000ff00000000ff00000000ffff0000000000ff00000000ffff0000000000000000ffff00000000000000000000ffff0000000000000000ffff00000000ff0000000000ffff00000000ff00000000ff00000000ffff00ffff0000ff00000000ffff00ffff0000ff00000000ffff00ffffffff00000000000000ff0000ffff00000000000000ff0000"
-      },
-      {
-        "ch": "]",
-        "w": 2,
-        "h": 7,
-        "cell": "ffffffffffffffffffffffffffffffffffffffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-      },
-      {
-        "ch": "3",
-        "w": 7,
-        "h": 7,
-        "cell": "0000ffffffffffffffff00000000ffffffffffffffff0000ffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000ffffffffffffff0000000000ffffffffffffff0000000000000000000000ffffff000000000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffff0000ffffffffffffffff00000000ffffffffffffffff0000"
-      },
-      {
-        "ch": "4",
-        "w": 7,
-        "h": 7,
-        "cell": "0000000000ffffffffff00000000000000ffffffffff0000000000ffffffffffffff0000000000ffffffffffffff0000000000ffffffffffffff00000000ffffff0000ffffff00000000ffffff0000ffffff0000ffffff00000000ffffff0000ffffff00000000ffffff0000ffffffffffffffffffffffffffffffffffffffffffffffff00000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff000000000000000000ffffff0000"
-      },
-      {
-        "ch": "1",
-        "w": 2,
-        "h": 7,
-        "cell": "000000000000ffffffffffff000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff000000000000ffffffffffff"
-      },
-      {
-        "ch": "/",
-        "w": 3,
-        "h": 6,
-        "cell": "0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff00000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff00000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000"
-      },
-      {
-        "ch": "0",
-        "w": 5,
-        "h": 7,
-        "cell": "0000ffffffffffffffff00000000ffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffff00000000ffffffffffffffff0000"
-      },
-      {
-        "ch": "3",
-        "w": 5,
-        "h": 7,
-        "cell": "0000ffffffffffffffff00000000ffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff00000000000000000000ffff00000000000000000000ffff0000000000ffffffffff00000000000000ffffffffff000000000000000000000000ffff00000000000000000000ffffffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff0000ffffffffffffffff00000000ffffffffffffffff0000"
-      },
-      {
-        "ch": "2",
-        "w": 5,
-        "h": 7,
-        "cell": "0000ffffffffffffffff00000000ffffffffffffffff0000ffff0000000000000000ffffffff0000000000000000ffffffff0000000000000000ffff00000000000000000000ffff00000000000000000000ffff00000000000000ffffff000000000000000000ffffff00000000000000ffff00000000000000000000ffff00000000000000ffffff000000000000000000ffffff000000000000000000ffffff00000000000000ffffffffffffffffffffffffffffffffffffffffffffffff"
-      }
-    ]
+    "glyphs": []
+  },
+  "levelAtlas": {
+    "cellW": 12,
+    "cellH": 16,
+    "glyphs": []
+  },
+  "mapAtlas": {
+    "cellW": 12,
+    "cellH": 16,
+    "glyphs": []
   },
   "maps": [],
   "identities": {

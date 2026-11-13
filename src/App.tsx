@@ -115,6 +115,11 @@ export default function App() {
       ? undefined
       : samples.filter((sample) => sample.t >= sessionStart).at(-1);
 
+  // Rows whose level was never recognised are shown live but kept out of the
+  // chart and the rates: with level 0 the cumulative total has no meaning, and the
+  // curve would bend towards the origin.
+  const charted = useMemo(() => samples.filter((sample) => sample.lv > 0), [samples]);
+
   const derived = useMemo(() => {
     if (!current) return null;
 
@@ -122,13 +127,13 @@ export default function App() {
     // restart does not display a rate or ETA computed from pre-restart history.
     const sessionSeconds = current.t - sessionStart;
     const windowRate = (seconds: number) =>
-      sessionSeconds >= seconds ? rateOver(samples, seconds) : null;
+      sessionSeconds >= seconds ? rateOver(charted, seconds) : null;
 
     const rate1 = windowRate(60);
     const rate5 = windowRate(300);
     const rate30 = windowRate(1800);
 
-    const gainAt = lastGainAt(samples);
+    const gainAt = lastGainAt(charted);
     const idle = gainAt === null || current.t - gainAt > 120;
 
     return {
@@ -139,11 +144,11 @@ export default function App() {
       // the average decays and the estimate would only climb.
       eta: idle ? null : etaSeconds(current, rate5),
     };
-  }, [samples, current, sessionStart]);
+  }, [charted, current, sessionStart]);
 
   const chartData = useMemo(
-    () => samples.map((sample) => ({ t: sample.t, total: total(sample) })),
-    [samples],
+    () => charted.map((sample) => ({ t: sample.t, total: total(sample) })),
+    [charted],
   );
 
   const targetLabel = !target
@@ -158,11 +163,13 @@ export default function App() {
 
   const mapUnknown = current?.map === "unknown";
   // Anything the overlay cannot show because it was never recognised. `profile` is
-  // null until the first reading arrives, so it is not treated as missing.
+  // null until the first reading arrives, so it is not treated as missing. A level
+  // of 0 is the backend's "not recognised" for the level box.
   const unrecognised: string[] = [];
   if (mapUnknown) unrecognised.push("map");
   if (profile && !profile.name) unrecognised.push("name");
   if (profile && !profile.job) unrecognised.push("job");
+  if (current && current.lv <= 0) unrecognised.push("level");
 
   const dot = dotClass(capture, unrecognised.length > 0);
   const lastHeight = useRef(0);
@@ -188,64 +195,41 @@ export default function App() {
     return () => observer.disconnect();
   }, [expanded, current !== undefined]);
   const uncalibrated = capture?.state === "uncalibrated";
-  // Both of these are fixable from the calibration window, so both get the
-  // buttons. `lost` does not: there is no frame to calibrate against.
-  const needsAttention = uncalibrated || capture?.state === "degraded";
 
+  // One status line, not one per problem: two rows read as two separate complaints
+  // and both ended with the same instruction, so they looked like echoes. The read
+  // failure and the unrecognised fields are listed together and share one action.
+  const readReason =
+    capture && capture.state !== "reading"
+      ? capture.reason ?? (uncalibrated ? "not calibrated for this size" : "not reading")
+      : "";
+  const recognisable =
+    unrecognised.length > 0
+      ? `${joinWords(unrecognised)} not recognised — teach ${
+          unrecognised.length > 1 ? "them" : "it"
+        } in Calibration`
+      : "";
 
-  if (!current || !derived) {
-    // Whenever nothing is being read, say why. Uncalibrated, lost and degraded
-    // all carry a reason, so a failed parse explains itself instead of leaving a
-    // bare status dot. A healthy "reading" that has no sample yet needs no text.
-    const message =
-      capture && capture.state !== "reading"
-        ? capture.reason ??
-          (uncalibrated ? "not calibrated for this size" : "not reading")
-        : "";
-
-    return (
-      <div className={`panel ${expanded ? "expanded" : ""} ${interactive ? "active" : ""}`}>
-        <div className="row head" data-tauri-drag-region>
-          <span className={`dot ${dot}`} />
-          <span className="map placeholder-msg" data-tauri-drag-region>
-            {message}
-          </span>
-        </div>
-        {(needsAttention || interactive) && (
-          <div className="foot">
-            <button
-              className="ghost"
-              onClick={() => void invoke("open_target_window")}
-            >
-              window
-            </button>
-            <button
-              className={`ghost ${needsAttention ? "on" : ""}`}
-              onClick={() => void invoke("open_calibration")}
-            >
-              calibrate
-            </button>
-          </div>
-        )}
-      </div>
-    );
-  }
+  // The overlay keeps its shape whatever the reading is doing. A value that could
+  // not be read becomes a placeholder rather than dropping its row, so a failed
+  // read can never reflow the window or hide the layout being read.
+  const pct = current ? Math.max(0, Math.min(100, current.pct)) : 0;
+  const lv = current?.lv ?? 0;
+  const requirement = expRequired(lv);
 
   // The label is stored as "street\nmap name". The map name (last line) is what
   // actually identifies the map, so it is the headline; the street is context.
-  const mapLines = current.map.split("\n");
+  const mapLines = (current?.map ?? "unknown").split("\n");
   const mapName = mapLines[mapLines.length - 1];
   const mapLabel =
     mapName.length > MAP_MAX ? `${mapName.slice(0, MAP_MAX - 1)}…` : mapName;
-  const mapSub = mapLines.length > 1 ? mapLines[0] : null;
-  const pct = Math.max(0, Math.min(100, current.pct));
-  const requirement = expRequired(current.lv);
+  const mapSub = current && mapLines.length > 1 ? mapLines[0] : null;
 
   return (
     <div className={`panel ${expanded ? "expanded" : ""} ${interactive ? "active" : ""}`}>
       <div className="row head" data-tauri-drag-region>
         <span className={`dot ${dot}`} />
-        <span className="map" data-tauri-drag-region>
+        <span className={`map ${current ? "" : "muted"}`} data-tauri-drag-region>
           {mapLabel}
         </span>
         {capture && capture.state !== "reading" && (
@@ -253,24 +237,29 @@ export default function App() {
         )}
       </div>
 
-      {expanded && capture && capture.state !== "reading" && capture.reason && (
-        <div className={`row status-reason ${capture.state}`}>
-          <span>{capture.reason}</span>
+      {(readReason || recognisable) && (
+        <div
+          className={`row status-reason ${
+            capture && capture.state !== "reading" ? capture.state : "unrecognised"
+          }`}
+        >
+          <span>
+            {readReason &&
+              (recognisable ? readReason.split(" — ")[0].trim() : readReason)}
+            {readReason && recognisable && " · "}
+            {recognisable && (
+              <>
+                <strong>{joinWords(unrecognised)}</strong> not recognised — teach{" "}
+                {unrecognised.length > 1 ? "them" : "it"} in Calibration
+              </>
+            )}
+          </span>
         </div>
       )}
 
       {mapSub && (
         <div className="row map-sub" data-tauri-drag-region>
           <span>{mapSub}</span>
-        </div>
-      )}
-
-      {unrecognised.length > 0 && (
-        <div className="row status-reason unrecognised">
-          <span>
-            <strong>{joinWords(unrecognised)}</strong> not recognised — teach{" "}
-            {unrecognised.length > 1 ? "them" : "it"} in Calibration
-          </span>
         </div>
       )}
 
@@ -284,8 +273,10 @@ export default function App() {
       </div>
 
       <div className="row">
-        <span className="level">Lv {current.lv}</span>
-        <span className="pct">{pct.toFixed(2)}%</span>
+        <span className={lv > 0 ? "level" : "level muted"}>
+          Lv {lv > 0 ? lv : "unknown"}
+        </span>
+        <span className={`pct ${current ? "" : "muted"}`}>{pct.toFixed(2)}%</span>
       </div>
 
       <div className="bar">
@@ -293,16 +284,16 @@ export default function App() {
       </div>
 
       <div className="row stats">
-        <span className="rate">{formatRate(derived.rate5)}</span>
-        <span className="eta">{formatDuration(derived.eta)}</span>
+        <span className="rate">{formatRate(derived?.rate5 ?? null)}</span>
+        <span className="eta">{formatDuration(derived?.eta ?? null)}</span>
       </div>
 
       {expanded && (
         <>
           <div className="sub">
-            <span>1m {formatRate(derived.rate1)}</span>
-            <span>5m {formatRate(derived.rate5)}</span>
-            <span>30m {formatRate(derived.rate30)}</span>
+            <span>1m {formatRate(derived?.rate1 ?? null)}</span>
+            <span>5m {formatRate(derived?.rate5 ?? null)}</span>
+            <span>30m {formatRate(derived?.rate30 ?? null)}</span>
           </div>
           <ExpChart samples={chartData} height={140} />
           <div className="foot">

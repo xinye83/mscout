@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn unknown_size_has_none() {
-        assert!(for_size(1920, 1080, UiMode::Default).is_none());
+        assert!(for_size(1280, 720, UiMode::Default).is_none());
     }
 
     #[test]
@@ -77,7 +77,7 @@ mod tests {
         assert_ne!(ideal.calibration.exp, default.calibration.exp);
 
         // A mode with no measured set must not borrow another mode's.
-        assert!(for_size(1366, 768, UiMode::Ideal).is_none());
-        assert!(for_size(1920, 1080, UiMode::Ideal).is_none());
+        assert!(for_size(1280, 720, UiMode::Ideal).is_none());
+        assert!(for_size(1280, 720, UiMode::Filtered).is_none());
     }
 }

@@ -187,11 +187,15 @@ pub fn set_ui_mode(mode: String) -> Result<(), String> {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct Calibration {
     pub client_w: Option<u32>,
     pub client_h: Option<u32>,
     pub exp: Option<Region>,
     pub level: Option<Region>,
+    /// The minimap label's street line (the top line, e.g. "Victoria Road").
+    pub street: Option<Region>,
+    /// The minimap label's map-name line (the bottom line, e.g. "Kerning City").
     pub map: Option<Region>,
     pub name: Option<Region>,
     pub job: Option<Region>,
@@ -202,6 +206,27 @@ impl Calibration {
     /// optional: without it the level is derived from EXP and the percentage.
     pub fn is_ready(&self) -> bool {
         self.exp.map(|r| r.is_usable()).unwrap_or(false)
+    }
+
+    /// The box around both map-label lines (street over map name). The reader
+    /// fingerprints the whole label, so it needs the union of the two split boxes.
+    pub fn map_box(&self) -> Option<Region> {
+        match (self.street, self.map) {
+            (Some(a), Some(b)) => {
+                let left = a.x.min(b.x);
+                let top = a.y.min(b.y);
+                let right = (a.x + a.w).max(b.x + b.w);
+                let bottom = (a.y + a.h).max(b.y + b.h);
+                Some(Region {
+                    x: left,
+                    y: top,
+                    w: right - left,
+                    h: bottom - top,
+                })
+            }
+            (Some(region), None) | (None, Some(region)) => Some(region),
+            (None, None) => None,
+        }
     }
 }
 
@@ -309,6 +334,25 @@ pub fn save_map_atlas(atlas: &Atlas) -> Result<(), String> {
     .map(|_| ())
 }
 
+pub fn load_level_atlas() -> Atlas {
+    let mut atlas = crate::profile::active()
+        .map(|profile| profile.level_atlas)
+        .unwrap_or_default();
+    if atlas.cell_w == 0 || atlas.cell_h == 0 {
+        atlas.cell_w = crate::ocr::CELL_W as u32;
+        atlas.cell_h = crate::ocr::CELL_H as u32;
+    }
+    atlas
+}
+
+pub fn save_level_atlas(atlas: &Atlas) -> Result<(), String> {
+    let atlas = atlas.clone();
+    crate::profile::update(move |profile| {
+        profile.level_atlas = atlas;
+    })
+    .map(|_| ())
+}
+
 pub fn load_maps() -> Vec<Template> {
     crate::profile::active()
         .map(|profile| profile.maps)
@@ -319,6 +363,20 @@ pub fn save_maps(maps: &[Template]) -> Result<(), String> {
     let maps = maps.to_vec();
     crate::profile::update(move |profile| {
         profile.maps = maps;
+    })
+    .map(|_| ())
+}
+
+pub fn load_streets() -> Vec<Template> {
+    crate::profile::active()
+        .map(|profile| profile.streets)
+        .unwrap_or_default()
+}
+
+pub fn save_streets(streets: &[Template]) -> Result<(), String> {
+    let streets = streets.to_vec();
+    crate::profile::update(move |profile| {
+        profile.streets = streets;
     })
     .map(|_| ())
 }

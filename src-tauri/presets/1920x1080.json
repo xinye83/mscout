@@ -1,0 +1,49 @@
+{
+  "clientW": 1920,
+  "clientH": 1080,
+  "uiMode": "default",
+  "calibration": {
+    "clientW": 1920,
+    "clientH": 1080,
+    "exp": {
+      "x": 1043,
+      "y": 1031,
+      "w": 177,
+      "h": 17
+    },
+    "level": null,
+    "map": null,
+    "job": {
+      "x": 467,
+      "y": 1033,
+      "w": 43,
+      "h": 18
+    },
+    "name": {
+      "x": 467,
+      "y": 1055,
+      "w": 87,
+      "h": 14
+    }
+  },
+  "atlas": {
+    "cellW": 12,
+    "cellH": 16,
+    "glyphs": []
+  },
+  "levelAtlas": {
+    "cellW": 12,
+    "cellH": 16,
+    "glyphs": []
+  },
+  "mapAtlas": {
+    "cellW": 12,
+    "cellH": 16,
+    "glyphs": []
+  },
+  "maps": [],
+  "identities": {
+    "name": null,
+    "job": null
+  }
+}

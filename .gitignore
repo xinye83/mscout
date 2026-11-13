@@ -17,3 +17,6 @@ data/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Extracted game fonts (proprietary Arial + Nexon WZ data) — local only, not redistributable
+fonts/

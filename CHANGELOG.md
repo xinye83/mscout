@@ -4,6 +4,17 @@ All notable changes to MScout are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the major version is `0`, the minor version is bumped for features and the patch for fixes; anything may still change between `0.x` releases.
 
+## [0.3.0] - 2026-11-13
+
+### Added
+- Shipped presets for 1366×768 in Filter Applied and Ideal Ratio, and for 1920×1080 in Default Ratio. The 1920×1080 set was measured from the live games: its EXP readout sits 8 px further left than 1920×1200 implies, and its glyph atlas needed 14 variants of its own.
+- `Atlas::best_split` — a shape holding two touching glyphs is cut where both halves match known glyphs and the pair explains the pixels clearly better than the shape whole. Small renderings, whether from a smaller HUD or Filter Applied's blur, leave neighbours touching; the atlas decides where the cut goes rather than a width guess, and the same rule is used by the teach and by both readers so that what is taught and what is read agree.
+- Recording tools for calibration data (`record_live_map`, `record_live_labels`) that take their labels explicitly, so they work for a size with no previous set.
+
+### Fixed
+- A shape as tall as its crop — a rule or panel edge the box caught — is no longer treated as a glyph. It had been labelled `]`, shifting every label in a teach and producing a poisoned atlas.
+- Two preset tests that asserted the sizes above did not exist.
+
 ## [0.2.0] - 2026-11-13
 
 ### Added

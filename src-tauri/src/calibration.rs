@@ -37,6 +37,10 @@ fn cached_frame(serial: u64) -> Result<Frame, String> {
 pub struct LearningInfo {
     pub learned: String,
     pub coverage: String,
+    /// The level readout is drawn at its own size and keeps its own glyph set, so its
+    /// coverage is reported separately from the EXP one.
+    pub level_learned: String,
+    pub level_coverage: String,
     /// Characters of the minimap label font learned so far. Once these cover the
     /// letters a map name uses, the label reads as text with no fingerprint.
     pub map_letters: String,
@@ -45,17 +49,23 @@ pub struct LearningInfo {
     pub job: Option<String>,
 }
 
-fn learning_info(atlas: &Atlas) -> LearningInfo {
-    let coverage = "0123456789"
+fn digit_coverage(atlas: &Atlas) -> String {
+    "0123456789"
         .chars()
         .filter(|ch| atlas.glyphs.iter().any(|glyph| glyph.ch == *ch))
-        .collect();
+        .collect()
+}
+
+fn learning_info(atlas: &Atlas) -> LearningInfo {
     let identities = settings::load_identities();
+    let level_atlas = Atlas::from_settings(&settings::load_level_atlas());
     let map_atlas = Atlas::from_settings(&settings::load_map_atlas());
 
     LearningInfo {
         learned: atlas.learned(),
-        coverage,
+        coverage: digit_coverage(atlas),
+        level_learned: level_atlas.learned(),
+        level_coverage: digit_coverage(&level_atlas),
         map_letters: map_atlas.learned(),
         maps: settings::load_maps()
             .into_iter()
@@ -128,6 +138,7 @@ pub fn set_calibration(
     client_h: u32,
     exp: Option<Region>,
     level: Option<Region>,
+    street: Option<Region>,
     map: Option<Region>,
     name: Option<Region>,
     job: Option<Region>,
@@ -140,6 +151,7 @@ pub fn set_calibration(
     // than once. Clearing one box is fine; clearing all of them is not a save.
     if exp.is_none()
         && level.is_none()
+        && street.is_none()
         && map.is_none()
         && name.is_none()
         && job.is_none()
@@ -153,6 +165,7 @@ pub fn set_calibration(
         client_h: Some(client_h),
         exp,
         level,
+        street,
         map,
         name,
         job,
@@ -174,18 +187,56 @@ fn use_frame_profile(frame: &capture::Frame) -> Result<crate::profile::Profile, 
 
 #[tauri::command]
 pub fn learn_atlas(serial: u64, text: String) -> Result<LearningInfo, String> {
+    learn_region(serial, text, "exp")
+}
+
+/// The level readout is drawn at its own size, so its glyph variants usually have
+/// to be learned separately from the EXP text's even though it is the same alphabet.
+#[tauri::command]
+pub fn learn_level_atlas(serial: u64, text: String) -> Result<LearningInfo, String> {
+    learn_region(serial, text, "level")
+}
+
+fn learn_region(serial: u64, text: String, target: &str) -> Result<LearningInfo, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
     let calibration = settings::load_calibration();
-    let region = calibration
-        .exp
+    let level = target == "level";
+    let (region, what) = if level {
+        (calibration.level, "level")
+    } else {
+        (calibration.exp, "EXP")
+    };
+    let region = region
         .filter(Region::is_usable)
-        .ok_or("save the EXP box first")?;
-    let gray = ocr::crop_gray(&frame, region).ok_or("the EXP box is outside the window")?;
+        .ok_or_else(|| format!("save the {what} box first"))?;
+    let gray = ocr::crop_gray(&frame, region)
+        .ok_or_else(|| format!("the {what} box is outside the window"))?;
 
-    let mut atlas = Atlas::from_settings(&settings::load_atlas());
-    atlas.learn(&text, &gray)?;
-    settings::save_atlas(&atlas.to_settings())?;
+    log(&format!(
+        "learn_region target={target} box={:?} crop {}x{} text={text:?}",
+        region, gray.w, gray.h
+    ));
+
+    // Each readout owns its atlas — see `Profile::level_atlas`. Learning level
+    // glyphs into the EXP atlas used to change how EXP was read, and vice versa.
+    let mut atlas = if level {
+        Atlas::from_settings(&settings::load_level_atlas())
+    } else {
+        Atlas::from_settings(&settings::load_atlas())
+    };
+    if let Err(error) = atlas.learn(&text, &gray) {
+        // Without this the failed teach left no trace at all, which is why a box
+        // that could not be learned looked like the button doing nothing.
+        log(&format!("learn_region failed: {error}"));
+        return Err(error);
+    }
+    if level {
+        settings::save_level_atlas(&atlas.to_settings())?;
+    } else {
+        settings::save_atlas(&atlas.to_settings())?;
+    }
+    log(&format!("learn_region: atlas now {} glyphs", atlas.glyphs.len()));
 
     Ok(learning_info(&atlas))
 }
@@ -195,31 +246,17 @@ pub fn teach_map(serial: u64, name: String) -> Result<LearningInfo, String> {
     let name = name.trim().to_string();
     log(&format!("teach_map serial={serial} name={name:?}"));
     if name.is_empty() {
-        log("teach_map: empty name");
         return Err("type the map name first".into());
     }
 
     let frame = cached_frame(serial)?;
-    log(&format!(
-        "teach_map: frame {}x{}",
-        frame.width, frame.height
-    ));
     use_frame_profile(&frame)?;
     let calibration = settings::load_calibration();
 
-    // Prefer the detected minimap label: fingerprints are stored on a fixed
-    // grid, so they stay valid when the minimap is moved or resized.
-    let gray = match ocr::read_map_label(&frame) {
-        Some(gray) => gray,
-        None => {
-            let region = calibration
-                .map
-                .filter(Region::is_usable)
-                .ok_or("could not find the minimap — drag the map box first")?;
-            let crop = ocr::crop_gray(&frame, region).ok_or("the map box is outside the window")?;
-            ocr::resample(&crop, ocr::MAP_LABEL_W, ocr::MAP_LABEL_H)
-        }
-    };
+    // The map is identified by the whole two-line label, so fingerprint that. The
+    // label stored is just the map name; the street is taught and matched on its own.
+    let gray = ocr::map_label(&frame, calibration.map_box())
+        .ok_or("could not find the minimap — draw the map box first")?;
 
     let mut maps = settings::load_maps();
     maps.retain(|template| template.label != name);
@@ -231,35 +268,55 @@ pub fn teach_map(serial: u64, name: String) -> Result<LearningInfo, String> {
     });
     settings::save_maps(&maps)?;
 
-    // Feed the typed name into the label letter atlas, one line at a time, so the
-    // map eventually reads as text. The two have to line up: a mismatch would
-    // label the wrong glyphs, and the fingerprint above still covers this map, so
-    // it is skipped rather than guessed.
-    let wanted: Vec<&str> = name
-        .split('\n')
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect();
-    if let Some(lines) = ocr::map_label_lines(&frame) {
-        if lines.len() == wanted.len() {
-            let mut map_atlas = Atlas::from_settings(&settings::load_map_atlas());
-            for (line, text) in lines.iter().zip(&wanted) {
-                let _ = map_atlas.learn(text, line);
-            }
-            settings::save_map_atlas(&map_atlas.to_settings())?;
-            log(&format!(
-                "teach_map: learned letters {:?}",
-                Atlas::from_settings(&settings::load_map_atlas()).learned()
-            ));
-        } else {
-            log(&format!(
-                "teach_map: {} label lines detected but {} typed — letters skipped",
-                lines.len(),
-                wanted.len()
-            ));
-        }
-    } else {
-        log("teach_map: minimap label not found — letters skipped");
+    // Learn the map-name line (the bottom one) into the label letter atlas.
+    if let Some(line) = ocr::map_label_lines(&frame).and_then(|lines| lines.last().cloned()) {
+        let mut map_atlas = Atlas::from_settings(&settings::load_map_atlas());
+        let _ = map_atlas.learn(&name, &line);
+        settings::save_map_atlas(&map_atlas.to_settings())?;
+        log(&format!(
+            "teach_map: learned letters {:?}",
+            Atlas::from_settings(&settings::load_map_atlas()).learned()
+        ));
+    }
+
+    Ok(learning_info(&Atlas::from_settings(&settings::load_atlas())))
+}
+
+/// Taught separately from the map: a street is shared by several maps, so it is
+/// fingerprinted and matched on its own line.
+#[tauri::command]
+pub fn teach_street(serial: u64, street: String) -> Result<LearningInfo, String> {
+    let street = street.trim().to_string();
+    log(&format!("teach_street serial={serial} street={street:?}"));
+    if street.is_empty() {
+        return Err("type the street name first".into());
+    }
+
+    let frame = cached_frame(serial)?;
+    use_frame_profile(&frame)?;
+    let calibration = settings::load_calibration();
+
+    let region = calibration
+        .street
+        .filter(Region::is_usable)
+        .ok_or("draw the street box first, then teach")?;
+    let gray = ocr::crop_gray(&frame, region).ok_or("the street box is outside the window")?;
+
+    let mut streets = settings::load_streets();
+    streets.retain(|template| template.label != street);
+    streets.push(settings::Template {
+        label: street.clone(),
+        w: gray.w as u32,
+        h: gray.h as u32,
+        pixels: settings::to_hex(&gray.px),
+    });
+    settings::save_streets(&streets)?;
+
+    // Learn the street line (the top one) into the label letter atlas.
+    if let Some(line) = ocr::map_label_lines(&frame).and_then(|lines| lines.first().cloned()) {
+        let mut map_atlas = Atlas::from_settings(&settings::load_map_atlas());
+        let _ = map_atlas.learn(&street, &line);
+        settings::save_map_atlas(&map_atlas.to_settings())?;
     }
 
     Ok(learning_info(&Atlas::from_settings(&settings::load_atlas())))
@@ -319,7 +376,15 @@ pub fn parse_probe(serial: u64) -> Result<Readings, String> {
     let atlas = Atlas::from_settings(&settings::load_atlas());
     let maps = settings::load_maps();
     let identities = settings::load_identities();
-    engine::read_frame(&frame, &calibration, &atlas, &maps, &identities)
+    engine::read_frame(
+        &frame,
+        &calibration,
+        &atlas,
+        &Atlas::from_settings(&settings::load_level_atlas()),
+        &maps,
+        &settings::load_streets(),
+        &identities,
+    )
 }
 
 /// Split a single name/job box into the two stacked lines it encloses, top
@@ -417,18 +482,31 @@ pub struct ExpGlyph {
     pub cell: String,
 }
 
-/// The shapes in the EXP box, with what the atlas thinks each one is. Unknown
-/// shapes are what the player labels.
+/// Every shape in a box with its best guess, so one that cannot be segmented can be
+/// labelled by eye. `kind` selects both the box and the atlas — each readout owns
+/// its own glyph set, so a shape from the level box must be judged by the level
+/// glyphs, not the EXP ones.
 #[tauri::command]
-pub fn exp_glyphs(serial: u64) -> Result<Vec<ExpGlyph>, String> {
+pub fn box_glyphs(serial: u64, kind: String) -> Result<Vec<ExpGlyph>, String> {
     let frame = cached_frame(serial)?;
     let calibration = settings::load_calibration();
-    let region = calibration
-        .exp
+    let level = kind == "level";
+    let (region, atlas) = if level {
+        (
+            calibration.level,
+            Atlas::from_settings(&settings::load_level_atlas()),
+        )
+    } else {
+        (
+            calibration.exp,
+            Atlas::from_settings(&settings::load_atlas()),
+        )
+    };
+    let region = region
         .filter(Region::is_usable)
-        .ok_or("save the EXP box first")?;
-    let gray = ocr::crop_gray(&frame, region).ok_or("the EXP box is outside the window")?;
-    let atlas = Atlas::from_settings(&settings::load_atlas());
+        .ok_or_else(|| format!("save the {kind} box first"))?;
+    let gray = ocr::crop_gray(&frame, region)
+        .ok_or_else(|| format!("the {kind} box is outside the window"))?;
 
     Ok(atlas
         .explain(&gray)
@@ -446,13 +524,19 @@ pub fn exp_glyphs(serial: u64) -> Result<Vec<ExpGlyph>, String> {
         .collect())
 }
 
-/// Label one shape as a character. The cell comes straight from `exp_glyphs`, so
+#[tauri::command]
+pub fn exp_glyphs(serial: u64) -> Result<Vec<ExpGlyph>, String> {
+    box_glyphs(serial, "exp".into())
+}
+
+/// Label one shape as a character. The cell comes straight from `box_glyphs`, so
 /// the exact pixels the player looked at are what gets stored — no re-cropping,
 /// which would reject one-pixel shapes like `.`.
 #[tauri::command]
 pub fn label_glyph(
     client_w: u32,
     client_h: u32,
+    kind: String,
     ch: String,
     cell: String,
     w: u32,
@@ -473,9 +557,20 @@ pub fn label_glyph(
     shape.copy_from_slice(&bytes);
 
     profile::activate(client_w, client_h)?;
-    let mut atlas = Atlas::from_settings(&settings::load_atlas());
+    // Each readout owns its glyph set, so the shape is stored where the reader that
+    // produced it will look for it.
+    let level = kind == "level";
+    let mut atlas = if level {
+        Atlas::from_settings(&settings::load_level_atlas())
+    } else {
+        Atlas::from_settings(&settings::load_atlas())
+    };
     atlas.learn_glyph(character, shape, w, h);
-    settings::save_atlas(&atlas.to_settings())?;
+    if level {
+        settings::save_level_atlas(&atlas.to_settings())?;
+    } else {
+        settings::save_atlas(&atlas.to_settings())?;
+    }
 
     Ok(learning_info(&atlas))
 }
@@ -659,6 +754,87 @@ pub struct LabelCrop {
     pub h: u32,
     pub px: String,
     pub lines: usize,
+}
+
+/// The crop of any box, so every card in the calibration window can show what its
+/// box actually covers. `map` and `street` are the two lines of the minimap label;
+/// a drawn `map` box wins over detection, which otherwise clips the name's ends.
+#[tauri::command]
+pub fn box_crop(serial: u64, kind: String) -> Result<LabelCrop, String> {
+    let frame = cached_frame(serial)?;
+    let calibration = settings::load_calibration();
+
+    let (gray, lines) = match kind.as_str() {
+        "street" | "map" => {
+            let map_line = kind == "map";
+            // A saved box is used only for a proper street/map split. An older profile
+            // may have stored the whole two-line label as `map`, which would otherwise
+            // show both lines here; fall back to the detected line in that case.
+            let split = calibration.street.filter(Region::is_usable).is_some();
+            let saved = if map_line {
+                if split {
+                    calibration.map.filter(Region::is_usable)
+                } else {
+                    None
+                }
+            } else {
+                calibration.street.filter(Region::is_usable)
+            };
+            if let Some(region) = saved {
+                let gray = ocr::crop_gray(&frame, region)
+                    .ok_or_else(|| format!("the {kind} box is outside the window"))?;
+                let lines = if map_line {
+                    ocr::text_lines(&gray).len()
+                } else {
+                    0
+                };
+                (gray, lines)
+            } else {
+                // Nothing split yet: use the detected label's own line.
+                let detected =
+                    ocr::map_label_lines(&frame).ok_or("the map label was not found")?;
+                let gray = if map_line {
+                    detected.last().ok_or("the map label has no name line")?.clone()
+                } else {
+                    detected.first().ok_or("the map label has no street line")?.clone()
+                };
+                (gray, if map_line { 1 } else { 0 })
+            }
+        }
+        other => {
+            let region = match other {
+                "exp" => calibration.exp,
+                "level" => calibration.level,
+                "name" => calibration.name,
+                "job" => calibration.job,
+                _ => return Err(format!("unknown box '{other}'")),
+            }
+            .filter(Region::is_usable)
+            .ok_or_else(|| format!("save the {other} box first"))?;
+            let gray = ocr::crop_gray(&frame, region)
+                .ok_or_else(|| format!("the {other} box is outside the window"))?;
+            (gray, 0)
+        }
+    };
+
+    Ok(LabelCrop {
+        w: gray.w as u32,
+        h: gray.h as u32,
+        px: settings::to_hex(&gray.px),
+        lines,
+    })
+}
+
+/// The map box the detector would use for this frame, so the calibration window can
+/// show one where the profile has none. Nothing is stored: the player can adjust the
+/// box and save it, and a saved box then wins over detection.
+#[tauri::command]
+pub fn map_region(serial: u64) -> Result<Option<Region>, String> {
+    let frame = cached_frame(serial)?;
+    let Some(panel) = ocr::detect_minimap_panel(&frame) else {
+        return Ok(None);
+    };
+    Ok(ocr::detect_map_label(&frame, panel))
 }
 
 #[tauri::command]

@@ -17,6 +17,7 @@ export type Calibration = {
   clientH: number | null;
   exp: Region | null;
   level: Region | null;
+  street: Region | null;
   map: Region | null;
   name: Region | null;
   job: Region | null;
@@ -73,6 +74,8 @@ export type Readings = {
 export type LearningInfo = {
   learned: string;
   coverage: string;
+  levelLearned: string;
+  levelCoverage: string;
   mapLetters: string;
   maps: string[];
   name: string | null;

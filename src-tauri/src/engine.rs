@@ -16,7 +16,7 @@ use crate::exp_table;
 const OUTCOME_WINDOW: usize = 10;
 const DEGRADED_FAILURES: usize = 3;
 const CROSS_CHECK_TOLERANCE: f64 = 1.0;
-const MAP_DISTANCE_LIMIT: f64 = 24.0;
+const MAP_DISTANCE_LIMIT: f64 = 12.0;
 /// How close a read label has to be to a taught one before the taught name wins.
 /// Letters are read one glyph at a time, so a near miss is expected now and then.
 const MAP_SIMILARITY: f64 = 0.75;
@@ -243,11 +243,15 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                 }
 
                 if outcome.verified {
-                    let record = serde_json::to_value(&outcome.sample).unwrap_or_default();
-                    if crate::append_sample_record(&record).is_ok() {
-                        let _ = app.emit("live-sample", &outcome.sample);
-                        engine.last_sample = Some(outcome.sample);
+                    // An unrecognised level still updates the overlay, but it is kept
+                    // out of the history: a row with level 0 has no place on the EXP
+                    // curve and would bend it towards the origin.
+                    if outcome.sample.lv > 0 {
+                        let record = serde_json::to_value(&outcome.sample).unwrap_or_default();
+                        let _ = crate::append_sample_record(&record);
                     }
+                    let _ = app.emit("live-sample", &outcome.sample);
+                    engine.last_sample = Some(outcome.sample);
                 }
                 engine.keep_outcome(true);
                 let status = engine.status(None);
@@ -369,29 +373,46 @@ fn tick(
 
     let calibration = profile.calibration.clone();
     let atlas = Atlas::from_settings(&profile.atlas);
-    let readings = read_frame(&frame, &calibration, &atlas, &profile.maps, &profile.identities)
-        .map_err(TickError::Parse)?;
+    let level_atlas = Atlas::from_settings(&profile.level_atlas);
+    let readings = read_frame(
+        &frame,
+        &calibration,
+        &atlas,
+        &level_atlas,
+        &profile.maps,
+        &profile.streets,
+        &profile.identities,
+    )
+    .map_err(TickError::Parse)?;
 
-    // A character does not lose levels, so a derivation that lands below the last
-    // accepted one is a misread however self-consistent it looks. This is what let
-    // a truncated number — 21,476 read as 2,106 — record itself as level 19 and
-    // put a dip in the history.
+    // A character does not lose levels, so a level below the last accepted one is a
+    // misread however self-consistent it looks. This is what let a truncated number
+    // — 21,476 read as 2,106 — record itself as level 19 and put a dip in the
+    // history. An unrecognised level is 0 and takes no part in the comparison.
     if let Some(previous) = &engine.last_sample {
-        if readings.lv < previous.lv {
+        if readings.lv > 0 && previous.lv > 0 && readings.lv < previous.lv {
             return Err(TickError::Parse(format!(
-                "derived level fell from {} to {}",
+                "level fell from {} to {}",
                 previous.lv, readings.lv
             )));
         }
     }
 
     let state = match &engine.last_sample {
-        Some(previous) if previous.lv == readings.lv && readings.exp < previous.exp => {
+        Some(previous)
+            if readings.lv > 0
+                && readings.lv == previous.lv
+                && readings.exp < previous.exp =>
+        {
             return Err(TickError::Parse(
                 "EXP dropped without a level change".into(),
             ));
         }
-        Some(previous) if previous.lv == readings.lv && readings.exp == previous.exp => "idle",
+        Some(previous)
+            if readings.lv > 0 && readings.lv == previous.lv && readings.exp == previous.exp =>
+        {
+            "idle"
+        }
         _ => "gaining",
     };
 
@@ -430,7 +451,9 @@ pub(crate) fn read_frame(
     frame: &Frame,
     calibration: &Calibration,
     atlas: &Atlas,
+    level_atlas: &Atlas,
     maps: &[Template],
+    streets: &[Template],
     identities: &Identities,
 ) -> Result<Readings, String> {
     let exp_region = calibration
@@ -443,32 +466,58 @@ pub(crate) fn read_frame(
     let (exp, pct) = ocr::parse_exp_text(&exp_text)
         .ok_or_else(|| format!("could not parse EXP from '{exp_text}'"))?;
 
-    // The level comes from its own box when that box is set and readable, and is
-    // otherwise derived from EXP and the percentage. Deriving is what lets a
-    // profile ship with only the EXP box: the level digits are a different glyph
-    // size, so they can never be pre-learned for every level.
-    let (lv, level_text, level_conf) =
-        level_reading(frame, calibration, atlas, exp, pct, exp_conf)?;
+    // The level is read from its own box and never derived. A derived level is only
+    // as right as the EXP table and, when it is wrong, puts a plausible-looking but
+    // false number on the overlay — which is what "dont derive the level digits"
+    // was about. An unreadable level comes back as 0 and is reported as unrecognised.
+    // The level has its own atlas: the digits are drawn at a different size from the
+    // EXP readout, and sharing one atlas let the two readers compete for characters.
+    let (lv, level_text, level_conf) = level_reading(frame, calibration, level_atlas)?;
 
-    let required = exp_table::required(lv)
-        .ok_or_else(|| format!("level {lv} is outside the EXP table"))?;
-
-    // The percentage is displayed to two decimals, so a genuine read agrees with
-    // itself to within about 0.005. The recorded dips agreed to 0.13 and 0.23,
-    // which the old margin of 0.25 allowed through.
-    let expected_pct = exp as f64 / required * 100.0;
+    // The percentage check exists to catch a bad EXP read, but EXP and its
+    // percentage come from one read of one box, so they cannot disagree with each
+    // other — only with the level, which is a different box and a different atlas.
+    // A mismatch is therefore evidence against the level. Rejecting the whole frame
+    // for it threw away a perfectly good EXP, map, name and job and left the overlay
+    // on placeholders, which is why every successful teach looked like nothing had
+    // happened. Blame the weaker reader and keep the rest.
+    let required = exp_table::required(lv);
+    if lv > 0 && required.is_none() {
+        return Err(format!("level {lv} is outside the EXP table"));
+    }
     let tolerance = if lv <= 49 || lv >= 90 {
         0.02
     } else {
         CROSS_CHECK_TOLERANCE
     };
-    if (pct - expected_pct).abs() > tolerance {
-        return Err(format!(
-            "EXP read inconsistent ({pct:.2}% vs {expected_pct:.2}%) — learn more digits"
+    let level_agrees = required
+        .map(|required| (pct - exp as f64 / required as f64 * 100.0).abs() <= tolerance)
+        .unwrap_or(true);
+    let (lv, level_text) = if level_agrees {
+        (lv, level_text)
+    } else {
+        log_once(&format!(
+            "read_frame: level {lv} does not fit {pct:.2}% for {} EXP — reporting the level as unrecognised",
+            exp
         ));
-    }
+        (0, String::new())
+    };
+    let expected_pct = match exp_table::required(lv) {
+        Some(required) => exp as f64 / required as f64 * 100.0,
+        None => pct,
+    };
 
-    let map = match_map(frame, calibration, maps);
+    // The map is stored as its name; the street is a separate fingerprint. Combine
+    // them into the "street\nname" string the overlay splits into subtitle + headline.
+    let map_name = match_map(frame, calibration, maps);
+    let street = match (calibration.street.filter(Region::is_usable), streets) {
+        (Some(region), streets) => match_street(frame, region, streets),
+        _ => None,
+    };
+    let map = match street {
+        Some(street) if map_name != "unknown" => format!("{street}\n{map_name}"),
+        _ => map_name,
+    };
 
     let name = match (calibration.name.filter(Region::is_usable), identities.name.as_ref()) {
         (Some(region), Some(template)) => match_template(frame, region, template),
@@ -485,7 +534,7 @@ pub(crate) fn read_frame(
         pct,
         expected_pct,
         map,
-        conf: exp_conf.min(level_conf),
+        conf: if lv == 0 { exp_conf } else { exp_conf.min(level_conf) },
         exp_text,
         level_text,
         name,
@@ -493,33 +542,67 @@ pub(crate) fn read_frame(
     })
 }
 
-/// The level for this frame: from the level box when it is set and readable,
-/// otherwise derived from EXP and the percentage.
+/// The level for this frame, read from its own box. Deliberately never derived from
+/// EXP and the percentage: the derivation leans on the EXP table, and when it is
+/// wrong it reports a level that looks reasonable and is not.
+///
+/// An unreadable level yields 0, which every caller treats as "not recognised" —
+/// the same way an unrecognised name is reported. Failing the whole frame instead
+/// would hide a perfectly good EXP reading behind a missing box.
+/// Write a diagnostic to data/debug.log, but only when it differs from the last
+/// one. The level is read every tick, so logging unconditionally would bury the
+/// log under thousands of identical lines.
+fn log_once(message: &str) {
+    static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    let mut last = LAST.lock().unwrap_or_else(|error| error.into_inner());
+    if *last == message {
+        return;
+    }
+    *last = message.to_string();
+    crate::calibration::log(message);
+}
+
 fn level_reading(
     frame: &Frame,
     calibration: &Calibration,
     atlas: &Atlas,
-    exp: i64,
-    pct: f64,
-    exp_conf: f64,
 ) -> Result<(u32, String, f64), String> {
-    if let Some(region) = calibration.level.filter(Region::is_usable) {
-        if let Some(gray) = ocr::crop_gray(frame, region) {
-            if let Ok((text, conf)) = atlas.recognize(&gray) {
-                if let Some(lv) = ocr::parse_level(&text) {
-                    if exp_table::required(lv).is_some() {
-                        return Ok((lv, text, conf));
-                    }
-                }
-            }
-        }
-    }
+    let unknown = Ok((0u32, String::new(), 0.0));
 
-    match exp_table::level_for_exp_pct(exp, pct) {
-        Some(lv) => Ok((lv, format!("derived from {pct:.2}%"), exp_conf)),
-        None => Err(
-            "level not readable and not derivable at this percentage — set the level box".into(),
-        ),
+    let Some(region) = calibration.level.filter(Region::is_usable) else {
+        log_once("level_reading: no level box set");
+        return unknown;
+    };
+    let Some(gray) = ocr::crop_gray(frame, region) else {
+        log_once(&format!("level_reading: box {region:?} is outside the window"));
+        return unknown;
+    };
+    if atlas.glyphs.is_empty() {
+        log_once("level_reading: no level glyphs learned yet");
+        return unknown;
+    }
+    match atlas.recognize(&gray) {
+        Ok((text, conf)) => match ocr::parse_level(&text) {
+            Some(lv) if exp_table::required(lv).is_some() => Ok((lv, text, conf)),
+            Some(lv) => {
+                log_once(&format!("level_reading: '{text}' -> {lv} is outside the table"));
+                unknown
+            }
+            None => {
+                log_once(&format!(
+                    "level_reading: box {region:?} crop {}x{} read '{text}' — not a level",
+                    gray.w, gray.h
+                ));
+                unknown
+            }
+        },
+        Err(error) => {
+            log_once(&format!(
+                "level_reading: box {region:?} crop {}x{} failed: {error}",
+                gray.w, gray.h
+            ));
+            unknown
+        }
     }
 }
 
@@ -543,6 +626,36 @@ fn match_template(frame: &Frame, region: Region, template: &Template) -> Option<
         Some(template.label.clone())
     } else {
         None
+    }
+}
+
+fn match_street(frame: &Frame, region: Region, streets: &[Template]) -> Option<String> {
+    let crop = ocr::crop_gray(frame, region)?;
+    let mut best: Option<(&str, f64)> = None;
+    for template in streets {
+        let Some(bytes) = settings::from_hex(&template.pixels) else {
+            continue;
+        };
+        if template.w as usize != crop.w
+            || template.h as usize != crop.h
+            || bytes.len() != crop.px.len()
+        {
+            continue;
+        }
+        let candidate = ocr::Gray {
+            w: crop.w,
+            h: crop.h,
+            px: bytes,
+        };
+        if let Some(distance) = ocr::map_distance(&crop, &candidate) {
+            if best.map_or(true, |(_, closest)| distance < closest) {
+                best = Some((&template.label, distance));
+            }
+        }
+    }
+    match best {
+        Some((street, distance)) if distance <= MAP_DISTANCE_LIMIT => Some(street.to_string()),
+        _ => None,
     }
 }
 
@@ -578,7 +691,8 @@ fn match_map(frame: &Frame, calibration: &Calibration, templates: &[Template]) -
     // never seen gets named. A near miss snaps to a name that was taught explicitly.
     let map_atlas = Atlas::from_settings(&settings::load_map_atlas());
     if let Some(lines) = ocr::read_map_text(frame, &map_atlas) {
-        let text = lines.join("\n");
+        // The map name is the bottom line; the street is matched separately.
+        let text = lines.last().cloned().unwrap_or_default();
         if !text.trim().is_empty() {
             let best = templates
                 .iter()
@@ -605,13 +719,11 @@ fn match_map_fingerprint(
     calibration: &Calibration,
     templates: &[Template],
 ) -> Option<String> {
-    // The minimap moves and resizes, so its label is located on every frame.
-    // The calibrated box is only a fallback for when detection fails.
-    let crop = ocr::read_map_label(frame).or_else(|| {
-        let region = calibration.map.filter(Region::is_usable)?;
-        let gray = ocr::crop_gray(frame, region)?;
-        Some(ocr::resample(&gray, ocr::MAP_LABEL_W, ocr::MAP_LABEL_H))
-    })?;
+    // The drawn map box wins when there is one: it is placed by eye around the two
+    // label lines, whereas detection guesses the boundary from the panel and clips
+    // the ends of the name, which inflates every distance. Detection stays as the
+    // fallback for a profile whose minimap has not been boxed.
+    let crop = ocr::map_label(frame, calibration.map_box())?;
 
     let mut best: Option<(&str, f64)> = None;
     for template in templates {
@@ -703,7 +815,8 @@ mod tests {
         let name = std::env::var("MSCOUT_MAP_NAME").expect("MSCOUT_MAP_NAME");
         let frame = load_bmp_frame(&crate::data_dir().unwrap().join("debug-frame.bmp"));
 
-        let gray = ocr::read_map_label(&frame).expect("detected minimap label");
+        let gray = ocr::map_label(&frame, settings::load_calibration().map_box())
+            .expect("detected minimap label");
         let template = settings::Template {
             label: name.clone(),
             w: gray.w as u32,
@@ -719,8 +832,17 @@ mod tests {
         let calibration = settings::load_calibration();
         let atlas = Atlas::from_settings(&settings::load_atlas());
         let identities = settings::load_identities();
-        let readings =
-            read_frame(&frame, &calibration, &atlas, &maps, &identities).expect("read");
+        let streets = settings::load_streets();
+        let readings = read_frame(
+            &frame,
+            &calibration,
+            &atlas,
+            &Atlas::from_settings(&settings::load_level_atlas()),
+            &maps,
+            &streets,
+            &identities,
+        )
+        .expect("read");
         println!("map={:?} (taught {:?})", readings.map, name);
     }
 
@@ -821,11 +943,25 @@ mod tests {
         let window = window_target::resolve_selector(&selector).expect("game window");
         let frame = crate::capture::client_frame(window.hwnd).expect("frame");
 
-        let region = Region {
-            x: 1023,
-            y: 1164,
-            w: 102,
-            h: 17,
+        let region = match std::env::var("MSCOUT_CROP") {
+            Ok(spec) => {
+                let parts: Vec<i32> = spec
+                    .split(',')
+                    .map(|part| part.trim().parse().expect("number"))
+                    .collect();
+                settings::Region {
+                    x: parts[0],
+                    y: parts[1],
+                    w: parts[2],
+                    h: parts[3],
+                }
+            }
+            Err(_) => Region {
+                x: 1023,
+                y: 1164,
+                w: 102,
+                h: 17,
+            },
         };
         let gray = ocr::crop_gray(&frame, region).expect("crop");
 
@@ -844,6 +980,130 @@ mod tests {
         for (row, line) in ocr::shape_art(&gray).iter().enumerate() {
             println!("{row:2} {line}");
         }
+    }
+
+    #[test]
+    #[ignore = "tool: records the live map label into the profile on disk"]
+    fn record_live_map() {
+        use crate::settings::Template;
+
+        let name = std::env::var("MSCOUT_MAP_NAME").expect("MSCOUT_MAP_NAME");
+        let key = std::env::var("MSCOUT_PROFILE_KEY").unwrap_or_else(|_| "1366x768".into());
+        let (width, height) = key.split_once('x').expect("WxH");
+
+        let selector = settings::WindowSelector {
+            title: "MapleStory".into(),
+            process: "MapleStory.exe".into(),
+        };
+        let window = window_target::resolve_selector(&selector).expect("game window");
+        let frame = crate::capture::client_frame(window.hwnd).expect("frame");
+
+        let gray = ocr::map_label(&frame, settings::load_calibration().map_box())
+            .expect("minimap label");
+        let mut profile = crate::profile::load(
+            width.parse().expect("width"),
+            height.parse().expect("height"),
+        )
+        .expect("profile on disk");
+
+        profile.maps.retain(|template| template.label != name);
+        profile.maps.push(Template {
+            label: name.clone(),
+            w: gray.w as u32,
+            h: gray.h as u32,
+            pixels: settings::to_hex(&gray.px),
+        });
+        crate::profile::save(&profile).expect("save profile");
+
+        println!(
+            "recorded {:?} into {} — {} maps now",
+            name,
+            profile.key(),
+            profile.maps.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "tool: re-records the live map and identity fingerprints for the mode in use"]
+    fn record_live_labels() {
+        use crate::settings::Template;
+
+        let key = std::env::var("MSCOUT_PROFILE_KEY").unwrap_or_else(|_| "1366x768".into());
+        let (width, height) = key.split_once('x').expect("WxH");
+        let (client_w, client_h) = (
+            width.parse::<u32>().expect("width"),
+            height.parse::<u32>().expect("height"),
+        );
+
+        let selector = settings::WindowSelector {
+            title: "MapleStory".into(),
+            process: "MapleStory.exe".into(),
+        };
+        let window = window_target::resolve_selector(&selector).expect("game window");
+        let frame = crate::capture::client_frame(window.hwnd).expect("frame");
+
+        // Labels come from the default-mode set: same account, same character. Only the
+        // pixels differ between modes, which is the whole point of re-recording.
+        let source = crate::profile::load_for_mode(
+            client_w,
+            client_h,
+            settings::UiMode::Default,
+        )
+        .expect("default profile");
+        let mut target = crate::profile::load_for_mode(client_w, client_h, settings::ui_mode())
+            .expect("profile for this mode");
+
+        if let Some(gray) = ocr::map_label(&frame, settings::load_calibration().map_box()) {
+            let label = std::env::var("MSCOUT_MAP_NAME")
+                .ok()
+                .or_else(|| source.maps.first().map(|template| template.label.clone()))
+                .unwrap_or_else(|| "unknown".into());
+            target.maps.retain(|template| template.label != label);
+            target.maps.push(Template {
+                label,
+                w: gray.w as u32,
+                h: gray.h as u32,
+                pixels: settings::to_hex(&gray.px),
+            });
+        }
+
+        let name_label = std::env::var("MSCOUT_NAME")
+            .ok()
+            .or_else(|| source.identities.name.map(|template| template.label));
+        let job_label = std::env::var("MSCOUT_JOB")
+            .ok()
+            .or_else(|| source.identities.job.map(|template| template.label));
+        for (kind, region, label) in [
+            ("name", target.calibration.name, name_label),
+            ("job", target.calibration.job, job_label),
+        ] {
+            let (Some(region), Some(label)) = (region, label) else {
+                continue;
+            };
+            let Some(gray) = ocr::crop_gray(&frame, region) else {
+                continue;
+            };
+            let template = Template {
+                label,
+                w: gray.w as u32,
+                h: gray.h as u32,
+                pixels: settings::to_hex(&gray.px),
+            };
+            if kind == "name" {
+                target.identities.name = Some(template);
+            } else {
+                target.identities.job = Some(template);
+            }
+        }
+
+        crate::profile::save(&target).expect("save profile");
+        println!(
+            "{}: maps={} name={:?} job={:?}",
+            target.key(),
+            target.maps.len(),
+            target.identities.name.as_ref().map(|t| t.label.clone()),
+            target.identities.job.as_ref().map(|t| t.label.clone())
+        );
     }
 
     #[test]
@@ -948,7 +1208,7 @@ mod tests {
         for (kind, region, template) in [
             ("name", calibration.name, identities.name.as_ref()),
             ("job", calibration.job, identities.job.as_ref()),
-            ("map", calibration.map, maps.first()),
+            ("map", calibration.map_box(), maps.first()),
         ] {
             let (Some(region), Some(template)) = (region, template) else {
                 continue;
@@ -1032,9 +1292,74 @@ mod tests {
             None => println!("minimap label not detected"),
         }
 
-        match read_frame(&frame, &calibration, &atlas, &maps, &identities) {
+        let streets = settings::load_streets();
+        match read_frame(
+            &frame,
+            &calibration,
+            &atlas,
+            &Atlas::from_settings(&profile.level_atlas),
+            &maps,
+            &streets,
+            &identities,
+        ) {
             Ok(readings) => println!("{readings:?}"),
             Err(error) => println!("read failed: {error}"),
         }
+    }
+
+    #[test]
+    #[ignore = "diagnostic: explains every shape in the level box against the level atlas"]
+    fn explains_level_box() {
+        let profile = profile::load_for_mode(1920, 1200, settings::ui_mode()).expect("profile");
+        let region = profile.calibration.level.expect("level box");
+        let selector = crate::settings::WindowSelector {
+            title: String::new(),
+            process: "MapleStory.exe".into(),
+        };
+        let window = window_target::resolve_selector(&selector).expect("game window");
+        let frame = crate::capture::client_frame(window.hwnd).expect("frame");
+        let gray = ocr::crop_gray(&frame, region).expect("crop");
+        let atlas = Atlas::from_settings(&profile.level_atlas);
+        println!("level box {region:?} crop {}x{}", gray.w, gray.h);
+        let shapes = ocr::segments(&gray);
+        println!("{} shapes", shapes.len());
+        for guess in atlas.explain(&gray) {
+            println!(
+                "  shape {}x{} at {},{} -> best '{}' d={:.1} known={}",
+                guess.w, guess.h, guess.x, guess.y, guess.ch, guess.distance, guess.known
+            );
+        }
+        for glyph in &profile.level_atlas.glyphs {
+            println!("  atlas '{}' {}x{}", glyph.ch, glyph.w, glyph.h);
+        }
+        println!("recognize = {:?}", atlas.recognize(&gray));
+    }
+
+    #[test]
+    #[ignore = "diagnostic: reports the glyph count of each atlas in the saved profile"]
+    fn dumps_atlas_counts() {
+        let width: u32 = std::env::var("MSCOUT_W")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1920);
+        let height: u32 = std::env::var("MSCOUT_H")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1200);
+        let profile = profile::load_for_mode(width, height, settings::ui_mode()).expect("profile");
+        println!(
+            "profile {}x{} mode={:?}",
+            profile.client_w, profile.client_h, profile.ui_mode
+        );
+        println!("  atlas       (EXP): {} glyphs", profile.atlas.glyphs.len());
+        println!("  level_atlas      : {} glyphs", profile.level_atlas.glyphs.len());
+        println!("  map_atlas        : {} glyphs", profile.map_atlas.glyphs.len());
+        for glyph in &profile.level_atlas.glyphs {
+            println!("    level '{}' {}x{}", glyph.ch, glyph.w, glyph.h);
+        }
+        println!(
+            "  active level_atlas via settings: {} glyphs",
+            settings::load_level_atlas().glyphs.len()
+        );
     }
 }
