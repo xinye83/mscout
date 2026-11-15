@@ -488,15 +488,27 @@ pub fn text_lines(gray: &Gray) -> Vec<(i32, i32, i32, i32)> {
     // generous box edge, not text.
     const MIN_LINE_H: usize = 4;
 
-    let mask = foreground(gray);
+    // The map label's crop includes the panel fill and sometimes the icon frame;
+    // Otsu then calls the fill ink and merges the street and map lines. The label
+    // text is near-white, so use a white floor to isolate the lines.
+    let mask = foreground_with_floor(gray, 200);
     let mut occupied = vec![false; gray.h];
+    // The label crop can include the panel's white border; a border column would
+    // mark every row occupied and merge the street and map lines. Ignore the
+    // outer two columns, which are frame rather than text.
+    let x_start = 2.min(gray.w);
+    let x_end = gray.w.saturating_sub(2).max(x_start);
+    // A single bright icon/border column should not make a row count as text; a
+    // real text row has many white pixels across the line.
+    let row_floor = (gray.w / 12).max(2);
     for y in 0..gray.h {
-        for x in 0..gray.w {
+        let mut count = 0usize;
+        for x in x_start..x_end {
             if mask[y * gray.w + x] {
-                occupied[y] = true;
-                break;
+                count += 1;
             }
         }
+        occupied[y] = count >= row_floor;
     }
 
     let mut lines = Vec::new();

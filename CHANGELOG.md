@@ -34,6 +34,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   state and every Filter Applied state. The filtered path uses tolerant
   badge/chrome colours with solidity checks, and the Default title bar (white
   rather than `#99BBCC`) falls back to the `MINI MAP` text plus the dark map body.
+- The map-label matcher now builds its name/street index per font size and tries
+  12–24 px, and the label line splitter isolates white text rows from the panel
+  fill, icon and border. Larger Default Ratio labels are detected as separate
+  street/map lines; the 1920 Default name match itself remains open.
 - The 1920×1080 Default EXP readout dropped the comma and misread touching
   digits. The reader now learns the live digit shapes, matches the punctuation
   variants, and splits merged glyphs; it reads `127,028[72.91%]` exactly.

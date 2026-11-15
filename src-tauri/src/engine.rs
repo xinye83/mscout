@@ -820,6 +820,11 @@ fn match_template(frame: &Frame, region: Region, template: &Template) -> Option<
     }
 }
 
+/// Label font sizes tried by the whole-line matcher. Ideal is 12 px; Default
+/// Ratio draws the same label larger, so the matcher picks the size whose
+/// rendered width and shape sequence explain the live line best.
+const LABEL_SIZES: [u32; 7] = [12, 14, 16, 18, 20, 22, 24];
+
 fn match_street(
     frame: &Frame,
     region: Option<Region>,
@@ -834,13 +839,31 @@ fn match_street(
     // Nothing taught matched (or no box was drawn): the client's own map table
     // has the street line, and detection finds it without a stored box.
     let dir = settings::mscw_dir()?;
-    let index = crate::font_seed::label_index(std::path::Path::new(&dir))?;
     let lines = ocr::map_label_lines(frame)?;
     if lines.len() < 2 {
         return None;
     }
-    let (street, score) =
-        crate::font_seed::match_label(lines.first()?, &index.streets, 8, 0.55)?;
+    let line = lines.first()?;
+    let mut best: Option<(String, f64)> = None;
+    for px in LABEL_SIZES {
+        let Some(index) =
+            crate::font_seed::label_index(std::path::Path::new(&dir), px)
+        else {
+            continue;
+        };
+        let max_score = if px >= 14 { 0.95 } else { 0.55 };
+        if let Some((street, score)) =
+            crate::font_seed::match_label(line, &index.streets, 8, max_score)
+        {
+            if best
+                .as_ref()
+                .map_or(true, |(_, current)| score < *current)
+            {
+                best = Some((street, score));
+            }
+        }
+    }
+    let (street, score) = best?;
     log_once(&format!(
         "street from the client's map table: {street:?} (score {score:.2})"
     ));
@@ -968,10 +991,26 @@ fn match_map_and_street(
             let Some(dir) = settings::mscw_dir() else {
                 return ("unknown".into(), None, false);
             };
-            let Some(index) = crate::font_seed::label_index(std::path::Path::new(&dir)) else {
-                return ("unknown".into(), None, false);
-            };
-            match crate::font_seed::match_folded_label(&label, &index.folded_lines, 8, 0.55) {
+            let mut best: Option<((String, String), f64)> = None;
+            for px in LABEL_SIZES {
+                let Some(index) =
+                    crate::font_seed::label_index(std::path::Path::new(&dir), px)
+                else {
+                    continue;
+                };
+                let max_score = if px >= 14 { 0.95 } else { 0.55 };
+                if let Some((pair, score)) =
+                    crate::font_seed::match_folded_label(&label, &index.folded_lines, 8, max_score)
+                {
+                    if best
+                        .as_ref()
+                        .map_or(true, |(_, current)| score < *current)
+                    {
+                        best = Some((pair, score));
+                    }
+                }
+            }
+            match best {
                 Some(((street, name), score)) => {
                     log_once(&format!(
                         "folded minimap: {street:?} / {name:?} (score {score:.3})"
@@ -994,10 +1033,25 @@ fn match_map_and_street(
 
 fn match_map_name(frame: &Frame) -> Option<String> {
     let dir = settings::mscw_dir()?;
-    let index = crate::font_seed::label_index(std::path::Path::new(&dir))?;
     let line = ocr::map_label_lines(frame)?.last()?.clone();
-    let (name, score) =
-        crate::font_seed::match_label(&line, &index.map_names, 8, 0.55)?;
+    let mut best: Option<(String, f64)> = None;
+    for px in LABEL_SIZES {
+        let Some(index) = crate::font_seed::label_index(std::path::Path::new(&dir), px) else {
+            continue;
+        };
+        let max_score = if px >= 14 { 0.95 } else { 0.55 };
+        if let Some((name, score)) =
+            crate::font_seed::match_label(&line, &index.map_names, 8, max_score)
+        {
+            if best
+                .as_ref()
+                .map_or(true, |(_, current)| score < *current)
+            {
+                best = Some((name, score));
+            }
+        }
+    }
+    let (name, score) = best?;
     log_once(&format!(
         "map name from the client's map table: {name:?} (score {score:.2})"
     ));

@@ -885,23 +885,25 @@ pub struct LabelIndex {
     pub folded_lines: Vec<FoldedLine>,
 }
 
-static LABEL_INDEX: std::sync::Mutex<Option<(String, std::sync::Arc<LabelIndex>)>> =
-    std::sync::Mutex::new(None);
+static LABEL_INDEX: std::sync::Mutex<Vec<(String, std::sync::Arc<LabelIndex>)>> =
+    std::sync::Mutex::new(Vec::new());
 
-/// Build or reuse the client's map/street name index for this install.
+/// Build or reuse the client's map/street name index at `px`.
 ///
-/// Names are rendered once with the identified label font (Arial Bold 12, GDI
-/// anti-aliased) and cached. Matching a live line is then a width filter plus a
-/// shape-sequence DTW, so no column segmentation is involved.
-pub fn label_index(mscw_dir: &std::path::Path) -> Option<std::sync::Arc<LabelIndex>> {
-    let key = mscw_dir.to_string_lossy().to_string();
+/// Names are rendered once with the identified label font (Arial Bold, GDI
+/// anti-aliased) and cached per size. Matching a live line is then a width filter
+/// plus a shape-sequence DTW, so no column segmentation is involved. Default
+/// Ratio draws the label larger than Ideal, so the caller tries several sizes.
+pub fn label_index(
+    mscw_dir: &std::path::Path,
+    px: u32,
+) -> Option<std::sync::Arc<LabelIndex>> {
+    let key = format!("{}#{px}", mscw_dir.to_string_lossy());
     let mut guard = LABEL_INDEX
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((cached, index)) = guard.as_ref() {
-        if cached == &key {
-            return Some(index.clone());
-        }
+    if let Some((_, index)) = guard.iter().find(|(cached, _)| cached == &key) {
+        return Some(index.clone());
     }
 
     let entries = crate::map_names::load(mscw_dir).ok()?;
@@ -911,21 +913,22 @@ pub fn label_index(mscw_dir: &std::path::Path) -> Option<std::sync::Arc<LabelInd
     let mut map_names = Vec::new();
     let mut streets = Vec::new();
     let mut folded_lines = Vec::new();
+    let px = px as i32;
 
     for entry in entries {
         if seen_names.insert(entry.name.clone()) {
-            if let Some(gray) = render_text_bitmap("Arial", 12, true, 4, 180, &entry.name) {
+            if let Some(gray) = render_text_bitmap("Arial", px, true, 4, 180, &entry.name) {
                 map_names.push((entry.name.clone(), gray));
             }
         }
         if !entry.street.is_empty() && seen_streets.insert(entry.street.clone()) {
-            if let Some(gray) = render_text_bitmap("Arial", 12, true, 4, 180, &entry.street) {
+            if let Some(gray) = render_text_bitmap("Arial", px, true, 4, 180, &entry.street) {
                 streets.push((entry.street.clone(), gray));
             }
         }
         if seen_pairs.insert((entry.street.clone(), entry.name.clone())) {
             let line = format!("{} :{}", entry.street, entry.name);
-            if let Some(gray) = render_text_bitmap("Arial", 12, false, 4, 180, &line) {
+            if let Some(gray) = render_text_bitmap("Arial", px, false, 4, 180, &line) {
                 folded_lines.push(((entry.street, entry.name), gray));
             }
         }
@@ -936,7 +939,10 @@ pub fn label_index(mscw_dir: &std::path::Path) -> Option<std::sync::Arc<LabelInd
         streets,
         folded_lines,
     });
-    *guard = Some((key, index.clone()));
+    guard.push((key, index.clone()));
+    if guard.len() > 16 {
+        guard.remove(0);
+    }
     Some(index)
 }
 
