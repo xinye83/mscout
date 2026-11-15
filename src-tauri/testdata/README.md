@@ -249,8 +249,9 @@ minimap state from `meta.json` decides the expected map form: `expanded` and
 has no widget to read.
 
 Set `MSCOUT_CASE=<pair>` to restrict either tier to one fixture (or all state
-cases of a pair). That is how a pair with a preset is checked while other pairs
-are still uncalibrated; for example
+cases of a pair), and `MSCOUT_STATE=<expanded|titlebar|folded>` to restrict it
+further to one minimap state. That is how a pair with a preset is checked while
+other pairs are still uncalibrated; for example
 `MSCOUT_CASE=1366x768@ideal cargo test --lib regression -- --ignored`.
 
 Add `--offline` to either command to prove the build needs no network. The MSCW

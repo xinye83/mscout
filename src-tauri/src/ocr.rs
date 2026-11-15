@@ -1401,22 +1401,6 @@ fn near_rgb(frame: &Frame, x: usize, y: usize, rgb: (i32, i32, i32), tol: i32) -
         && (frame.rgba[index + 2] as i32 - rgb.2).abs() <= tol
 }
 
-/// Bounding box of the largest connected colour blob whose size passes `accept`.
-///
-/// A plain bbox over the whole frame is unusable here: the same orange appears in
-/// the minimap icon and scenery, so the union spans half the screen. The badge is
-/// a single small chip, so we take the largest component that fits its shape.
-fn colour_box(
-    frame: &Frame,
-    rgb: (i32, i32, i32),
-    tol: i32,
-    accept: impl Fn(i32, i32) -> bool,
-) -> Option<Region> {
-    component_regions(frame, |x, y| near_rgb(frame, x, y, rgb, tol), accept)
-        .into_iter()
-        .next()
-}
-
 /// Every connected component whose size passes `accept`, largest first.
 fn component_regions(
     frame: &Frame,
@@ -1485,6 +1469,36 @@ fn component_regions(
     out
 }
 
+/// Fraction of a bbox that the predicate matches. Used to reject a hollow frame
+/// (a white title bar's gray border) from being taken for a solid folded bar or
+/// name band.
+fn component_solidity(
+    frame: &Frame,
+    region: Region,
+    matches: impl Fn(usize, usize) -> bool,
+) -> f64 {
+    let w = frame.width as usize;
+    let h = frame.height as usize;
+    let x0 = region.x.max(0) as usize;
+    let y0 = region.y.max(0) as usize;
+    let x1 = (region.x + region.w).max(0).min(w as i32) as usize;
+    let y1 = (region.y + region.h).max(0).min(h as i32) as usize;
+    if x1 <= x0 || y1 <= y0 {
+        return 0.0;
+    }
+    let mut count = 0usize;
+    let mut area = 0usize;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            area += 1;
+            if matches(x, y) {
+                count += 1;
+            }
+        }
+    }
+    count as f64 * 100.0 / area as f64
+}
+
 /// The badge is dithered between its border and fill shades, so it is matched as
 /// an orange range rather than one exact colour.
 fn is_badge_pixel(frame: &Frame, x: usize, y: usize) -> bool {
@@ -1493,6 +1507,47 @@ fn is_badge_pixel(frame: &Frame, x: usize, y: usize) -> bool {
     let g = frame.rgba[index + 1] as i32;
     let b = frame.rgba[index + 2] as i32;
     r >= 190 && (130..=235).contains(&g) && b <= 130
+}
+
+/// Broader badge match for the Filter Applied rendering. The filter blurs the
+/// chip and shifts its shades, so the exact range breaks into fragments; this
+/// keeps the orange family and lets the component shape and the enclosing body
+/// reject scenery.
+fn is_badge_pixel_tolerant(frame: &Frame, x: usize, y: usize) -> bool {
+    let index = (y * frame.width as usize + x) * 4;
+    let r = frame.rgba[index] as i32;
+    let g = frame.rgba[index + 1] as i32;
+    let b = frame.rgba[index + 2] as i32;
+    r >= 190 && (110..=240).contains(&g) && b <= 140 && r - b >= 60 && g - b >= 40
+}
+
+/// The minimap name band's fill (`#99BBCC`) after the filter: the same blue-gray
+/// family, with the lighter/darker shades the filter produces. Sky and clouds are
+/// bluer and lighter, so the `b > r` / `g > r` split keeps them out; the caller
+/// also requires a solid component near the badge.
+fn is_panel_pixel_tolerant(frame: &Frame, x: usize, y: usize) -> bool {
+    let index = (y * frame.width as usize + x) * 4;
+    let r = frame.rgba[index] as i32;
+    let g = frame.rgba[index + 1] as i32;
+    let b = frame.rgba[index + 2] as i32;
+    (r - PANEL_RGB.0).abs() <= 28
+        && (g - PANEL_RGB.1).abs() <= 28
+        && (b - PANEL_RGB.2).abs() <= 24
+        && b > r + 20
+        && g > r + 8
+}
+
+/// The folded bar's light neutral fill (`#DDDDDD`) after the filter. White is
+/// excluded, so a white title bar cannot become a folded bar; the caller also
+/// requires a solid component.
+fn is_folded_pixel_tolerant(frame: &Frame, x: usize, y: usize) -> bool {
+    let index = (y * frame.width as usize + x) * 4;
+    let r = frame.rgba[index] as i32;
+    let g = frame.rgba[index + 1] as i32;
+    let b = frame.rgba[index + 2] as i32;
+    let high = r.max(g).max(b);
+    let low = r.min(g).min(b);
+    (200..=245).contains(&high) && high - low <= 12
 }
 
 /// Count the active (bright blue) zoom buttons in the title bar.
@@ -1545,6 +1600,98 @@ fn active_zoom_buttons(frame: &Frame, bar: Region, badge: Region) -> usize {
     runs
 }
 
+/// Luminance-based ink box. The Filter Applied `MINI MAP` text is blue-gray with a
+/// high blue channel, so the all-channel `< 60` cutoff used for the map label
+/// would miss it; the bar and sky stay much brighter than the text.
+fn ink_below_luma(frame: &Frame, region: Region, cutoff: u8) -> Option<(Region, usize)> {
+    let w = frame.width as usize;
+    let h = frame.height as usize;
+    let x0 = region.x.max(0) as usize;
+    let y0 = region.y.max(0) as usize;
+    let x1 = (region.x + region.w).max(0).min(w as i32) as usize;
+    let y1 = (region.y + region.h).max(0).min(h as i32) as usize;
+    let mut min_x = usize::MAX;
+    let mut min_y = usize::MAX;
+    let mut max_x = 0usize;
+    let mut max_y = 0usize;
+    let mut count = 0usize;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let index = (y * w + x) * 4;
+            let r = frame.rgba[index] as u32;
+            let g = frame.rgba[index + 1] as u32;
+            let b = frame.rgba[index + 2] as u32;
+            if ((77 * r + 150 * g + 29 * b) >> 8) < cutoff as u32 {
+                count += 1;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    Some((
+        Region {
+            x: min_x as i32,
+            y: min_y as i32,
+            w: (max_x - min_x + 1) as i32,
+            h: (max_y - min_y + 1) as i32,
+        },
+        count,
+    ))
+}
+
+/// The title-bar-only state when the title bar is white rather than `#99BBCC`
+/// (the 1920 Default rendering). The `MINI MAP` text plus the dark map body below
+/// it identify the widget: a folded bar has no map body, and an expanded name band
+/// is already caught by the panel match.
+fn titlebar_fallback(frame: &Frame, badge: Region) -> Option<Minimap> {
+    let x1 = (badge.x - 72).max(0);
+    // Start inside the widget's left frame (about 150 px left of the badge) and
+    // just right of it: the frame is dark in the filtered rendering, and the
+    // composed frame's black background also counts as ink.
+    let x0 = (badge.x - 140).max(0);
+    let text_region = Region {
+        x: x0,
+        // Keep the box inside the title bar's frame: the filtered rendering makes
+        // the bar's border dark enough to fill a taller box.
+        y: (badge.y + 2).max(0),
+        w: (x1 - x0).max(0),
+        h: (badge.h - 4).max(4),
+    };
+    let (ink, _) = ink_below_luma(frame, text_region, 130)?;
+    if !(20..=80).contains(&ink.w) || !(4..=14).contains(&ink.h) {
+        return None;
+    }
+    let body = Region {
+        x: (badge.x - 150).max(0),
+        y: (badge.y + badge.h + 10).max(0),
+        w: 190,
+        h: 80,
+    };
+    let (_, dark) = ink_below_luma(frame, body, 100)?;
+    if dark < 300 {
+        return None;
+    }
+    let bar = Region {
+        x: (badge.x - 170).max(0),
+        y: (badge.y - 10).max(0),
+        w: 210,
+        h: 22,
+    };
+    Some(Minimap {
+        state: MinimapState::TitleBarOnly,
+        bar,
+        title: Some(ink),
+        badge,
+        icon: None,
+        active_buttons: active_zoom_buttons(frame, bar, badge),
+    })
+}
+
 /// Locate the minimap and which of its three zoom states is showing.
 ///
 /// The `WORLD` badge (`#DD9911` border / `#FFCC55` fill, 34×10) is present in
@@ -1553,7 +1700,24 @@ fn active_zoom_buttons(frame: &Frame, bar: Region, badge: Region) -> usize {
 /// a light neutral fill is the folded bar.
 pub fn detect_minimap(frame: &Frame) -> Option<Minimap> {
     let badge_shape = |w: i32, h: i32| (24..=48).contains(&w) && (8..=16).contains(&h);
-    let badges = component_regions(frame, |x, y| is_badge_pixel(frame, x, y), badge_shape);
+    let mut badges = component_regions(frame, |x, y| is_badge_pixel(frame, x, y), badge_shape);
+    // Always add the tolerant matches: the exact pass can find scenery blobs while
+    // missing a filtered badge whose component no longer fits the exact shape.
+    for badge in component_regions(
+        frame,
+        |x, y| is_badge_pixel_tolerant(frame, x, y),
+        |w, h| (20..=72).contains(&w) && (8..=24).contains(&h),
+    ) {
+        let duplicate = badges.iter().any(|existing| {
+            existing.x == badge.x
+                && existing.y == badge.y
+                && existing.w == badge.w
+                && existing.h == badge.h
+        });
+        if !duplicate {
+            badges.push(badge);
+        }
+    }
     if badges.is_empty() {
         return None;
     }
@@ -1573,52 +1737,100 @@ pub fn detect_minimap(frame: &Frame) -> Option<Minimap> {
                 && cy < region.y + region.h
         };
 
-        if let Some(bar) = colour_box(frame, FOLDED_FILL, 6, bar_shape) {
+        for bar in component_regions(frame, |x, y| near_rgb(frame, x, y, FOLDED_FILL, 6), bar_shape) {
             if inside(&bar) {
-                return Some(Minimap {
-                    state: MinimapState::Folded,
-                    bar,
-                    title: None,
-                    badge: *badge,
-                    icon: None,
-                    active_buttons: active_zoom_buttons(frame, bar, *badge),
-                });
+                return Some(folded_minimap(frame, bar, *badge));
+            }
+        }
+        // Filter Applied: the exact fill breaks into fragments; a solid light-gray
+        // bar containing the badge is the same state.
+        for bar in component_regions(frame, |x, y| is_folded_pixel_tolerant(frame, x, y), bar_shape) {
+            if inside(&bar)
+                && component_solidity(frame, bar, |x, y| is_folded_pixel_tolerant(frame, x, y))
+                    >= 30.0
+            {
+                return Some(folded_minimap(frame, bar, *badge));
             }
         }
 
-        // Expanded and title-bar-only share the same 16 px title bar; only the
-        // #99BBCC component's height differs (59 vs 16).
-        if let Some(panel) = colour_box(frame, PANEL_RGB, 6, panel_shape) {
-            if inside(&panel) {
-                let bar = bar_of(&panel);
-                let title = detect_title_text(frame, bar, *badge);
-                let icon = detect_icon(frame, panel, bar);
-                let active_buttons = active_zoom_buttons(frame, bar, *badge);
-                // The icon is drawn only in the expanded state, so its presence is
-                // the strongest discriminator between expanded and title-bar-only.
-                // The 16 px title bar and two active buttons corroborate state 2.
-                let state = if icon.is_some() || panel.h >= 30 {
-                    MinimapState::Expanded
-                } else if active_buttons >= 2 && title.is_some() {
-                    MinimapState::TitleBarOnly
-                } else {
-                    // A short component with no icon and no two-button signature is
-                    // more likely a clipped expanded panel than a title-only one.
-                    MinimapState::Expanded
-                };
-                return Some(Minimap {
-                    state,
-                    bar,
-                    title,
-                    badge: *badge,
-                    icon,
-                    active_buttons,
-                });
+        // Expanded and title-bar-only share the same title bar; only the #99BBCC
+        // component differs. Iterate every component so a larger scenery blob does
+        // not hide the real panel.
+        for panel in component_regions(frame, |x, y| is_panel_pixel(frame, x, y), panel_shape) {
+            if !inside(&panel) {
+                continue;
             }
+            let bar = bar_of(&panel);
+            let title = detect_title_text(frame, bar, *badge);
+            let icon = detect_icon(frame, panel, bar);
+            let active_buttons = active_zoom_buttons(frame, bar, *badge);
+            let state = if icon.is_some() || panel.h >= 30 {
+                MinimapState::Expanded
+            } else if active_buttons >= 2 && title.is_some() {
+                MinimapState::TitleBarOnly
+            } else {
+                MinimapState::Expanded
+            };
+            return Some(Minimap {
+                state,
+                bar,
+                title,
+                badge: *badge,
+                icon,
+                active_buttons,
+            });
+        }
+
+        // Filter Applied: the name band's fill is shifted and can join the title
+        // bar, so the badge may be inside the component rather than below it. A
+        // solid blue-gray band at least as tall as a name band is the expanded
+        // state; the shorter (hollow) title bar is rejected by the solidity and
+        // height checks.
+        for panel in component_regions(frame, |x, y| is_panel_pixel_tolerant(frame, x, y), panel_shape) {
+            let near = inside(&panel)
+                || (cx >= panel.x
+                    && cx < panel.x + panel.w
+                    && panel.y >= badge.y - 2
+                    && panel.y <= badge.y + badge.h + 30);
+            if !near || panel.h < 25 {
+                continue;
+            }
+            if component_solidity(frame, panel, |x, y| is_panel_pixel_tolerant(frame, x, y)) < 30.0 {
+                continue;
+            }
+            let bar = bar_of(&panel);
+            let title = detect_title_text(frame, bar, *badge);
+            let icon = detect_icon(frame, panel, bar);
+            let active_buttons = active_zoom_buttons(frame, bar, *badge);
+            return Some(Minimap {
+                state: MinimapState::Expanded,
+                bar,
+                title,
+                badge: *badge,
+                icon,
+                active_buttons,
+            });
+        }
+
+        // Default title-bar-only: the title bar is white, not #99BBCC, and there is
+        // no name band. The MINI MAP text plus the dark map body identify it.
+        if let Some(minimap) = titlebar_fallback(frame, *badge) {
+            return Some(minimap);
         }
     }
 
     None
+}
+
+fn folded_minimap(frame: &Frame, bar: Region, badge: Region) -> Minimap {
+    Minimap {
+        state: MinimapState::Folded,
+        bar,
+        title: None,
+        badge,
+        icon: None,
+        active_buttons: active_zoom_buttons(frame, bar, badge),
+    }
 }
 
 fn bar_of(panel: &Region) -> Region {
@@ -2176,4 +2388,5 @@ mod tests {
         assert_eq!(parse_level("Lv 99"), Some(99));
         assert_eq!(parse_level("--"), None);
     }
+
 }

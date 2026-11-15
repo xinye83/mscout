@@ -26,6 +26,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   missing or clipped fixture fails loudly instead of being skipped.
 
 ### Fixed
+- Minimap state detection now recognises the 1920×1080 Default title-bar-only
+  state and every Filter Applied state. The filtered path uses tolerant
+  badge/chrome colours with solidity checks, and the Default title bar (white
+  rather than `#99BBCC`) falls back to the `MINI MAP` text plus the dark map body.
 - Map names ending in a roman numeral (`Thicket Around the Beach III`) could read
   as `unknown`; the matcher now breaks near-ties by rendered width and picks the
   correct numeral.

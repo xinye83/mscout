@@ -176,13 +176,17 @@ impl Case {
 }
 
 /// Every fixture directory, in a stable order. `MSCOUT_CASE=<pair>` narrows the
-/// run to one fixture (or all of a pair's state cases), so the client tier can
-/// check a supported pair without stopping on pairs that have no preset yet.
+/// run to one fixture (or all of a pair's state cases), and `MSCOUT_STATE=<state>`
+/// narrows it to one minimap state.
 fn load_cases() -> Vec<Case> {
     let mut cases = load_cases_in(&fixtures_dir());
     if let Ok(only) = std::env::var("MSCOUT_CASE") {
         cases.retain(|case| case.key == only || case.key.starts_with(&format!("{only}/")));
         assert!(!cases.is_empty(), "MSCOUT_CASE={only:?} matched no fixture");
+    }
+    if let Ok(state) = std::env::var("MSCOUT_STATE") {
+        cases.retain(|case| case.minimap_state == state);
+        assert!(!cases.is_empty(), "MSCOUT_STATE={state:?} matched no fixture");
     }
     cases
 }
