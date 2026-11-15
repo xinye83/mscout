@@ -148,13 +148,27 @@ mod tests {
             );
         }
 
-        // The 1920 sizes are verified at Ideal only. Default/Filtered must fall
-        // back to a local calibration pass instead of borrowing Ideal geometry.
-        for (w, h) in [(1920, 1080), (1920, 1200)] {
-            assert!(for_size(w, h, UiMode::Ideal).is_some());
-            assert!(for_size(w, h, UiMode::Default).is_none());
-            assert!(for_size(w, h, UiMode::Filtered).is_none());
+        // 1920x1080 ships all three UI modes. Default and Filtered share their
+        // geometry; the saved-frame corpus reads EXP, level and name.
+        for mode in UiMode::ALL {
+            let profile = for_size(1920, 1080, mode)
+                .unwrap_or_else(|| panic!("1920x1080 preset for {mode:?}"));
+            assert!(
+                profile.is_calibrated(),
+                "1920x1080 {mode:?} has no usable boxes"
+            );
+            assert!(profile.calibration.level.is_some());
+            assert!(
+                profile.calibration.name.is_some() && profile.calibration.job.is_some(),
+                "1920x1080 {mode:?} has no name/job boxes"
+            );
         }
+
+        // 1920x1200 is verified at Ideal only; Default/Filtered must fall back to
+        // a local calibration pass instead of borrowing Ideal geometry.
+        assert!(for_size(1920, 1200, UiMode::Ideal).is_some());
+        assert!(for_size(1920, 1200, UiMode::Default).is_none());
+        assert!(for_size(1920, 1200, UiMode::Filtered).is_none());
 
         // A size with no measured set must not borrow another size's.
         assert!(for_size(1280, 720, UiMode::Ideal).is_none());

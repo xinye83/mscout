@@ -9,6 +9,7 @@ committed. See [SHIPPING.md](SHIPPING.md) for that boundary.
 | Client size | UI Size | EXP | Level | Name | Job |
 |---|---|---|---|---|---|
 | 1366×768 | Default, Ideal, Filtered | `747,733 88×16` | `330,745 21×10` | `366,751 60×13` | `366,737 34×12` |
+| 1920×1080 | Default, Filtered | `1048,1036 155×18` | `461,1044 36×23` | `510,1054 110×20` | `510,1034 70×22` |
 | 1920×1080 | Ideal | `1023,1050 90×11` | `598,1050 41×26` | `645,1064 55×9` | `645,1050 27×11` |
 | 1920×1200 | Ideal | `1023,1170 90×11` | `598,1167 35×29` | `645,1181 96×15` | `645,1166 96×15` |
 
@@ -22,12 +23,20 @@ Windows Arial; map/street match the client's own name table.
 **1366×768 is verified in all three UI sizes.** The modes share the same HUD
 geometry, and the three fixture directories `1366x768`, `1366x768@filtered` and
 `1366x768@ideal` under `src-tauri/testdata/` read every minimap state at
-confidence 1.0 with the shipped boxes. The three presets are covered by
-`preset::tests::verified_modes_ship_presets_and_the_rest_fall_back`.
+confidence 1.0 with the shipped boxes.
 
-**1920×1080 and 1920×1200 ship Ideal only.** Their Ideal presets are covered by
-`preset::tests::ideal_presets_cover_the_three_supported_resolutions`; the
-1920×1080 Ideal pair is also read by the saved-frame corpus.
+**1920×1080 ships all three UI sizes.** Default and Filtered share the Default
+geometry; their presets ship and the three fixture directories hold all three
+minimap states. The Ideal pair reads every state in the corpus. On Default the
+corpus now reads EXP exactly (including punctuation), the level (`35`) and the
+name (`Euroblood`); the job and the map-label size are still open. The Filtered
+pair reads the EXP value/percentage but loses the comma, and its level/name/job
+need a filter-specific pass. **1920×1200 ships Ideal only.**
+
+All of these presets are covered by
+`preset::tests::verified_modes_ship_presets_and_the_rest_fall_back`; the
+1920×1080 Ideal and (partially) Default/Filtered pairs are read by the saved-frame
+corpus.
 
 ## Reset and overrides
 
@@ -37,22 +46,18 @@ confidence 1.0 with the shipped boxes. The three presets are covered by
 - Presets are looked up in `data/presets/`, then `src-tauri/presets/`, then
   `<exe>/presets/`. See [DATA.md](DATA.md#presets).
 
-## Not shipped: 1920 Default/Filtered
+## Partial: 1920 Default/Filtered
 
-The 1920×1080 and 1920×1200 Default/Filtered pairs have no preset. They fall back
-to normal calibration and report uncalibrated until boxes are drawn.
+The 1920×1080 Default/Filtered presets ship, but their client-tier read is not
+fully verified. On the live 1920×1080 Default frame the corpus reads EXP exactly
+(`127,028[72.91%]`), the level (`35`) and the name (`Euroblood`); the job (`Page`)
+and the map-label size are still open. Default Ratio (Filter Applied) keeps
+Default's HUD positions but changes how glyphs are drawn: the corpus loses the
+EXP comma and does not yet read the level, name or job. The 1920×1200
+Default/Filtered pairs have no preset and still fall back to calibration.
 
-The reason is rendering, not geometry. On the live 1920×1080 Default frame the
-EXP digits read but punctuation drops (`74605[4282`), the level's `3` is a
-different shape from the Ideal/EXP level atlas (distance 41.7; `5` is 27.8), and
-Arial seeding finds no matching size for the name/job crop. Default Ratio
-(Filter Applied) keeps Default's HUD positions but changes how glyphs are drawn,
-so it needs its own seeding too. The 1920×1200 Default frame's EXP reads exactly,
-and the 1366×768 Default/Filtered pairs read with the Ideal geometry, so the gap
-is pair-specific, not simply "Default is broken".
-
-To make a 1920 Default/Filtered pair supported, it needs a live capture, a
-pair-specific digit/level source check, an Arial size/quality match, a
-map-label index at that label size, and a saved-frame test — then a preset. Until
-then, manual calibration and teaching remain available, and the app does not
-pretend a preset is valid.
+The geometry is not the problem — the boxes above come from the live frames, and
+the minimap state detector handles every pair and state. What remains is
+filter-specific glyph handling and a map-label index at the Default/Filtered label
+size. Manual calibration and teaching remain available, and the app does not
+pretend those reads are correct. See the roadmap for the open items.

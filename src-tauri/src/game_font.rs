@@ -182,9 +182,43 @@ pub fn exp_glyphs(mscw_dir: &Path, target_h: u32) -> Result<Vec<AtlasGlyph>, Str
     for open in out.iter().filter(|glyph| glyph.ch == '[').cloned().collect::<Vec<_>>() {
         out.push(mirror(&open, ']'));
     }
-    out.push(comma(target_h));
-    out.push(period(target_h));
+    out.extend(comma_variants(target_h));
+    out.extend(period_variants(target_h));
     Ok(out)
+}
+
+fn native_glyph(ch: char, w: u32, h: u32, bits: &[u8]) -> AtlasGlyph {
+    AtlasGlyph {
+        ch,
+        w,
+        h,
+        bitmap: bits
+            .iter()
+            .map(|bit| if *bit > 0 { 255 } else { 0 })
+            .collect(),
+    }
+}
+
+/// Comma shapes at the rendered scale. The client's punctuation is a fixed small
+/// bitmap, and its shape differs between Ideal (a 2x2 diagonal) and the 1920
+/// Default rendering (a 3x4 hook); both are derived here rather than shipped.
+fn comma_variants(height: u32) -> Vec<AtlasGlyph> {
+    vec![
+        comma(height),
+        native_glyph(',', 3, 4, &[0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0]),
+        native_glyph(',', 2, 2, &[0, 1, 1, 0]),
+    ]
+}
+
+/// Period shapes at the rendered scale: the derived block plus the 2x2 `##`/`#.`,
+/// solid and 1x1 forms the other renderings draw.
+fn period_variants(height: u32) -> Vec<AtlasGlyph> {
+    vec![
+        period(height),
+        native_glyph('.', 2, 2, &[1, 1, 1, 0]),
+        native_glyph('.', 2, 2, &[1, 1, 1, 1]),
+        native_glyph('.', 1, 1, &[1]),
+    ]
 }
 
 /// Seed a glyph at its natural scaled width and one pixel either side. The
@@ -461,6 +495,9 @@ pub fn seed_level_atlas(
     for glyph in glyphs {
         atlas.learn_glyph(glyph.ch, glyph.bitmap, glyph.w, glyph.h);
     }
+    // The live level digit can differ by a stroke from the EXP design (the 1920
+    // Default `3`); learn its exact shape from the bright ink.
+    atlas.learn_bright(gray, crate::ocr::TEXT_FLOOR_PUB);
     let mut stored = atlas.to_settings();
     stored.format = 2;
     stored.source = "game".into();
@@ -811,4 +848,5 @@ mod tests {
             }
         }
     }
+
 }

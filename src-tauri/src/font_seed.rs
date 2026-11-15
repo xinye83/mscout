@@ -27,11 +27,22 @@ const IDENTITY: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123
 /// origin, so a glyph gets a small set of variants rather than one.
 const OFFSETS: [(i32, i32); 3] = [(0, 0), (1, 0), (2, 0)];
 
-const IDENTITY_MAX_SCORE: f64 = 18.0;
+// Ideal's 1-bit Arial matches near zero; Default Ratio's anti-aliased text is a
+// looser match, so allow a larger mean distance. The client-tier read asserts the
+// exact name/job, so a wrong size is caught there rather than guessed silently.
+const IDENTITY_MAX_SCORE: f64 = 50.0;
 
 /// Seed a 1-bit identity atlas (name/job) from the live crop.
 pub fn seed_identity(gray: &Gray) -> Option<(settings::Atlas, u32)> {
-    seed(gray, false, IDENTITY_MAX_SCORE, IDENTITY)
+    // Ideal's name/job are 1-bit Arial; Default Ratio at 1920 is anti-aliased.
+    // Try both renders and a few ink thresholds, and keep whichever explains the
+    // crop best.
+    seed(
+        gray,
+        IDENTITY_MAX_SCORE,
+        IDENTITY,
+        &[(false, 1), (true, 96), (true, 128), (true, 160)],
+    )
 }
 
 /// Fix the one ambiguity Arial cannot resolve at this size: a lowercase `l` and
@@ -60,31 +71,35 @@ pub fn fix_identity_case(text: &str) -> String {
 
 fn seed(
     gray: &Gray,
-    anti_aliased: bool,
     max_score: f64,
     charset: &str,
+    modes: &[(bool, u8)],
 ) -> Option<(settings::Atlas, u32)> {
     let hint = ocr::dominant_glyph_height(gray).unwrap_or(9).max(4) as i32;
     // The ink height is smaller than the font's em size (Arial at 11 px gives a
     // ~8 px cap). Search from the ink height up, which covers both Ideal's 7 px
     // and Default's larger text.
     let low = (hint - 1).max(6);
-    let high = (hint + 8).min(28);
+    // Default Ratio's HUD text is larger than the ink-height hint suggests; the
+    // best match can be well above it.
+    let high = (hint + 14).min(36);
 
     let mut best: Option<(f64, Vec<AtlasGlyph>, i32)> = None;
-    for px in low..=high {
-        let glyphs = match render_ascii("Arial", px, anti_aliased, charset) {
-            Ok(glyphs) => glyphs,
-            Err(_) => return None,
-        };
-        let Some(score) = score(&glyphs, gray) else {
-            continue;
-        };
-        if best
-            .as_ref()
-            .map_or(true, |(best_score, _, _)| score < *best_score)
-        {
-            best = Some((score, glyphs, px));
+    for &(anti_aliased, threshold) in modes {
+        for px in low..=high {
+            let glyphs = match render_mode("Arial", px, anti_aliased, threshold, charset) {
+                Ok(glyphs) => glyphs,
+                Err(_) => continue,
+            };
+            let Some(score) = score(&glyphs, gray) else {
+                continue;
+            };
+            if best
+                .as_ref()
+                .map_or(true, |(best_score, _, _)| score < *best_score)
+            {
+                best = Some((score, glyphs, px));
+            }
         }
     }
 
@@ -97,6 +112,9 @@ fn seed(
     for glyph in glyphs {
         atlas.learn_glyph(glyph.ch, glyph.bitmap, glyph.w, glyph.h);
     }
+    // The Default rendering is anti-aliased; learn the exact live shapes that the
+    // render already explains, so the first read is not a near miss.
+    atlas.learn_text_rendering(gray);
     let mut stored = atlas.to_settings();
     stored.format = 2;
     stored.source = "font".into();
@@ -119,10 +137,11 @@ fn score(glyphs: &[AtlasGlyph], gray: &Gray) -> Option<f64> {
 }
 
 #[cfg(windows)]
-fn render_ascii(
+fn render_mode(
     font: &str,
     px: i32,
     anti_aliased: bool,
+    threshold: u8,
     charset: &str,
 ) -> Result<Vec<AtlasGlyph>, String> {
     use windows_sys::Win32::Graphics::Gdi::{ANTIALIASED_QUALITY, NONANTIALIASED_QUALITY};
@@ -132,14 +151,18 @@ fn render_ascii(
     } else {
         NONANTIALIASED_QUALITY
     };
-    render_variant(
-        font,
-        px,
-        false,
-        quality,
-        if anti_aliased { 128 } else { 1 },
-        charset,
-    )
+    render_variant(font, px, false, quality, threshold, charset)
+}
+
+#[cfg(not(windows))]
+fn render_mode(
+    _font: &str,
+    _px: i32,
+    _anti_aliased: bool,
+    _threshold: u8,
+    _charset: &str,
+) -> Result<Vec<AtlasGlyph>, String> {
+    Err("font seeding is Windows-only".into())
 }
 
 #[cfg(windows)]
@@ -1050,4 +1073,5 @@ mod tests {
         assert_eq!(fix_identity_case("BluebeIl"), "Bluebell");
         assert_eq!(fix_identity_case("Dawn Warrior"), "Dawn Warrior");
     }
+
 }

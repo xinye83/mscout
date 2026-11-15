@@ -685,10 +685,10 @@ fn read_case(case: &Case, mscw: &Path) -> crate::engine::Readings {
     let (level, level_size) = crate::game_font::seed_level_atlas(&level_gray, mscw)
         .unwrap_or_else(|error| panic!("{}: seeding the level atlas failed: {error}", case.key));
 
-    // Name and job are the same Arial face at the same size, so one identity
-    // atlas serves both. The job box is the cleaner crop; the name box is the
-    // fallback for a resolution that has no job box.
-    let mut identity = None;
+    // Name and job use the same Arial face, but the Default rendering is
+    // anti-aliased and each crop exposes different glyphs; seed both and merge so
+    // one atlas reads both lines.
+    let mut identity: Option<crate::ocr::Atlas> = None;
     for region in [preset.calibration.job, preset.calibration.name] {
         let Some(region) = region.filter(Region::is_usable) else {
             continue;
@@ -698,13 +698,21 @@ fn read_case(case: &Case, mscw: &Path) -> crate::engine::Readings {
         };
         if let Some((stored, px)) = crate::font_seed::seed_identity(&gray) {
             println!("{}: identity seeded from {region:?} at {px}px", case.key);
-            identity = Some(stored);
-            break;
+            let atlas = crate::ocr::Atlas::from_settings(&stored);
+            match &mut identity {
+                Some(combined) => combined.glyphs.extend(atlas.glyphs),
+                None => identity = Some(atlas),
+            }
         }
     }
-    let identity = identity.unwrap_or_else(|| {
-        panic!("{}: could not seed the name/job atlas from any identity box", case.key)
-    });
+    let identity = identity
+        .unwrap_or_else(|| {
+            panic!(
+                "{}: could not seed the name/job atlas from any identity box",
+                case.key
+            )
+        })
+        .to_settings();
 
     println!(
         "{}: preset {key}, EXP atlas {} glyphs ({}px), level atlas {} glyphs ({}x{}), identity {} glyphs",

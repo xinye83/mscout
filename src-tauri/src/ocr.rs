@@ -6,6 +6,10 @@ pub const CELL_H: usize = 16;
 pub const CELL_LEN: usize = CELL_W * CELL_H;
 
 const MATCH_THRESHOLD: f64 = 30.0;
+/// Ordinary text (name/job) is anti-aliased at Default Ratio, so its letters
+/// match a few pixels further than a bitmap readout. The map label and the
+/// readouts keep the tighter threshold.
+const TEXT_MATCH_THRESHOLD: f64 = 45.0;
 const MIN_GLYPH_PIXELS: usize = 1;
 /// How far a sample may slide within its cell when matching (sub-pixel drift).
 const SHIFT_SEARCH: i32 = 1;
@@ -263,6 +267,7 @@ fn cell_of_native(bitmap: &[u8], w: usize, h: usize) -> Cell {
     if w == 0 || h == 0 || bitmap.len() != w * h {
         return cell;
     }
+
     for gy in 0..CELL_H {
         for gx in 0..CELL_W {
             let sy = (((gy as f64 + 0.5) * h as f64 / CELL_H as f64) as usize).min(h - 1);
@@ -271,6 +276,26 @@ fn cell_of_native(bitmap: &[u8], w: usize, h: usize) -> Cell {
         }
     }
     cell
+}
+
+/// One half of a wide shape, cut at `start` for `width` columns.
+fn split_part(segment: &Segment, start: u32, width: u32) -> Segment {
+    let mut mask = vec![0u8; (width * segment.h) as usize];
+    for y in 0..segment.h {
+        for x in 0..width {
+            mask[(y * width + x) as usize] =
+                segment.mask[(y * segment.w + start + x) as usize];
+        }
+    }
+    let cell = cell_of_native(&mask, width as usize, segment.h as usize);
+    Segment {
+        mask,
+        cell,
+        x: segment.x + start as i32,
+        y: segment.y,
+        w: width,
+        h: segment.h,
+    }
 }
 
 /// Recover a native bitmap from a legacy 12x16 cell. Best effort: the cell was
@@ -861,17 +886,69 @@ impl Atlas {
                 _ => CLOSE,
             };
 
-            let Some((ch, best)) = self.match_segment_within(&segment, allowed) else {
+            if let Some((ch, best)) = self.match_segment_within(&segment, allowed) {
+                if ch == '[' {
+                    stage = 1;
+                } else if ch == '%' {
+                    stage = 2;
+                }
+                out.push((segment, ch, best));
                 continue;
-            };
-            if ch == '[' {
-                stage = 1;
-            } else if ch == '%' {
-                stage = 2;
             }
-            out.push((segment, ch, best));
+
+            // A wide shape can be two touching glyphs (the 1920 Default `2`+`7`);
+            // try every cut and keep the pair that explains the pixels best.
+            if let Some(parts) = self.split_segment(&segment, allowed) {
+                for (sub, ch, best) in parts {
+                    if ch == '[' {
+                        stage = 1;
+                    } else if ch == '%' {
+                        stage = 2;
+                    }
+                    out.push((sub, ch, best));
+                }
+            }
         }
         out
+    }
+
+    /// Cut a wide shape into two touching glyphs and match both halves.
+    fn split_segment(&self, segment: &Segment, allowed: &str) -> Option<Vec<(Segment, char, f64)>> {
+        if segment.w < 13 {
+            return None;
+        }
+        let mut best: Option<(f64, Vec<(Segment, char, f64)>)> = None;
+        for cut in 4..=segment.w.saturating_sub(4) {
+            let left = split_part(segment, 0, cut);
+            let right = split_part(segment, cut, segment.w - cut);
+            let Some((left_ch, left_distance)) = self.match_segment_within(&left, allowed) else {
+                continue;
+            };
+            let right_allowed = match left_ch {
+                '[' => "0123456789.%",
+                '%' => "]",
+                _ => allowed,
+            };
+            let Some((right_ch, right_distance)) =
+                self.match_segment_within(&right, right_allowed)
+            else {
+                continue;
+            };
+            let total = left_distance + right_distance;
+            if best
+                .as_ref()
+                .map_or(true, |(best_total, _)| total < *best_total)
+            {
+                best = Some((
+                    total,
+                    vec![
+                        (left, left_ch, left_distance),
+                        (right, right_ch, right_distance),
+                    ],
+                ));
+            }
+        }
+        best.map(|(_, parts)| parts)
     }
 
     pub fn recognize_readout(&self, gray: &Gray) -> Result<(String, f64), String> {
@@ -917,10 +994,31 @@ impl Atlas {
         let mut confidence = 0.0;
         let mut matched = 0usize;
         let mut last_end: Option<i32> = None;
+        let mut all_chars: Option<String> = None;
 
         for segment in found {
             let (ch, best, _) = self.match_segment(&segment);
-            if best > MATCH_THRESHOLD {
+            if best > TEXT_MATCH_THRESHOLD {
+                // Anti-aliased text at Default sizes lets adjacent letters touch.
+                // Split the shape and match both halves against the whole set.
+                let allowed = all_chars.get_or_insert_with(|| self.learned());
+                let Some(parts) = self.split_segment(&segment, allowed.as_str()) else {
+                    continue;
+                };
+                for (sub, ch, best) in parts {
+                    if best > TEXT_MATCH_THRESHOLD {
+                        continue;
+                    }
+                    if let Some(end) = last_end {
+                        if sub.x - end >= space_gap {
+                            text.push(' ');
+                        }
+                    }
+                    text.push(ch);
+                    last_end = Some(sub.x + sub.w as i32);
+                    confidence += (1.0 - best / 255.0).max(0.0);
+                    matched += 1;
+                }
                 continue;
             }
             if let Some(end) = last_end {
@@ -941,22 +1039,82 @@ impl Atlas {
         Ok((text, confidence / matched as f64))
     }
 
-    /// Add the exact shapes of a live readout the seeded atlas already reads, so a
-    /// rendering difference (at Ideal the `7` is one stroke off the asset) becomes
-    /// an exact variant instead of a near miss. Only confident, non-exact matches
-    /// are learned; a doubtful shape is left to the fallback rather than taught as
-    /// a wrong character. Returns how many variants were added.
-    pub fn learn_rendering(&mut self, gray: &Gray) -> usize {
-        let confident = MATCH_THRESHOLD * 0.75;
+    /// Learn the live rendering of a text line (name/job). Unlike the readout
+    /// learning, keep full-height letters, because a tight crop makes a capital or
+    /// ascender exactly the box height.
+    pub fn learn_text_rendering(&mut self, gray: &Gray) -> usize {
         let mut added = 0;
-        for (segment, ch, distance) in self.readout_matches(segments(gray)) {
-            if distance == 0.0 || distance > confident {
-                continue;
+        for _ in 0..2 {
+            let mut pass = 0;
+            for segment in text_segments(gray) {
+                let (ch, best, other) = self.match_segment(&segment);
+                if best == 0.0 || best > 50.0 || other < best + 4.0 {
+                    continue;
+                }
+                let before = self.glyphs.len();
+                self.learn_glyph(ch, segment.mask, segment.w, segment.h);
+                if self.glyphs.len() > before {
+                    pass += 1;
+                }
             }
-            let before = self.glyphs.len();
-            self.learn_glyph(ch, segment.mask, segment.w, segment.h);
-            if self.glyphs.len() > before {
-                added += 1;
+            added += pass;
+            if pass == 0 {
+                break;
+            }
+        }
+        added
+    }
+
+    /// Add the exact shapes of a live readout so a rendering difference becomes a
+    /// variant instead of a near miss. A shape is learned when the best character
+    /// is clear of the runner-up; the loop re-matches after each pass so a learned
+    /// variant can expose the next shape. This is what lets the 1920 Default `2`
+    /// and `%` (one stroke off the asset) read at distance 0 after seeding.
+    pub fn learn_rendering(&mut self, gray: &Gray) -> usize {
+        let mut added = 0;
+        for _ in 0..3 {
+            let mut pass = 0;
+            for segment in segments(gray) {
+                let (ch, best, other) = self.match_segment(&segment);
+                if best == 0.0 || best > 36.0 || other < best + 4.0 {
+                    continue;
+                }
+                let before = self.glyphs.len();
+                self.learn_glyph(ch, segment.mask, segment.w, segment.h);
+                if self.glyphs.len() > before {
+                    pass += 1;
+                }
+            }
+            added += pass;
+            if pass == 0 {
+                break;
+            }
+        }
+        added
+    }
+
+    /// Learn the level rendering from bright ink. The level sits on pale tiles, so
+    /// its reader segments on near-white text; the same shapes must be learned for
+    /// the live glyph to match exactly (the 1920 Default `3` is far from the
+    /// scaled EXP design).
+    pub fn learn_bright(&mut self, gray: &Gray, floor: u8) -> usize {
+        let mut added = 0;
+        for _ in 0..2 {
+            let mut pass = 0;
+            for segment in bright_segments(gray, floor) {
+                let (ch, best, other) = self.match_segment(&segment);
+                if best == 0.0 || best > 45.0 || other < best + 4.0 {
+                    continue;
+                }
+                let before = self.glyphs.len();
+                self.learn_glyph(ch, segment.mask, segment.w, segment.h);
+                if self.glyphs.len() > before {
+                    pass += 1;
+                }
+            }
+            added += pass;
+            if pass == 0 {
+                break;
             }
         }
         added

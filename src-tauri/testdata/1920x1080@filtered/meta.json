@@ -11,7 +11,7 @@
   "street": "Hidden Street",
   "map": "Free Market <8>",
   "crops": {
-    "hud": { "x": 398, "y": 1021, "w": 795, "h": 59 },
+    "hud": { "x": 398, "y": 1021, "w": 810, "h": 59 },
     "settings": { "x": 685, "y": 145, "w": 550, "h": 755 }
   },
   "settingsDisplay": {

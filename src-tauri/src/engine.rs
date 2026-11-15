@@ -364,13 +364,15 @@ fn seed_from_game(frame: &Frame, profile: &profile::Profile) -> bool {
     true
 }
 
-/// Seed the name/job letter atlas from whichever of the two boxes is on screen.
-/// The job box usually has capitals and a descender, which is the best sample for
-/// choosing the Arial pixel height.
+/// Seed the name/job letter atlas from both identity boxes. Each crop exposes a
+/// different subset of Arial glyphs, and the Default rendering is anti-aliased,
+/// so merging the per-crop learning gives one atlas that reads both lines.
 fn seed_identity_from_frame(
     frame: &Frame,
     calibration: &Calibration,
 ) -> Option<(settings::Atlas, u32)> {
+    let mut merged: Option<crate::ocr::Atlas> = None;
+    let mut px = 0;
     for region in [calibration.job, calibration.name] {
         let Some(region) = region.filter(Region::is_usable) else {
             continue;
@@ -378,11 +380,18 @@ fn seed_identity_from_frame(
         let Some(gray) = ocr::crop_gray(frame, region) else {
             continue;
         };
-        if let Some(seeded) = crate::font_seed::seed_identity(&gray) {
-            return Some(seeded);
+        if let Some((stored, seeded_px)) = crate::font_seed::seed_identity(&gray) {
+            let atlas = crate::ocr::Atlas::from_settings(&stored);
+            match &mut merged {
+                Some(combined) => combined.glyphs.extend(atlas.glyphs),
+                None => {
+                    px = seeded_px;
+                    merged = Some(atlas);
+                }
+            }
         }
     }
-    None
+    merged.map(|atlas| (atlas.to_settings(), px))
 }
 
 fn tick(
