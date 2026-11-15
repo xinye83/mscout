@@ -130,16 +130,33 @@ mod tests {
     }
 
     #[test]
-    fn non_ideal_modes_use_calibration_not_presets() {
-        // Only Ideal Ratio is verified. Default/Filtered must fall back to a
-        // local calibration pass instead of silently applying Ideal geometry or
-        // the old unverified boxes.
-        let ideal = for_size(1920, 1200, UiMode::Ideal).expect("ideal preset");
-        assert_eq!(ideal.key(), "1920x1200@ideal");
-        assert!(for_size(1920, 1200, UiMode::Default).is_none());
-        assert!(for_size(1920, 1200, UiMode::Filtered).is_none());
+    fn verified_modes_ship_presets_and_the_rest_fall_back() {
+        // 1366x768 is verified in all three UI modes. The modes share the same
+        // HUD geometry, and the saved-frame corpus reads every mode and minimap
+        // state with the shipped boxes.
+        for mode in UiMode::ALL {
+            let profile = for_size(1366, 768, mode)
+                .unwrap_or_else(|| panic!("1366x768 preset for {mode:?}"));
+            assert!(
+                profile.is_calibrated(),
+                "1366x768 {mode:?} has no usable boxes"
+            );
+            assert!(profile.calibration.level.is_some());
+            assert!(
+                profile.calibration.name.is_some() && profile.calibration.job.is_some(),
+                "1366x768 {mode:?} has no name/job boxes"
+            );
+        }
 
-        // A mode with no measured set must not borrow another mode's.
+        // The 1920 sizes are verified at Ideal only. Default/Filtered must fall
+        // back to a local calibration pass instead of borrowing Ideal geometry.
+        for (w, h) in [(1920, 1080), (1920, 1200)] {
+            assert!(for_size(w, h, UiMode::Ideal).is_some());
+            assert!(for_size(w, h, UiMode::Default).is_none());
+            assert!(for_size(w, h, UiMode::Filtered).is_none());
+        }
+
+        // A size with no measured set must not borrow another size's.
         assert!(for_size(1280, 720, UiMode::Ideal).is_none());
         assert!(for_size(1280, 720, UiMode::Filtered).is_none());
     }

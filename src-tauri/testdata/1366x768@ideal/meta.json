@@ -1,0 +1,26 @@
+{
+  "clientW": 1366,
+  "clientH": 768,
+  "uiMode": "ideal",
+  "name": "Euroblood",
+  "job": "Page",
+  "level": 35,
+  "expText": "109,284[62.73%]",
+  "exp": 109284,
+  "pct": 62.73,
+  "street": "Victoria Road",
+  "map": "Parched Land",
+  "crops": {
+    "hud": { "x": 250, "y": 720, "w": 610, "h": 48 },
+    "settings": { "x": 450, "y": 110, "w": 480, "h": 520 }
+  },
+  "settingsDisplay": {
+    "resolution": "1366 x 768",
+    "uiSize": "Ideal Ratio"
+  },
+  "minimaps": [
+    { "state": "expanded", "file": "minimap-expanded.png", "crop": { "x": 8, "y": 8, "w": 160, "h": 200 } },
+    { "state": "titlebar", "file": "minimap-titlebar.png", "crop": { "x": 8, "y": 8, "w": 160, "h": 200 } },
+    { "state": "folded", "file": "minimap-folded.png", "crop": { "x": 8, "y": 6, "w": 260, "h": 36 } }
+  ]
+}

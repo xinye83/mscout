@@ -2,7 +2,7 @@
 
 Living status. Update this file at the end of every working session — it is the first thing to read when resuming. Released history lives in [../CHANGELOG.md](../CHANGELOG.md); this file is forward-looking.
 
-Last updated: 2026-11-14
+Last updated: 2026-11-15
 
 ## 0.4.0 — released 2026-11-14
 
@@ -56,12 +56,22 @@ Last updated: 2026-11-14
 - [x] No carried map: a state with no name on screen reports `unknown`
 - [x] Calibration audit: preset geometry is not drawn as a box, Street/Map is detection-only, panel headers share one status vocabulary, and the legacy `Fixes waiting` review queue is removed
 
+## 0.5.0 — target
+
+Goal: support **at least two client resolutions across all three UI Size modes**
+(Default Ratio, Ideal Ratio and Filtered).
+
+- [ ] Pick two resolutions and verify every pair: EXP digit source/scale, level source/scale, Arial name/job rendering, map-label font size, and boxes. Ship a preset and saved-frame test for each verified pair. 1366×768 is verified in all three UI modes and all three minimap states; 1920×1080 has all three minimap states for Ideal, Default and Filtered (Default/Filtered on Hidden Street / Free Market <8>), with the Ideal read verified. The 1920 Default/Filtered presets and their two detector gaps are pending.
+- [ ] **Default/Filtered UI sizes**: identify each pair's digit/level source and Arial rendering, add the map-name index at its label size, then ship presets and saved-frame tests. 1366×768 Default and Filtered are verified — they share the Ideal geometry, and the saved-frame corpus reads every state at confidence 1.0; their presets ship. Remaining: 1920×1080/1200 Default/Filtered. The 1920×1080 Default frame currently drops EXP punctuation, reads only the level's `5`, and does not match Arial; 1920×1200 Default EXP is exact. The 1920×1080 Default title-bar-only minimap also returns no minimap from `detect_minimap` (its title bar is not the `#99BBCC` panel anchor), and the 1920×1080 Filtered frame returns no minimap either; the 1366×768 Default/Filtered frames detect normally, so both gaps are pair-specific.
+- [ ] **UI Size autodetection (layout, not label)**: pick the box set from the frame instead of requiring the player to choose. Scan the status bar for the orange level-tile cluster and the HP/MP/EXP bar anchors, then match the measured geometry against the known layouts for the live client size. 1366×768 has one layout for all three modes; 1920×1080/1200 splits into Ideal vs a shared Default/Filtered layout (they share boxes, and the reader seeds glyphs from the frame, so they need no separation). Fall back to the manual `uiMode` setting when the match is not unique or the status bar is missing; never guess. Resolution is already detected from the captured client size. An optional later refinement could read the label itself from the game's config or the always-open Graphics panel.
+- [ ] **Map/street matching at other UI sizes**: render the name index at the label's measured pixel size for Default/Filtered; the client table itself is size-independent.
+- [x] **Real-screenshot regression suite**: ship a small labelled corpus of captured frames/crops with ground truth in a manifest — client size, UI size, minimap state, character name/job, level, EXP text/value/percentage, street/map, and expected boxes. Replay it through the reader and minimap detector as a regression gate. Keep it small and treat it as test data, not runtime assets (see D28). The suite lives in `src-tauri/src/regression.rs`, with the corpus in `src-tauri/testdata/`; it has a hermetic tier and an `--ignored` client tier, `MSCOUT_CASE` narrows a run, and no fixture is skipped.
+- [ ] **Screenshot import tool**: one command turns an externally supplied client-area screenshot plus ground truth into a complete `src-tauri/testdata/<WxH@mode>/` fixture. Run the real minimap detector and the pair's preset boxes to derive the minimap and HUD crops, locate the always-open Graphics panel (stored as resolution/UI-Size evidence only), validate the EXP arithmetic, the panel labels and the map/street names against the client table, then write the crops and `meta.json`. Accept PNG/BMP; JPEG needs a codec.
+- [x] **Minimap-state coverage (1366×768 and 1920×1080)**: capture all three minimap states (expanded, title-bar-only, folded) for Default, Filtered and Ideal at both 0.5.0 resolutions. 1366×768 has all three for all modes; 1920×1080 has all three for Ideal (East Rocky Mountain III), Default and Filtered (Hidden Street / Free Market <8>). 1920×1200 Ideal still has no fixture.
+- [ ] **Multi-resolution portability** (layers 1–2): anchor-relative boxes + scale-aware matching, so one calibration serves several resolutions. Blocked on a two-resolution capture diff to learn whether the UI is fixed-size, integer-scaled, or letterboxed.
+
 ## Next
 
-- [ ] **Default/Filtered UI sizes**: identify each pair's digit/level source and Arial rendering, add the map-name index at its label size, then ship presets and saved-frame tests. The 1920×1080 Default frame currently drops EXP punctuation, reads only the level's `5`, and does not match Arial; 1920×1200 Default EXP is exact, so this is pair-specific.
-- [ ] **Real-screenshot regression suite**: ship a small labelled corpus of captured frames/crops with ground truth in a manifest — client size, UI size, minimap state, character name/job, level, EXP text/value/percentage, street/map, and expected boxes. Replay it through the reader and minimap detector as a regression gate. Keep it small and treat it as test data, not runtime assets (see D28).
-- [ ] **Map/street matching at other UI sizes**: the name index is rendered at Arial Bold 12, which matches Ideal. Render it at the label's measured pixel size for Default/Filtered; the client table itself is size-independent.
-- [ ] **Multi-resolution portability** (layers 1–2): anchor-relative boxes + scale-aware matching, so one calibration serves several resolutions. Blocked on a two-resolution capture diff to learn whether the UI is fixed-size, integer-scaled, or letterboxed.
 - [ ] Level-up stitching and death-event marking on the chart
 - [ ] 7-day raw → 1-minute aggregate compaction job
 - [ ] History window polish: brush/zoom panning
@@ -75,7 +85,7 @@ Last updated: 2026-11-14
 
 ## Known gaps / debt
 
-- **Ideal only.** Only Ideal Ratio has a verified automatic level/Arial/map path and shipped presets. Default/Filtered fall back to calibration; 1920×1080 Default has a different digit rendering and no Arial match yet. 1920×1200 Default's EXP reads, but its level/name/job are unverified.
+- **1366×768 ships all three UI sizes; 1920×1080/1200 ship Ideal only.** 1366 Default/Filtered share the Ideal geometry and read at confidence 1.0 in the saved-frame corpus. 1920×1080 Default/Filtered have full three-state fixtures but no preset yet, so they fall back to calibration; 1920×1080 Default has a different digit rendering and no Arial match yet. 1920×1200 has only the Ideal preset and no fixture.
 - Calibration boxes and fingerprints are physical-pixel and UI-scale specific. A resolution/UI-size change switches to that pair's profile; a pair with no profile shows uncalibrated until its boxes exist.
 - A transient client height during a resolution change can create an empty profile (e.g. `1920x1081@ideal`). Move such profiles aside and restart if the app selects one instead of the intended size.
 - Coverage reports characters, not sizes. A digit learned from HP/MP (smaller size) does not parse the larger EXP font; relearn from the EXP box when it appears there.
@@ -83,5 +93,5 @@ Last updated: 2026-11-14
 - Map/street matching uses the client's table (347 names in the current build; version-specific); a map missing from it, or a UI size whose label is not 12 px, falls back to taught fingerprints/letters. Name/job auto-read and map/street rendering rely on Windows Arial (system font, not bundled).
 - History window has no brush/zoom panning yet — presets only.
 - `window-error.log` is written to the data dir when history window creation fails; remove once stable.
-- No automated tests beyond unit tests and ignored live diagnostics.
+- The regression gate has two known failures: 1920×1080 Default title-bar-only and the 1920×1080 Filtered states return no minimap from `detect_minimap`. The 1920 Default/Filtered pairs also have no preset, so their client-tier read is not yet exercised.
 - Dev build expects the Vite server; a direct `cargo run` needs `npm run dev` running too.

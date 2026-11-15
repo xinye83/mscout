@@ -52,8 +52,9 @@ data/profiles/1920x1200@ideal.json
 ```
 
 A profile for another UI Size uses the `@filtered` suffix or the bare name for
-Default Ratio. Only the three Ideal profiles above ship as presets; the others
-are created locally if the player calibrates them.
+Default Ratio. 1366×768 ships presets in all three UI sizes; 1920×1080 and
+1920×1200 ship Ideal only. A pair with no preset is created locally when the
+player calibrates it.
 
 Each profile holds the calibration boxes, the EXP and level glyph atlases, the Arial-seeded name/job atlas, taught map/street fingerprints and the character name/job fingerprints. The engine activates the profile matching the live frame size and UI Size on every tick, so changing either switches calibration sets instead of invalidating everything.
 
@@ -170,11 +171,15 @@ It is picked in the Calibration window rather than detected: guessing wrong read
 
 The modes differ by more than rendering. **Default Ratio (Filter Applied)** keeps the HUD where Default Ratio puts it but changes how the glyphs are drawn; **Ideal Ratio** moves the HUD *and* draws a smaller font, so its boxes were measured separately (the EXP box is `1023,1170,90×11` against the default's `1063,1148,152×22`). Ideal Ratio also draws a bright one-pixel rule across the status bar above the readout, which merges every glyph into one shape under an adaptive threshold — `segments` falls back to a high fixed threshold when a crop collapses to a single shape, since these readouts are near-white text.
 
-Only **Ideal Ratio** has shipped presets and a verified automatic level/Arial/map path. Default and Filtered fall back to calibration; their digit, level and name/job rendering differs enough that a box-only preset would claim support it does not have. See [PRESETS.md](PRESETS.md).
+1366×768 ships all three UI sizes, verified by the saved-frame corpus (the modes
+share HUD geometry). For 1920×1080 and 1920×1200 only **Ideal Ratio** ships;
+their Default/Filtered pairs fall back to calibration because their digit, level
+and name/job rendering differs enough that a box-only preset would claim support
+it does not have. See [PRESETS.md](PRESETS.md).
 
 ### Presets
 
-One file per supported **Ideal client size**: `src-tauri/presets/<W>x<H>@ideal.json`. A preset carries the **boxes only**; the glyph set is seeded from the installed client's atlas (`source: game`) or taught, so no game asset is committed. A shipped pair auto-seeds when `mscwDir` is configured; no *Load digits* press is required. See [PRESETS.md](PRESETS.md) for the supported matrix and the Default/Filtered status.
+One file per supported pair: `src-tauri/presets/<W>x<H><suffix>.json` (bare for Default, `@ideal`, `@filtered`). A preset carries the **boxes only**; the glyph set is seeded from the installed client's atlas (`source: game`) or taught, so no game asset is committed. A shipped pair auto-seeds when `mscwDir` is configured; no *Load digits* press is required. See [PRESETS.md](PRESETS.md) for the supported matrix.
 
 Lookup order at runtime:
 

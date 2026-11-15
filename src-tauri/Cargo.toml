@@ -50,6 +50,14 @@ windows = { version = "0.62", features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 
+[dev-dependencies]
+# The fixture corpus in `testdata/` is lossless PNG. The production `image`
+# dependency ships with `default-features = false` (no codec at all), so tests
+# enable the PNG decoder for themselves only; the reader's dependency list is
+# unchanged. `png` is already in Cargo.lock via tauri-codegen, so this resolves
+# offline.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 [profile.release]
 codegen-units = 1
 lto = true

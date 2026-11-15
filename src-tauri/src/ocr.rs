@@ -292,20 +292,6 @@ fn migrate_legacy_cell(cell: &[u8], w: usize, h: usize) -> Vec<u8> {
     out
 }
 
-/// How many foreground pixels sit in each column of `gray`. Splitting on the empty
-/// columns is how `segments` finds glyphs, so this shows whether a rendering keeps
-/// them apart at all. Diagnostic only.
-#[cfg(test)]
-pub fn column_ink(gray: &Gray) -> Vec<u32> {
-    ink_of(&foreground(gray), gray.w, gray.h)
-}
-
-/// The same, with the fixed threshold the blob fallback uses. Diagnostic only.
-#[cfg(test)]
-pub fn column_ink_floor(gray: &Gray, floor: u8) -> Vec<u32> {
-    ink_of(&foreground_with_floor(gray, floor), gray.w, gray.h)
-}
-
 /// The thresholded crop as text, one line per row, for eyeballing a rendering the
 /// reader cannot segment. Diagnostic only.
 #[cfg(test)]
@@ -331,19 +317,6 @@ pub fn row_ink(gray: &Gray) -> Vec<u32> {
                 .count() as u32
         })
         .collect()
-}
-
-#[cfg(test)]
-fn ink_of(mask: &[bool], w: usize, h: usize) -> Vec<u32> {
-    let mut columns = vec![0u32; w];
-    for y in 0..h {
-        for x in 0..w {
-            if mask[y * w + x] {
-                columns[x] += 1;
-            }
-        }
-    }
-    columns
 }
 
 pub fn segments(gray: &Gray) -> Vec<Segment> {
@@ -2020,68 +1993,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "diagnostic: classify the four saved minimap states"]
-    fn probe_minimap_states() {
-        let data = crate::data_dir().expect("data dir");
-        let samples = [
-            ("20261114-194246", MinimapState::Expanded),
-            ("20261114-194533", MinimapState::TitleBarOnly),
-            ("20261114-194948", MinimapState::Folded),
-            ("20261114-193427-folded", MinimapState::Folded),
-        ];
-        for (name, expected) in samples {
-            let path = data.join("map-samples").join(name).join("frame.bmp");
-            if !path.is_file() {
-                println!("{name}: missing");
-                continue;
-            }
-            let bytes = std::fs::read(&path).expect("bmp");
-            let offset = u32::from_le_bytes(bytes[10..14].try_into().unwrap()) as usize;
-            let width = u32::from_le_bytes(bytes[18..22].try_into().unwrap());
-            let height = i32::from_le_bytes(bytes[22..26].try_into().unwrap()) as u32;
-            let bpp = u16::from_le_bytes(bytes[28..30].try_into().unwrap());
-            let row = width as usize * (bpp as usize / 8);
-            let mut rgba = vec![0u8; width as usize * height as usize * 4];
-            for y in 0..height as usize {
-                let source_y = height as usize - 1 - y;
-                let start = offset + source_y * row;
-                for x in 0..width as usize {
-                    let pixel = start + x * (bpp as usize / 8);
-                    let out = (y * width as usize + x) * 4;
-                    rgba[out] = bytes[pixel + 2];
-                    rgba[out + 1] = bytes[pixel + 1];
-                    rgba[out + 2] = bytes[pixel];
-                    rgba[out + 3] = 255;
-                }
-            }
-            let frame = Frame {
-                width,
-                height,
-                rgba,
-            };
-            let minimap = detect_minimap(&frame);
-            println!(
-                "{name}: {minimap:?} expected {expected:?} title={:?} icon={:?} buttons={}",
-                minimap.and_then(|m| m.title),
-                minimap.and_then(|m| m.icon),
-                minimap.map(|m| m.active_buttons).unwrap_or(0)
-            );
-            assert_eq!(
-                minimap.map(|m| m.state),
-                Some(expected),
-                "{name}: wrong state"
-            );
-            if expected == MinimapState::Folded {
-                let label = folded_label(&frame, &minimap.unwrap());
-                println!(
-                    "   folded label: {:?}",
-                    label.as_ref().map(|g| (g.w, g.h))
-                );
-            }
-        }
-    }
-
-    #[test]
     fn learns_and_reads_two_glyphs() {
         let (a, b) = sample_pair();
         let mut atlas = Atlas::default();
@@ -2264,40 +2175,5 @@ mod tests {
         assert_eq!(parse_level("71"), Some(71));
         assert_eq!(parse_level("Lv 99"), Some(99));
         assert_eq!(parse_level("--"), None);
-    }
-
-    #[test]
-    #[ignore = "diagnostic: prints segments from the live game frame"]
-    fn dumps_live_segments() {
-        let selector = crate::settings::WindowSelector {
-            title: "MapleStory".into(),
-            process: "MapleStory.exe".into(),
-        };
-        let window = crate::window_target::resolve_selector(&selector).expect("game window");
-        let frame = crate::capture::client_frame(window.hwnd).expect("capture");
-
-        for (name, region) in [
-            ("exp", Region { x: 747, y: 737, w: 83, h: 10 }),
-            ("level", Region { x: 330, y: 746, w: 21, h: 9 }),
-        ] {
-            let gray = crop_gray(&frame, region).expect("crop");
-            let cells = segments(&gray);
-            println!("== {name}: {} segments ==", cells.len());
-            for (index, segment) in cells.iter().enumerate() {
-                println!("-- {index}");
-                for y in 0..CELL_H {
-                    let row: String = (0..CELL_W)
-                        .map(|x| {
-                            if segment.cell[y * CELL_W + x] > 0 {
-                                '#'
-                            } else {
-                                '.'
-                            }
-                        })
-                        .collect();
-                    println!("{row}");
-                }
-            }
-        }
     }
 }

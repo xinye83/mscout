@@ -11,6 +11,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   title-bar-only, and folded.
 - Folded-bar map reading: the single `Street :Map` line is matched against the
   client table in Arial Regular 12, returning both street and map.
+- Shipped 1366×768 presets for Default Ratio and Default Ratio (Filter Applied).
+  The three 1366×768 UI sizes share verified HUD geometry, and the saved-frame
+  corpus reads every mode and all three minimap states at confidence 1.0.
+- The tracked screenshot corpus now covers 1366×768 in Default, Filtered and
+  Ideal, and 1920×1080 in Ideal, Default and Filtered, each with expanded,
+  title-bar-only and folded minimap states. Maps include Parched Land, East
+  Rocky Mountain III, and Hidden Street / Free Market <8>.
+- Fixture-driven regression suite (`src-tauri/src/regression.rs`): the tracked
+  corpus is replayed through the real minimap detector and `read_frame`.
+  Hermetic tests check corpus integrity, minimap state and the settings-evidence
+  invariant; an `--ignored` tier seeds EXP/level/identity from each frame and
+  asserts the full read. `MSCOUT_CASE=<pair>` narrows a run to one pair, and a
+  missing or clipped fixture fails loudly instead of being skipped.
 
 ### Fixed
 - Map names ending in a roman numeral (`Thicket Around the Beach III`) could read

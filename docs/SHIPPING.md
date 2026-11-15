@@ -10,7 +10,7 @@ stays in `data/`.
 | Item | Why it is safe to ship | Notes |
 |---|---|---|
 | Rust/React executable, UI, icons | our code and art | — |
-| Preset calibration boxes (`src-tauri/presets/*.json`) | measured **geometry** only | Every preset has `expGlyphs = levelGlyphs = mapGlyphs = 0`, no maps/identities. Shipped pairs: **1366×768, 1920×1080, 1920×1200 at Ideal Ratio only**. Default/Filtered are not shipped; they fall back to calibration. See [PRESETS.md](PRESETS.md). |
+| Preset calibration boxes (`src-tauri/presets/*.json`) | measured **geometry** only | Every preset has `expGlyphs = levelGlyphs = mapGlyphs = 0`, no maps/identities. Shipped pairs: **1366×768 at Default, Ideal and Filtered**, plus **1920×1080 and 1920×1200 at Ideal only**. 1920 Default/Filtered are not shipped; they fall back to calibration. See [PRESETS.md](PRESETS.md). |
 | EXP table | game **numbers**, not art | `exp_table.rs` / `expTable.ts`; 1–49 confirmed, 50–89 estimated and labelled, 90–100 anchored. |
 | Detection constants and rate math | our logic | minimap panel colour/proportions, ROI rules, rate windows. |
 | Docs, tray/overlay assets | ours | — |
@@ -38,7 +38,7 @@ taught map/street fingerprints and taught letter sets, and reports the map as
 
 | Asset | Used for | Why not shipped |
 |---|---|---|
-| **Arial Regular 12 px** (1-bit GDI) | character name / job at Ideal Ratio | Proprietary system font; loaded from Windows at runtime, never bundled. Default/Filtered sizes are not auto-supported in 0.4.0. |
+| **Arial Regular 12 px** (1-bit GDI) | character name / job (all 1366×768 UI sizes; Ideal at 1920×1080/1200) | Proprietary system font; loaded from Windows at runtime, never bundled. 1920 Default/Filtered are not auto-supported. |
 | **Arial Bold 12 px** (anti-aliased GDI) | map / street label rendering for the Ideal name-table match | Same. |
 | WGC / hotkey / shell APIs | capture, hotkeys, folder picker | OS. |
 
@@ -86,18 +86,19 @@ contain redistributable-restricted content.
   `mapAtlas`; no maps or identities.
   `preset::tests::shipped_presets_contain_no_game_art` fails the build if a
   preset ever gains glyph/map/identity content.
-- Only the three verified Ideal presets ship. The old Default/Filtered files
-  were removed in 0.4.0 because they were not verified against the current
-  font/digit rendering; a missing pair reports uncalibrated instead of applying
-  a stale preset.
+- Verified presets ship for 1366×768 in all three UI sizes and for 1920×1080 /
+  1920×1200 at Ideal. The old 1920 Default/Filtered files remain removed because
+  they were not verified against the current font/digit rendering; a missing
+  pair reports uncalibrated instead of applying a stale preset.
 - `map_names.rs` reads `String_000.wz` at runtime; `game_font.rs` reads
   `_Canvas_000.wz`; `font_seed` renders Windows Arial; no font or map list is
   bundled.
 - Seeded atlases live in the player's profile under `data/`.
-- Clean-start proof: with no profiles, atlases or preset overrides, the
-  1920×1080 Ideal preset (boxes only) + `_Canvas_000.wz` + `String_000.wz` +
-  Windows Arial read both saved frames exactly (level, EXP, name, job, map,
-  street). No local override is needed for a known size.
+- Clean-start proof: with no profiles, atlases or preset overrides, the shipped
+  presets (boxes only) + `_Canvas_000.wz` + `String_000.wz` + Windows Arial read
+  the saved frames exactly (level, EXP, name, job, map, street): 1366×768 in all
+  three UI sizes and 1920×1080 Ideal. No local override is needed for a known
+  size.
 
 ## Recommendations / open decisions
 

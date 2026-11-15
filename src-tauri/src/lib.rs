@@ -19,6 +19,8 @@ mod map_names;
 mod ocr;
 mod preset;
 mod profile;
+#[cfg(test)]
+mod regression;
 mod settings;
 mod window_target;
 
