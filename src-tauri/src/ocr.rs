@@ -7,15 +7,18 @@ pub const CELL_LEN: usize = CELL_W * CELL_H;
 
 const MATCH_THRESHOLD: f64 = 30.0;
 const MIN_GLYPH_PIXELS: usize = 1;
-/// Two shapes of the same character closer than this are the same variant.
-const VARIANT_DISTANCE: f64 = 8.0;
 /// How far a sample may slide within its cell when matching (sub-pixel drift).
 const SHIFT_SEARCH: i32 = 1;
 
 pub type Cell = [u8; CELL_LEN];
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Segment {
+    /// Native bitmap of the shape, row-major, `w*h` bytes of 0/255.
+    pub mask: Vec<u8>,
+    /// The same shape resampled to a fixed cell. Kept as the fallback for
+    /// anti-aliased or scaled renderings whose native size does not match a
+    /// learned glyph.
     pub cell: Cell,
     pub x: i32,
     pub y: i32,
@@ -24,7 +27,7 @@ pub struct Segment {
 }
 
 /// One segmented shape and what the atlas thinks it is.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Guess {
     pub x: i32,
     pub y: i32,
@@ -33,12 +36,13 @@ pub struct Guess {
     pub ch: char,
     pub distance: f64,
     pub known: bool,
-    pub cell: Cell,
+    pub bitmap: Vec<u8>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Glyph {
     pub ch: char,
+    pub bitmap: Vec<u8>,
     pub cell: Cell,
     pub w: u32,
     pub h: u32,
@@ -143,17 +147,20 @@ fn foreground_with_floor(gray: &Gray, floor: u8) -> Vec<bool> {
 /// renderings draw near-white text, so anything this bright is text.
 const TEXT_FLOOR: u8 = 170;
 
-/// Reduce a shape to a CELL_W x CELL_H cell of its own ink.
+/// The fixed floor `bright_segments` uses: near-white UI text.
+pub const TEXT_FLOOR_PUB: u8 = TEXT_FLOOR;
+
+/// Reduce a shape to its own native ink and a CELL_W x CELL_H cell.
 ///
-/// This used to sample a binary foreground mask, which broke any character drawn on
-/// a light background: the level readout sits on pale tiles, so every whole tile was
-/// "foreground" and became a solid block. Both `3` and `5` then encoded identically
-/// and matched at distance 0.0 — which is why the level read `33` forever no matter
-/// how often it was taught, while the EXP (dark background) was unaffected.
+/// The native bitmap is the primary representation: the client draws these
+/// glyphs as fixed 1-bit bitmaps, so an exact native match is possible. The
+/// 12x16 cell is kept only as a size-independent fallback for anti-aliased or
+/// scaled renderings (the map label).
 ///
-/// Measuring intensity against the shape's own floor fixes it where the information
-/// actually lives: a dark background floors near 0 and the cell is unchanged, a pale
-/// tile floors at its own grey and the strokes are what stands out.
+/// The per-shape background fallback below still applies: the level readout
+/// sits on pale tiles, so a crop-wide threshold calls the whole tile ink and
+/// the digit would become a solid block. Measuring against the shape's own
+/// floor recovers the strokes where the crop-wide threshold has failed.
 fn normalize(
     gray: &Gray,
     mask: &[bool],
@@ -162,15 +169,16 @@ fn normalize(
     y0: usize,
     w: usize,
     h: usize,
-) -> Cell {
+) -> (Cell, Vec<u8>) {
     let mut cell = [0u8; CELL_LEN];
+    let mut native = vec![0u8; w * h];
     if w == 0 || h == 0 {
-        return cell;
+        return (cell, native);
     }
     let x_end = (x0 + w).min(gray.w);
     let y_end = (y0 + h).min(gray.h);
     if x0 >= x_end || y0 >= y_end {
-        return cell;
+        return (cell, native);
     }
 
     // How much of the shape the crop-wide threshold already calls ink. When nearly
@@ -215,62 +223,92 @@ fn normalize(
         span = peak.saturating_sub(floor).max(1);
     }
 
+    let on = |x: usize, y: usize| -> bool {
+        if saturated {
+            let lifted = (gray.px[y * gray.w + x] as usize).saturating_sub(floor);
+            lifted * 2 >= span
+        } else {
+            mask[y * stride + x]
+        }
+    };
+
+    for gy in 0..h {
+        let y = y0 + gy;
+        if y >= y_end {
+            break;
+        }
+        for gx in 0..w {
+            let x = x0 + gx;
+            if x < x_end && on(x, y) {
+                native[gy * w + gx] = 255;
+            }
+        }
+    }
+
     for gy in 0..CELL_H {
         for gx in 0..CELL_W {
             let sx = (x0 + ((gx as f64 + 0.5) * w as f64 / CELL_W as f64) as usize)
                 .min(x_end - 1);
             let sy = (y0 + ((gy as f64 + 0.5) * h as f64 / CELL_H as f64) as usize)
                 .min(y_end - 1);
-            let on = if saturated {
-                let lifted = (gray.px[sy * gray.w + sx] as usize).saturating_sub(floor);
-                lifted * 2 >= span
-            } else {
-                mask[sy * stride + sx]
-            };
-            cell[gy * CELL_W + gx] = if on { 255 } else { 0 };
+            cell[gy * CELL_W + gx] = if on(sx, sy) { 255 } else { 0 };
+        }
+    }
+    (cell, native)
+}
+
+/// A native bitmap resampled to the fixed cell used by the soft fallback.
+fn cell_of_native(bitmap: &[u8], w: usize, h: usize) -> Cell {
+    let mut cell = [0u8; CELL_LEN];
+    if w == 0 || h == 0 || bitmap.len() != w * h {
+        return cell;
+    }
+    for gy in 0..CELL_H {
+        for gx in 0..CELL_W {
+            let sy = (((gy as f64 + 0.5) * h as f64 / CELL_H as f64) as usize).min(h - 1);
+            let sx = (((gx as f64 + 0.5) * w as f64 / CELL_W as f64) as usize).min(w - 1);
+            cell[gy * CELL_W + gx] = if bitmap[sy * w + sx] > 0 { 255 } else { 0 };
         }
     }
     cell
 }
 
-/// Mask-sampled cell, kept only for the unwired split path below.
-fn normalize_mask(
-    mask: &[bool],
-    stride: usize,
-    x0: usize,
-    y0: usize,
-    w: usize,
-    h: usize,
-) -> Cell {
-    let mut cell = [0u8; CELL_LEN];
-    for gy in 0..CELL_H {
-        for gx in 0..CELL_W {
-            let sx = x0 + ((gx as f64 + 0.5) * w as f64 / CELL_W as f64) as usize;
-            let sy = y0 + ((gy as f64 + 0.5) * h as f64 / CELL_H as f64) as usize;
-            let sx = sx.min(x0 + w - 1);
-            let sy = sy.min(y0 + h - 1);
-            if mask[sy * stride + sx] {
-                cell[gy * CELL_W + gx] = 255;
-            }
+/// Recover a native bitmap from a legacy 12x16 cell. Best effort: the cell was
+/// a resample of the original shape, so this cannot restore pixels the encoder
+/// discarded. It exists so profiles written before the native format keep
+/// reading until they are re-seeded or re-taught.
+fn migrate_legacy_cell(cell: &[u8], w: usize, h: usize) -> Vec<u8> {
+    let mut out = vec![0u8; w * h];
+    if w == 0 || h == 0 || cell.len() != CELL_LEN {
+        return out;
+    }
+    for gy in 0..h {
+        let sy = (((gy as f64 + 0.5) * CELL_H as f64 / h as f64) as usize).min(CELL_H - 1);
+        for gx in 0..w {
+            let sx = (((gx as f64 + 0.5) * CELL_W as f64 / w as f64) as usize).min(CELL_W - 1);
+            out[gy * w + gx] = cell[sy * CELL_W + sx];
         }
     }
-    cell
+    out
 }
 
 /// How many foreground pixels sit in each column of `gray`. Splitting on the empty
 /// columns is how `segments` finds glyphs, so this shows whether a rendering keeps
-/// them apart at all.
+/// them apart at all. Diagnostic only.
+#[cfg(test)]
 pub fn column_ink(gray: &Gray) -> Vec<u32> {
     ink_of(&foreground(gray), gray.w, gray.h)
 }
 
-/// The same, with the fixed threshold the blob fallback uses.
+/// The same, with the fixed threshold the blob fallback uses. Diagnostic only.
+#[cfg(test)]
 pub fn column_ink_floor(gray: &Gray, floor: u8) -> Vec<u32> {
     ink_of(&foreground_with_floor(gray, floor), gray.w, gray.h)
 }
 
 /// The thresholded crop as text, one line per row, for eyeballing a rendering the
-/// reader cannot segment.
+/// reader cannot segment. Diagnostic only.
+#[cfg(test)]
 pub fn shape_art(gray: &Gray) -> Vec<String> {
     let mask = foreground(gray);
     (0..gray.h)
@@ -295,6 +333,7 @@ pub fn row_ink(gray: &Gray) -> Vec<u32> {
         .collect()
 }
 
+#[cfg(test)]
 fn ink_of(mask: &[bool], w: usize, h: usize) -> Vec<u32> {
     let mut columns = vec![0u32; w];
     for y in 0..h {
@@ -308,7 +347,7 @@ fn ink_of(mask: &[bool], w: usize, h: usize) -> Vec<u32> {
 }
 
 pub fn segments(gray: &Gray) -> Vec<Segment> {
-    let found = split_shapes(gray, None);
+    let found = split_shapes(gray, None, false);
     if found.len() > 1 {
         return found;
     }
@@ -318,7 +357,7 @@ pub fn segments(gray: &Gray) -> Vec<Segment> {
     // a single shape — which is what the Ideal Ratio HUD does. These readouts are
     // near-white, so a high fixed threshold separates them where the adaptive one
     // cannot. Only used as a fallback, so renderings that already work are untouched.
-    let bright = split_shapes(gray, Some(TEXT_FLOOR));
+    let bright = split_shapes(gray, Some(TEXT_FLOOR), false);
     if bright.len() > found.len() {
         bright
     } else {
@@ -326,7 +365,26 @@ pub fn segments(gray: &Gray) -> Vec<Segment> {
     }
 }
 
-fn split_shapes(gray: &Gray, floor: Option<u8>) -> Vec<Segment> {
+/// Shapes of a single line of ordinary text.
+///
+/// The readout segmentation drops a shape as tall as the crop, because a generous
+/// ROI can catch a panel rule. A text box drawn tightly around a name is exactly
+/// the glyph height, so that rule would drop every capital and ascender (`E`,
+/// `b`, `l`, `d`). Text reads keep them.
+pub fn text_segments(gray: &Gray) -> Vec<Segment> {
+    let found = split_shapes(gray, None, true);
+    if found.len() > 1 {
+        return found;
+    }
+    let bright = split_shapes(gray, Some(TEXT_FLOOR), true);
+    if bright.len() > found.len() {
+        bright
+    } else {
+        found
+    }
+}
+
+fn split_shapes(gray: &Gray, floor: Option<u8>, keep_full_height: bool) -> Vec<Segment> {
     let mask = match floor {
         Some(floor) => foreground_with_floor(gray, floor),
         None => foreground(gray),
@@ -374,13 +432,17 @@ fn split_shapes(gray: &Gray, floor: Option<u8>) -> Vec<Segment> {
         // A shape as tall as the crop is a rule or a panel edge that the box caught,
         // not a glyph: the box is sized to the text with margin above and below. Left
         // in, such a shape shifts every label during a teach. Only applied to a crop
-        // tall enough to have margins at all.
-        if gray.h >= 4 && bottom - top >= gray.h {
+        // tall enough to have margins at all, and never to a tight text line where a
+        // capital or ascender legitimately spans the full height.
+        if !keep_full_height && gray.h >= 4 && bottom - top >= gray.h {
             continue;
         }
 
+        let (cell, native) =
+            normalize(gray, &mask, gray.w, start, top, end - start, bottom - top);
         out.push(Segment {
-            cell: normalize(gray, &mask, gray.w, start, top, end - start, bottom - top),
+            mask: native,
+            cell,
             x: start as i32,
             y: top as i32,
             w: (end - start) as u32,
@@ -389,6 +451,33 @@ fn split_shapes(gray: &Gray, floor: Option<u8>) -> Vec<Segment> {
     }
 
     out
+}
+
+/// Shapes found with a fixed bright threshold, ignoring the adaptive one.
+///
+/// The level readout sits on pale tiles: Otsu calls the tile frame ink, so a
+/// level digit segments as an 11x13 tile instead of the 7x7 glyph inside it.
+/// The text itself is near-white, so a high fixed floor isolates it.
+pub fn bright_segments(gray: &Gray, floor: u8) -> Vec<Segment> {
+    split_shapes(gray, Some(floor), false)
+}
+
+/// The most common glyph height in a readout, ignoring punctuation-sized shapes.
+/// This is the rendered font size (7 at Ideal, 11 at Default) and is what a
+/// seeded atlas is scaled to.
+pub fn dominant_glyph_height(gray: &Gray) -> Option<u32> {
+    use std::collections::HashMap;
+
+    let mut counts: HashMap<u32, usize> = HashMap::new();
+    for segment in segments(gray) {
+        if segment.w >= 3 && segment.h >= 4 {
+            *counts.entry(segment.h).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(height, _)| height)
 }
 
 /// Bounding boxes of the horizontal text lines in `gray`, top to bottom, as
@@ -493,17 +582,6 @@ fn soften(cell: &Cell) -> Cell {
     out
 }
 
-fn cell_distance(a: &Cell, b: &Cell) -> f64 {
-    let left = soften(a);
-    let right = soften(b);
-    let total: u64 = left
-        .iter()
-        .zip(&right)
-        .map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs() as u64)
-        .sum();
-    total as f64 / CELL_LEN as f64
-}
-
 /// Cell distance allowing the sample to slide by `search` cells in each
 /// direction. The game rasterises the readout at sub-pixel positions, so the same
 /// character comes back a fraction of a cell off from one frame to the next.
@@ -516,14 +594,22 @@ fn cell_distance_shifted(a: &Cell, b: &Cell, search: i32) -> f64 {
         for dx in -search..=search {
             let mut total: u64 = 0;
             for y in 0..CELL_H {
+                let sy = y as i32 - dy;
                 for x in 0..CELL_W {
                     let sx = x as i32 - dx;
-                    let sy = y as i32 - dy;
-                    if sx < 0 || sy < 0 || sx >= CELL_W as i32 || sy >= CELL_H as i32 {
-                        continue;
-                    }
                     let a_pixel = left[y * CELL_W + x] as i32;
-                    let b_pixel = right[sy as usize * CELL_W + sx as usize] as i32;
+                    // Out-of-bounds counts as background. Skipping those pixels
+                    // instead let a narrow shape "match" by shifting its ink out
+                    // of the box and comparing only the easy columns.
+                    let b_pixel = if sx >= 0
+                        && sy >= 0
+                        && sx < CELL_W as i32
+                        && sy < CELL_H as i32
+                    {
+                        right[sy as usize * CELL_W + sx as usize] as i32
+                    } else {
+                        0
+                    };
                     total += (a_pixel - b_pixel).unsigned_abs() as u64;
                 }
             }
@@ -537,6 +623,41 @@ fn cell_distance_shifted(a: &Cell, b: &Cell, search: i32) -> f64 {
     best
 }
 
+/// Distance between two native bitmaps of the same size, in the same 0..255
+/// scale as the cell distance (so `MATCH_THRESHOLD` keeps its meaning). The
+/// sample may slide by `search` pixels, like the cell path.
+pub(crate) fn native_distance(a: &[u8], b: &[u8], w: usize, h: usize, search: i32) -> f64 {
+    if w == 0 || h == 0 || a.len() != w * h || b.len() != w * h {
+        return f64::MAX;
+    }
+    let mut best = f64::MAX;
+    for dy in -search..=search {
+        for dx in -search..=search {
+            let mut total: u64 = 0;
+            for y in 0..h {
+                let sy = y as i32 - dy;
+                for x in 0..w {
+                    let sx = x as i32 - dx;
+                    let a_pixel = a[y * w + x] as i32;
+                    // Out-of-bounds counts as background, so a shift cannot win
+                    // by dropping the ink that moved out of the box.
+                    let b_pixel = if sx >= 0 && sy >= 0 && sx < w as i32 && sy < h as i32 {
+                        b[sy as usize * w + sx as usize] as i32
+                    } else {
+                        0
+                    };
+                    total += (a_pixel - b_pixel).unsigned_abs() as u64;
+                }
+            }
+            let distance = total as f64 / (w * h) as f64;
+            if distance < best {
+                best = distance;
+            }
+        }
+    }
+    best
+}
+
 /// Cost per pixel of size difference when matching. It exists to keep shapes
 /// that differ a lot in size apart — a period from a comma, a `1` from an `8` —
 /// but a glyph's own outline flickers by a pixel from frame to frame (anti-
@@ -545,82 +666,9 @@ fn cell_distance_shifted(a: &Cell, b: &Cell, search: i32) -> f64 {
 /// match past the threshold, which dropped the digit and failed the read.
 const SIZE_PENALTY: f64 = 4.0;
 
-/// How much better a two-glyph explanation has to be before a shape is cut in two.
-/// Small renderings leave neighbours touching; without a margin an ordinary glyph
-/// would be split down the middle.
-const SPLIT_MARGIN: f64 = 6.0;
-
-/// The shape made of the columns `x0..x1` of `mask`, trimmed to its own ink. Cuts
-/// one segment into two where the atlas says two glyphs meet.
-fn sub_segment(
-    mask: &[bool],
-    stride: usize,
-    height: usize,
-    x0: i32,
-    x1: i32,
-) -> Option<Segment> {
-    let x0 = x0.max(0) as usize;
-    let x1 = (x1.max(0) as usize).min(stride);
-    if x1 <= x0 {
-        return None;
-    }
-
-    let mut top = usize::MAX;
-    let mut bottom = 0usize;
-    let mut pixels = 0usize;
-    for y in 0..height {
-        for x in x0..x1 {
-            if mask[y * stride + x] {
-                pixels += 1;
-                top = top.min(y);
-                bottom = bottom.max(y + 1);
-            }
-        }
-    }
-    if pixels == 0 || bottom <= top {
-        return None;
-    }
-
-    Some(Segment {
-        cell: normalize_mask(mask, stride, x0, top, x1 - x0, bottom - top),
-        x: x0 as i32,
-        y: top as i32,
-        w: (x1 - x0) as u32,
-        h: (bottom - top) as u32,
-    })
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct Atlas {
     pub glyphs: Vec<Glyph>,
-}
-
-/// Split shapes that hold two touching glyphs.
-///
-/// NOT WIRED IN: judging a split from the pixels alone cannot separate a shape that
-/// is genuinely two glyphs from one glyph that happens to match its own halves well,
-/// and a wrong split quietly corrupts every digit after it. It needs a stronger
-/// discriminator — the readout grammar, or the expected glyph advance — before it can
-/// be trusted. Kept here as the starting point for that work.
-#[allow(dead_code)]
-fn split_touching(atlas: &Atlas, gray: &Gray) -> Vec<Segment> {
-    let found = segments(gray);
-    if atlas.glyphs.is_empty() {
-        return found;
-    }
-
-    let mask = foreground(gray);
-    let mut out = Vec::with_capacity(found.len());
-    for segment in found {
-        match atlas.best_split(&mask, gray.w, gray.h, &segment) {
-            Some((left, right)) => {
-                out.push(left);
-                out.push(right);
-            }
-            None => out.push(segment),
-        }
-    }
-    out
 }
 
 impl Atlas {
@@ -630,16 +678,24 @@ impl Atlas {
             let Some(ch) = stored.ch.chars().next() else {
                 continue;
             };
-            let Some(bytes) = crate::settings::from_hex(&stored.cell) else {
-                continue;
-            };
-            if bytes.len() != CELL_LEN {
+            let w = stored.w as usize;
+            let h = stored.h as usize;
+            if w == 0 || h == 0 {
                 continue;
             }
-            let mut cell = [0u8; CELL_LEN];
-            cell.copy_from_slice(&bytes);
+            let bitmap = match crate::settings::from_hex(&stored.bitmap) {
+                Some(bytes) if bytes.len() == w * h => bytes,
+                // Legacy 12x16 cells are migrated best-effort. The encoder is a
+                // data format; this keeps old profiles readable until re-seeded.
+                _ => match crate::settings::from_hex(&stored.cell) {
+                    Some(bytes) if bytes.len() == CELL_LEN => migrate_legacy_cell(&bytes, w, h),
+                    _ => continue,
+                },
+            };
+            let cell = cell_of_native(&bitmap, w, h);
             glyphs.push(Glyph {
                 ch,
+                bitmap,
                 cell,
                 w: stored.w,
                 h: stored.h,
@@ -656,10 +712,13 @@ impl Atlas {
                 ch: glyph.ch.to_string(),
                 w: glyph.w,
                 h: glyph.h,
-                cell: crate::settings::to_hex(&glyph.cell),
+                bitmap: crate::settings::to_hex(&glyph.bitmap),
+                cell: String::new(),
             })
             .collect();
         crate::settings::Atlas {
+            format: 2,
+            source: "taught".into(),
             cell_w: CELL_W as u32,
             cell_h: CELL_H as u32,
             glyphs,
@@ -674,7 +733,26 @@ impl Atlas {
     }
 
     pub fn learn(&mut self, text: &str, gray: &Gray) -> Result<Vec<char>, String> {
-        let mut found = segments(gray);
+        self.learn_with(text, gray, false)
+    }
+
+    /// Learn a single line of ordinary text. Keeps full-height letters, which the
+    /// readout path would discard in a tightly drawn name or label box.
+    pub fn learn_text(&mut self, text: &str, gray: &Gray) -> Result<Vec<char>, String> {
+        self.learn_with(text, gray, true)
+    }
+
+    fn learn_with(
+        &mut self,
+        text: &str,
+        gray: &Gray,
+        keep_full_height: bool,
+    ) -> Result<Vec<char>, String> {
+        let mut found = if keep_full_height {
+            text_segments(gray)
+        } else {
+            segments(gray)
+        };
         let chars: Vec<char> = text.chars().filter(|ch| !ch.is_whitespace()).collect();
 
         if chars.is_empty() {
@@ -700,6 +778,7 @@ impl Atlas {
         for (ch, segment) in chars.iter().zip(found) {
             let glyph = Glyph {
                 ch: *ch,
+                bitmap: segment.mask,
                 cell: segment.cell,
                 w: segment.w,
                 h: segment.h,
@@ -707,14 +786,13 @@ impl Atlas {
             // Keep several shapes per character: the same digit can render a
             // pixel or two differently depending on where it sits (scaling and
             // hinting), and collapsing them loses whichever variant came second.
-            // Size is part of the identity because matching penalises it — if a
-            // shape is the same character at a different size it is a new variant,
-            // not something already known.
+            // Size is part of the identity: a glyph at a new size is a new
+            // variant, and matching tries the native size bucket first.
             let known = self.glyphs.iter().any(|existing| {
                 existing.ch == *ch
                     && existing.w == glyph.w
                     && existing.h == glyph.h
-                    && cell_distance(&existing.cell, &glyph.cell) <= VARIANT_DISTANCE
+                    && existing.bitmap == glyph.bitmap
             });
             if !known {
                 self.glyphs.push(glyph);
@@ -724,52 +802,23 @@ impl Atlas {
         Ok(chars)
     }
 
-    /// Cut a shape in two where both halves are recognised and the pair is clearly a
-    /// better explanation than the shape as a whole. The atlas decides where the cut
-    /// goes — not a width guess — so a normal glyph is never halved.
-    fn best_split(
-        &self,
-        mask: &[bool],
-        stride: usize,
-        height: usize,
-        segment: &Segment,
-    ) -> Option<(Segment, Segment)> {
-        if self.glyphs.is_empty() || segment.w < 4 {
-            return None;
-        }
-
-        let (_, whole, _) = self.match_segment(segment);
-        let mut best: Option<(f64, Segment, Segment)> = None;
-
-        for cut in (segment.x + 2)..(segment.x + segment.w as i32 - 1) {
-            let end = segment.x + segment.w as i32;
-            let (Some(left), Some(right)) = (
-                sub_segment(mask, stride, height, segment.x, cut),
-                sub_segment(mask, stride, height, cut, end),
-            ) else {
-                continue;
-            };
-
-            let (_, left_distance, _) = self.match_segment(&left);
-            let (_, right_distance, _) = self.match_segment(&right);
-            if left_distance > MATCH_THRESHOLD || right_distance > MATCH_THRESHOLD {
-                continue;
-            }
-
-            let total = left_distance + right_distance;
-            if best.map_or(true, |(closest, _, _)| total < closest) {
-                best = Some((total, left, right));
-            }
-        }
-
-        let (total, left, right) = best?;
-        if total + SPLIT_MARGIN >= whole {
-            return None;
-        }
-        Some((left, right))
-    }
-
     fn distance_to(&self, segment: &Segment, glyph: &Glyph) -> f64 {
+        // The client draws these glyphs from fixed bitmaps, so a same-size
+        // comparison can be exact. That is the primary path and it is what makes
+        // punctuation (a 2x2 comma, a 1x1 dot) separable again.
+        if segment.w == glyph.w && segment.h == glyph.h {
+            return native_distance(
+                &segment.mask,
+                &glyph.bitmap,
+                segment.w as usize,
+                segment.h as usize,
+                SHIFT_SEARCH,
+            );
+        }
+
+        // Different native size: the shape is a scaled/anti-aliased rendering
+        // (the map label) or a size the atlas has not learned. Fall back to the
+        // fixed cell, where size can be compared at all.
         let size_penalty = SIZE_PENALTY
             * ((segment.w as f64 - glyph.w as f64).abs()
                 + (segment.h as f64 - glyph.h as f64).abs());
@@ -825,21 +874,14 @@ impl Atlas {
     /// the shape of the readout to restrict what each position may contain. The
     /// closing bracket is only a candidate once the percentage has started, which
     /// is what stops a `1` (the same narrow bar) being read as one.
-    pub fn recognize_readout(&self, gray: &Gray) -> Result<(String, f64), String> {
+    fn readout_matches(&self, found: Vec<Segment>) -> Vec<(Segment, char, f64)> {
         const NUMBER: &str = "0123456789,[";
         const PERCENT: &str = "0123456789.%";
         const CLOSE: &str = "]";
 
-        if self.glyphs.is_empty() {
-            return Err("no glyphs learned yet".into());
-        }
-
-        let mut text = String::new();
-        let mut confidence = 0.0;
-        let mut matched = 0usize;
+        let mut out = Vec::new();
         let mut stage = 0usize;
-
-        for segment in segments(gray) {
+        for segment in found {
             let allowed = match stage {
                 0 => NUMBER,
                 1 => PERCENT,
@@ -854,37 +896,145 @@ impl Atlas {
             } else if ch == '%' {
                 stage = 2;
             }
+            out.push((segment, ch, best));
+        }
+        out
+    }
 
+    pub fn recognize_readout(&self, gray: &Gray) -> Result<(String, f64), String> {
+        if self.glyphs.is_empty() {
+            return Err("no glyphs learned yet".into());
+        }
+
+        let matches = self.readout_matches(segments(gray));
+        if matches.is_empty() {
+            return Err("nothing recognizable in the box — learn the digits".into());
+        }
+
+        let mut text = String::new();
+        let mut confidence = 0.0;
+        for (_, ch, best) in &matches {
+            text.push(*ch);
+            confidence += (1.0 - best / 255.0).max(0.0);
+        }
+
+        Ok((text, confidence / matches.len() as f64))
+    }
+
+    /// Read a single line of ordinary text (a name, job, street or map label).
+    ///
+    /// Unlike the readouts, these lines have spaces. `segments` splits on empty
+    /// columns and drops them, so a gap at least `space_gap` pixels wide is read
+    /// back as a space. Unmatched shapes are skipped: a label crop can catch a
+    /// minimap marker or a panel edge next to the text.
+    pub fn recognize_text(&self, gray: &Gray, space_gap: i32) -> Result<(String, f64), String> {
+        if self.glyphs.is_empty() {
+            return Err("no glyphs learned yet".into());
+        }
+
+        let mut found = text_segments(gray);
+        if found.is_empty() {
+            found = split_shapes(gray, Some(TEXT_FLOOR), true);
+        }
+        if found.is_empty() {
+            return Err("nothing readable in the box".into());
+        }
+
+        let mut text = String::new();
+        let mut confidence = 0.0;
+        let mut matched = 0usize;
+        let mut last_end: Option<i32> = None;
+
+        for segment in found {
+            let (ch, best, _) = self.match_segment(&segment);
+            if best > MATCH_THRESHOLD {
+                continue;
+            }
+            if let Some(end) = last_end {
+                if segment.x - end >= space_gap {
+                    text.push(' ');
+                }
+            }
             text.push(ch);
+            last_end = Some(segment.x + segment.w as i32);
             confidence += (1.0 - best / 255.0).max(0.0);
             matched += 1;
         }
 
         if matched == 0 {
-            return Err("nothing recognizable in the box — learn the digits".into());
+            return Err("nothing recognizable in the box".into());
         }
 
         Ok((text, confidence / matched as f64))
     }
 
-    /// Add a shape the player identified by hand. Stored as-is, so it matches the
-    /// exact pixels it was labelled from — including one-pixel shapes like `.`.
-    pub fn learn_glyph(&mut self, ch: char, cell: Cell, w: u32, h: u32) {
+    /// Add the exact shapes of a live readout the seeded atlas already reads, so a
+    /// rendering difference (at Ideal the `7` is one stroke off the asset) becomes
+    /// an exact variant instead of a near miss. Only confident, non-exact matches
+    /// are learned; a doubtful shape is left to the fallback rather than taught as
+    /// a wrong character. Returns how many variants were added.
+    pub fn learn_rendering(&mut self, gray: &Gray) -> usize {
+        let confident = MATCH_THRESHOLD * 0.75;
+        let mut added = 0;
+        for (segment, ch, distance) in self.readout_matches(segments(gray)) {
+            if distance == 0.0 || distance > confident {
+                continue;
+            }
+            let before = self.glyphs.len();
+            self.learn_glyph(ch, segment.mask, segment.w, segment.h);
+            if self.glyphs.len() > before {
+                added += 1;
+            }
+        }
+        added
+    }
+
+    /// Add a shape the player identified by hand. Stored as the exact native
+    /// bitmap it was labelled from — including one-pixel shapes like `.`.
+    pub fn learn_glyph(&mut self, ch: char, bitmap: Vec<u8>, w: u32, h: u32) {
+        if w == 0 || h == 0 || bitmap.len() != w as usize * h as usize {
+            return;
+        }
+        let cell = cell_of_native(&bitmap, w as usize, h as usize);
         let known = self.glyphs.iter().any(|existing| {
-            existing.ch == ch
-                && existing.w == w
-                && existing.h == h
-                && cell_distance(&existing.cell, &cell) <= VARIANT_DISTANCE
+            existing.ch == ch && existing.w == w && existing.h == h && existing.bitmap == bitmap
         });
         if !known {
-            self.glyphs.push(Glyph { ch, cell, w, h });
+            self.glyphs.push(Glyph {
+                ch,
+                bitmap,
+                cell,
+                w,
+                h,
+            });
         }
     }
 
     /// Per-segment classification. `known` means the best match is close enough
     /// to trust without asking the player.
     pub fn explain(&self, gray: &Gray) -> Vec<Guess> {
-        segments(gray)
+        self.explain_shapes(segments(gray))
+    }
+
+    /// Per-shape classification for a tightly drawn text line, keeping capitals
+    /// and ascenders that span the crop height.
+    pub fn explain_text(&self, gray: &Gray) -> Vec<Guess> {
+        self.explain_shapes(text_segments(gray))
+    }
+
+    /// Per-shape classification for the level. Use the same bright-first
+    /// segmentation as `recognize_level`; the adaptive path sees the pale tile and
+    /// would flag digits the reader actually read as unrecognised.
+    pub fn explain_level(&self, gray: &Gray) -> Vec<Guess> {
+        let bright = bright_segments(gray, TEXT_FLOOR);
+        if !bright.is_empty() {
+            return self.explain_shapes(bright);
+        }
+        self.explain(gray)
+    }
+
+    fn explain_shapes(&self, found: Vec<Segment>) -> Vec<Guess> {
+        found
             .into_iter()
             .map(|segment| {
                 let (ch, best, _) = self.match_segment(&segment);
@@ -896,7 +1046,7 @@ impl Atlas {
                     ch,
                     distance: best,
                     known: best <= MATCH_THRESHOLD,
-                    cell: segment.cell,
+                    bitmap: segment.mask,
                 }
             })
             .collect()
@@ -912,6 +1062,43 @@ impl Atlas {
             return Err("nothing readable in the box".into());
         }
 
+        match self.read_shapes(found) {
+            Ok((text, confidence)) if !text.is_empty() => Ok((text, confidence)),
+            _ => {
+                let bright = bright_segments(gray, TEXT_FLOOR);
+                if bright.is_empty() {
+                    return Err("nothing recognizable in the box — learn the digits".into());
+                }
+                self.read_shapes(bright)
+            }
+        }
+    }
+
+    /// Read a readout that sits on pale tiles (the level).
+    ///
+    /// Bright ink is tried first, not as a fallback. On a pale tile the adaptive
+    /// threshold marks the whole tile as ink; the tile's interior can then match
+    /// a learned glyph closely enough that the adaptive read looks successful
+    /// while returning the wrong digits (a real `35` read as `55`). Only the
+    /// near-white text is a trustworthy shape there.
+    pub fn recognize_level(&self, gray: &Gray) -> Result<(String, f64), String> {
+        if self.glyphs.is_empty() {
+            return Err("no glyphs learned yet".into());
+        }
+
+        let bright = bright_segments(gray, TEXT_FLOOR);
+        if !bright.is_empty() {
+            if let Ok((text, confidence)) = self.read_shapes(bright) {
+                if !text.is_empty() {
+                    return Ok((text, confidence));
+                }
+            }
+        }
+
+        self.recognize(gray)
+    }
+
+    fn read_shapes(&self, found: Vec<Segment>) -> Result<(String, f64), String> {
         let mut text = String::with_capacity(found.len());
         let mut confidence = 0.0;
         let mut matched = 0usize;
@@ -1201,17 +1388,21 @@ pub fn detect_map_label(frame: &Frame, panel: Region) -> Option<Region> {
     })
 }
 
-/// The map-label crop on the fixed fingerprint grid. A drawn box wins over
-/// detection: the box is placed around the label, while detection clips the ends
-/// of the name. Any difference between the crop taught and the crop read shows up
-/// as a distance, and a big enough one lets a neighbouring map name win.
+/// The map-label crop on the fixed fingerprint grid.
+///
+/// Detection wins: it finds the whole label wherever the minimap is, and a longer
+/// map name simply makes a wider crop. A stored box is only the fallback for a
+/// frame where detection fails. Preferring a stored box clipped the next map's
+/// name whenever it was longer than the one the box was drawn around, and two
+/// maps sharing a prefix then looked identical.
 pub fn map_label(frame: &Frame, drawn: Option<Region>) -> Option<Gray> {
-    if let Some(region) = drawn.filter(Region::is_usable) {
-        if let Some(gray) = crop_gray(frame, region) {
-            return Some(resample(&gray, MAP_LABEL_W, MAP_LABEL_H));
-        }
+    if let Some(gray) = read_map_label(frame) {
+        return Some(gray);
     }
-    read_map_label(frame)
+    drawn
+        .filter(Region::is_usable)
+        .and_then(|region| crop_gray(frame, region))
+        .map(|gray| resample(&gray, MAP_LABEL_W, MAP_LABEL_H))
 }
 
 /// The current map-label crop, normalised to the fixed fingerprint grid.
@@ -1277,13 +1468,13 @@ pub fn read_map_text(frame: &Frame, atlas: &Atlas) -> Option<Vec<String>> {
         // One stray shape per line is tolerated: the crop can catch a minimap
         // marker or an edge of the panel next to the text.
         unrecognised += atlas
-            .explain(line)
+            .explain_text(line)
             .iter()
             .filter(|guess| !guess.known)
             .count();
         text.push(
             atlas
-                .recognize(line)
+                .recognize_text(line, (line.h as i32 / 3).max(2))
                 .map(|(text, _)| text)
                 .unwrap_or_default(),
         );
@@ -1355,67 +1546,6 @@ pub fn map_distance(crop: &Gray, template: &Gray) -> Option<f64> {
         .map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs() as u64)
         .sum();
     Some(total as f64 / crop.px.len() as f64)
-}
-
-// Best mean distance of the template anywhere within `search` pixels of the
-// crop's origin. Unused by the engine (map labels are located by detection),
-// but kept for diagnostics on fingerprints taught against a fixed box.
-#[allow(dead_code)]
-pub fn map_distance_shifted(crop: &Gray, template: &Gray, search: usize) -> Option<f64> {
-    if crop.w != template.w || crop.h != template.h || crop.px.len() != template.px.len() {
-        return None;
-    }
-    if search == 0 {
-        return map_distance(crop, template);
-    }
-
-    let mut best = f64::MAX;
-    for dy in 0..=search * 2 {
-        for dx in 0..=search * 2 {
-            let ox = dx as isize - search as isize;
-            let oy = dy as isize - search as isize;
-
-            let mut total: u64 = 0;
-            let mut count: usize = 0;
-            for y in 0..crop.h {
-                let ty = y as isize + oy;
-                if ty < 0 || ty >= crop.h as isize {
-                    continue;
-                }
-                for x in 0..crop.w {
-                    let tx = x as isize + ox;
-                    if tx < 0 || tx >= crop.w as isize {
-                        continue;
-                    }
-                    let a = crop.px[y * crop.w + x] as i32;
-                    let b = template.px[ty as usize * crop.w + tx as usize] as i32;
-                    total += (a - b).unsigned_abs() as u64;
-                    count += 1;
-                }
-            }
-
-            if count == 0 {
-                continue;
-            }
-            // Require a mostly-overlapping alignment so a shift cannot win by
-            // comparing only a handful of easy pixels.
-            let coverage = count as f64 / crop.px.len() as f64;
-            if coverage < 0.8 {
-                continue;
-            }
-
-            let distance = (total as f64 / count as f64) / coverage;
-            if distance < best {
-                best = distance;
-            }
-        }
-    }
-
-    if best == f64::MAX {
-        None
-    } else {
-        Some(best)
-    }
 }
 
 #[cfg(test)]
@@ -1494,6 +1624,7 @@ mod tests {
         let mut atlas = Atlas {
             glyphs: vec![Glyph {
                 ch: '.',
+                bitmap: vec![255],
                 cell: [255; CELL_LEN],
                 w: 1,
                 h: 1,
@@ -1511,6 +1642,102 @@ mod tests {
             atlas.recognize(&dot).map(|(text, _)| text).as_deref(),
             Ok(".")
         );
+    }
+
+    #[test]
+    fn native_bitmaps_keep_punctuation_apart() {
+        // A 2x2 comma and a 1x1 dot. The old 12x16 resample turned both into
+        // similar blobs; native bitmaps must keep them distinct.
+        let mut g = canvas(12, 12);
+        g.px[2 * 12 + 1] = 230;
+        g.px[3 * 12 + 2] = 230;
+        g.px[6 * 12 + 7] = 230;
+
+        let mut atlas = Atlas::default();
+        atlas.learn(",.", &g).expect("learn");
+        assert_eq!(atlas.glyphs.len(), 2);
+        assert_eq!(atlas.glyphs[0].w, 2);
+        assert_eq!(atlas.glyphs[0].h, 2);
+        assert_eq!(atlas.glyphs[1].w, 1);
+        assert_eq!(atlas.glyphs[1].h, 1);
+        assert_eq!(
+            atlas.recognize(&g).map(|(text, _)| text).as_deref(),
+            Ok(",.")
+        );
+    }
+
+    #[test]
+    fn legacy_cells_migrate_to_native_bitmaps() {
+        // A 2x2 glyph stored in the old 12x16 format. Loading it must recover a
+        // native 2x2 bitmap rather than dropping the profile's learned digits.
+        let stored = crate::settings::Atlas {
+            format: 0,
+            source: String::new(),
+            cell_w: CELL_W as u32,
+            cell_h: CELL_H as u32,
+            glyphs: vec![crate::settings::GlyphCell {
+                ch: "X".into(),
+                w: 2,
+                h: 2,
+                bitmap: String::new(),
+                cell: crate::settings::to_hex(&[255u8; CELL_LEN]),
+            }],
+        };
+
+        let atlas = Atlas::from_settings(&stored);
+        assert_eq!(atlas.glyphs.len(), 1);
+        assert_eq!(atlas.glyphs[0].w, 2);
+        assert_eq!(atlas.glyphs[0].h, 2);
+        assert_eq!(atlas.glyphs[0].bitmap, vec![255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn refining_seed_learns_a_near_rendering() {
+        // The seeded asset and the client's render can differ by a stroke (the
+        // Ideal `7`). A confident near match must be stored as an exact variant.
+        let base = [1u8, 1, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1];
+        let variant = [1u8, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1];
+
+        let render = |bits: &[u8]| {
+            let mut gray = canvas(12, 12);
+            for y in 0..5 {
+                for x in 0..3 {
+                    if bits[y * 3 + x] > 0 {
+                        gray.px[(y + 2) * 12 + (x + 2)] = 255;
+                    }
+                }
+            }
+            gray
+        };
+
+        let mut atlas = Atlas::default();
+        atlas.learn_glyph(
+            '7',
+            base.iter().map(|bit| if *bit > 0 { 255 } else { 0 }).collect(),
+            3,
+            5,
+        );
+
+        let gray = render(&variant);
+        assert!(atlas.explain(&gray)[0].distance > 0.0);
+
+        assert_eq!(atlas.learn_rendering(&gray), 1);
+        assert_eq!(atlas.glyphs.len(), 2);
+        assert_eq!(atlas.explain(&gray)[0].distance, 0.0);
+    }
+
+    #[test]
+    fn atlas_round_trips_native_bitmaps() {
+        let (a, _) = sample_pair();
+        let mut atlas = Atlas::default();
+        atlas.learn("01", &a).unwrap();
+
+        let stored = atlas.to_settings();
+        assert_eq!(stored.format, 2);
+        let back = Atlas::from_settings(&stored);
+        assert_eq!(back.glyphs.len(), atlas.glyphs.len());
+        assert_eq!(back.glyphs[0].bitmap, atlas.glyphs[0].bitmap);
+        assert_eq!(back.glyphs[0].w, atlas.glyphs[0].w);
     }
 
     #[test]

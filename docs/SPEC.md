@@ -1,10 +1,10 @@
-# MScout — v1 Spec
+# MScout — product spec
 
-A local, read-only companion overlay for **MapleStory Classic World** (Nexon, live since 2026‑10‑21, currently v1.2.0). v1 does one thing: it watches your EXP bar, records it, and plots how fast you are gaining EXP.
+A local, read-only companion overlay for **MapleStory Classic World**. It watches the HUD readouts it supports, records EXP samples, and plots how fast you are gaining EXP.
 
 Target is Classic World specifically — not original MapleStory, not a pre-Big Bang private server. Formulas, EXP tables, map lists and level cap all come from Classic World data (cap 100, four jobs, 2nd job ceiling).
 
-**Implementation status (2026-11, v0.1.0):** WGC capture, calibration, digit matching, map/name/job fingerprints and JSONL storage are implemented; the overlay renders real samples. Remaining work is listed in [docs/ROADMAP.md](ROADMAP.md), rationale in [docs/DECISIONS.md](DECISIONS.md).
+**Implementation status (2026-11, v0.3.0):** WGC capture, calibration, HUD-atlas digit seeding, bitmap matching, map/name/job fingerprints and JSONL storage are implemented; the overlay renders real samples. Remaining work is listed in [docs/ROADMAP.md](ROADMAP.md), rationale in [docs/DECISIONS.md](DECISIONS.md).
 
 ---
 
@@ -18,7 +18,8 @@ Target is Classic World specifically — not original MapleStory, not a pre-Big 
    - [3.3 Cadence](#33-cadence)
 4. [Parsing](#4-parsing)
    - [4.1 EXP](#41-exp)
-   - [4.2 Map name](#42-map-name)
+   - [4.2 Name and job](#42-name-and-job)
+   - [4.3 Map name](#43-map-name)
 5. [States and warnings](#5-states-and-warnings)
 6. [Data integrity rules](#6-data-integrity-rules)
 7. [Rate math](#7-rate-math)
@@ -28,12 +29,12 @@ Target is Classic World specifically — not original MapleStory, not a pre-Big 
 9. [History window](#9-history-window)
 10. [Storage](#10-storage)
     - [10.1 Samples](#101-samples)
-    - [10.2 Settings](#102-settings)
+    - [10.2 Settings and profiles](#102-settings-and-profiles)
     - [10.3 Retention](#103-retention)
 11. [EXP table](#11-exp-table)
 12. [Events](#12-events)
 13. [Explicit non-goals for v1](#13-explicit-non-goals-for-v1)
-14. [Open decisions](#14-open-decisions)
+14. [Decisions and open work](#14-decisions-and-open-work)
 
 ---
 
@@ -66,7 +67,9 @@ Compliance note: per Nexon's rules, botting is using a macro, third-party progra
 ## 2. v1 scope
 
 In:
-- Auto-read of the EXP readout and the current map name from the game window
+- Auto-read of the supported HUD: EXP, level, map/street, character name and job
+  (automatic paths verified at Ideal Ratio; Default/Filtered fall back to
+  calibration for now)
 - Local sample storage
 - Live panel: current map, level, EXP %, 1-minute rate, 5-minute average, ETA, last-30-minute chart
 - ETA to next level on a 30-minute rate
@@ -86,13 +89,13 @@ Out (later versions): damage/AP/potion calculators, period-to-period comparison,
 Regions of interest (ROIs), stored as physical pixels relative to the game window's client area so moving the window is harmless:
 
 1. **EXP readout** — the status-bar EXP text, e.g. `10,105 [91.53%]` (required)
-2. **Level digits** — the level tile next to the HP/MP bars (required)
+2. **Level digits** — the level tile next to the HP/MP bars (optional; without it the level is reported unrecognised, never derived)
 3. **Map label** — optional; only a fallback, since the minimap panel is detected automatically
-4. **Character name**, **Job** — optional fingerprints shown in the overlay
+4. **Character name**, **Job** — optional; Arial text, read automatically once their boxes are drawn (the taught fingerprints remain the exact fallback)
 
-Calibration flow: show a frozen preview frame, player drags a box for each ROI, live parse feedback appears immediately ("Lv 17 · 10,105 EXP · 91.53% · Henesys"). Calibration is not accepted until the required ROIs parse cleanly in the live preview.
+Calibration flow: show a frozen preview frame, player drags a box for each ROI, live parse feedback appears immediately ("Lv 17 · 10,105 EXP · 91.53% · Henesys"). The digit atlases are not typed in: the player points the app at the MSCW install and the client's own bitmap atlas is read at the rendered size. Typing the readout remains the fallback when the install cannot be found.
 
-Calibration is scoped to the **client size**: each resolution keeps its own profile (`data/profiles/<W>x<H>.json`), and the engine activates the profile matching the live window. Re-calibration is required for a client size that has none, or after a patch that moves the status bar; a resolution change switches profiles instead of invalidating them. The app must detect this situation (no profile, parse failure) rather than keep plotting.
+Calibration is scoped to the **client size and UI Size**: each pair keeps its own profile (`data/profiles/<W>x<H>[@mode].json`), and the engine activates the profile matching the live window. Re-calibration is required for a pair that has none, or after a patch that moves the status bar; a resolution change switches profiles instead of invalidating them. The app must detect this situation (no profile, parse failure) rather than keep plotting. Calibration boxes ship as presets for the supported Ideal sizes; other pairs fall back to calibration. The digit atlases are seeded from the installed client, not shipped. See [PRESETS.md](PRESETS.md).
 
 ### 3.3 Cadence
 - One frame per second, cropped to the ROIs only.
@@ -104,14 +107,20 @@ Calibration is scoped to the **client size**: each resolution keeps its own prof
 ## 4. Parsing
 
 ### 4.1 EXP
-- **Digits use sprite matching, not general OCR.** The UI font is fixed; each glyph is learned once by having the player type the string currently shown (`atlas learn`). Matching is fast and far more accurate than OCR at this font size.
+- **Digits use bitmap matching, not general OCR.** The client draws them from baked HUD atlases, not a font. The atlas is seeded from `Data/UI/_Canvas/_Canvas_000.wz` at the rendered glyph height (5×7 at Ideal; Default sizes vary by pair and are not all supported yet), so no per-character teaching is needed. Typing the readout remains a fallback if the install is unavailable.
 - Parse yields: level, absolute EXP within level, and percentage.
-- **Cross-check**: `percentage ≈ exp / exp_required(lv)`. If the two disagree by more than ~1 percentage point, the sample is rejected as a misread.
-- Level is read from the same status area; if unavailable from the EXP ROI, a third tiny ROI is calibrated for it.
+- **Cross-check**: `percentage ≈ exp / exp_required(lv)`. If the two disagree by more than ~1 percentage point, the sample is treated as evidence against the level read (not the EXP read), and the level is reported unrecognised.
+- Level is read from its own box with its own atlas; the level digit is the EXP glyph widened to the rendered size. It is never derived from EXP and the percentage.
 
-### 4.2 Map name
+### 4.2 Name and job
 
-- **Bitmap fingerprint, not OCR.** The label is pixel-identical for the same map at the same resolution, and WebView has no access to a system OCR engine. The player teaches each map once, after which recognition is a nearest-match against the taught set.
+- **Arial 12 px, 1-bit GDI**, verified pixel-exact. The engine renders the Arial face from Windows at the measured crop height, stores a native glyph atlas (`identityAtlas`, `source: "font"`), and reads both lines as text. No per-character teaching is needed.
+- The one ambiguity at this size — `l` and `I` are the same 1 px bar — is resolved by case context: a mid-word bar in a mixed-case word is `l`.
+- The taught fingerprints remain as the exact fallback and for correcting a misread.
+
+### 4.3 Map name
+
+- **Client map table, not segmented OCR.** The label is Arial Bold 12; the two lines are the client's own `mapName`/`streetName` strings in `String_000.wz/Map.img`. The reader renders every candidate name, filters by rendered width, and scores the whole line with a column-pattern DTW. A taught fingerprint still wins when it exists, and a taught letter atlas remains as a fallback for a name missing from the client table. Teaching is now only for corrections.
 - **The label is located, not boxed.** The minimap can be moved and resized by the player, so its panel is detected on every frame and the name crop is normalised to a fixed grid before matching. Moving or resizing the minimap therefore never requires re-teaching.
 - The game draws some names on two lines (`Hidden Street` / `1st Accompaniment <Bonus>`); the stored label keeps the newline and the overlay renders it the same way.
 - Recognition is exact-match oriented: an untaught or unrecognisable map reports `unknown` and is never guessed from partial similarity.
@@ -284,9 +293,9 @@ Path: `./data/samples/YYYY-MM-DD.jsonl`. One line per second of captured play:
 
 ### 10.2 Settings and profiles
 
-Path: `./data/settings.json` — machine-wide state only: the target window match, rate windows (1/5/30), idle threshold.
+Path: `./data/settings.json` — machine-wide state only: the target window match, the chosen UI Size, and the MSCW install folder used for digit seeding.
 
-Path: `./data/profiles/<W>x<H>.json` — everything that is physical-pixel specific, one file per client size: ROI rectangles, the learned glyph atlas, taught map fingerprints, and the character name/job fingerprints. The engine activates the profile matching the live client size.
+Path: `./data/profiles/<W>x<H>[@mode].json` — everything that is physical-pixel specific, one file per client size × UI Size: ROI rectangles, the EXP and level glyph atlases, taught map/street fingerprints, and the character name/job fingerprints. The engine activates the profile matching the live client size and UI Size. Digit atlases are seeded from the installed client (`source: game`) or taught; presets carry only boxes.
 
 Recording is gated: a size with no calibrated profile reports **lost** and writes nothing, and samples start only after consecutive good reads, so a wrong profile can never look like "stopped gaining EXP".
 
@@ -332,12 +341,6 @@ Recorded inline and/or derived on read:
 
 ---
 
-## 14. Open decisions
+## 14. Decisions and open work
 
-Settled: **Tauri 2 + Rust core + React/uPlot frontend** (see [docs/DECISIONS.md](DECISIONS.md) D3).
-
-Still open:
-- Whether the chart's 5-minute faint line is optional or always on (current default: always on)
-- Whether an explicit `events.jsonl` is worthwhile, or derived events stay sufficient
-- Live panel polish details — exact collapsed width, sparkline presence, map-name line breaking — deferred until capture lands
-- Whether taught map fingerprints should be shared/exportable, or stay per-machine
+Architecture and behavior decisions live in [DECISIONS.md](DECISIONS.md). Forward-looking work, including Default/Filtered UI-size support and multi-resolution portability, is tracked in [ROADMAP.md](ROADMAP.md).

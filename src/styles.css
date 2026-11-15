@@ -624,6 +624,11 @@ body.page-body #root {
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.readout-read {
+  color: #cbd5e1;
+  font-variant-numeric: tabular-nums;
+}
+
 .readout-body-shapes {
   display: flex;
   flex-direction: column;

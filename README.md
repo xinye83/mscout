@@ -4,18 +4,16 @@
   <img src="src-tauri/icons/icon.png" alt="MScout icon" width="128">
 </p>
 
-A read-only companion overlay for **MapleStory Classic World** (Nexon, live since 2026-10-21, v1.2.0 as of 2026-11). It reads what is on the game screen — today that is your EXP readout — records it, and charts it. Further readouts (damage, potions, per-map stats) are intended to join it.
+A read-only companion overlay for **MapleStory Classic World**. It reads supported HUD values, records them, and charts EXP progress. It never touches the game client: no memory reading, no injection, no input simulation. Screen pixels in, numbers out.
 
 > **This is a vibecoded project.** It was built by pairing with an AI coding agent rather than written by hand, line by line. The behaviour is tested against the real game and the Rust side has a unit-test suite, but expect the rough edges of a fast, AI-assisted codebase: uneven comments, the occasional over-engineered abstraction, and design choices that were reasoned through in conversation rather than reviewed by a second human. Read it accordingly.
 
-It never touches the game client: no memory reading, no injection, no input simulation. Screen pixels in, numbers out. See [docs/SPEC.md §1](docs/SPEC.md) for the full constraint list.
-
-**Status: v0.1.0 release.** The overlay, tray, hotkeys, window targeting, calibration, WGC capture, EXP parsing and storage all work. Samples are real rows read from the game screen; there is no demo data path left. See [docs/ROADMAP.md](docs/ROADMAP.md).
+See [docs/SPEC.md](docs/SPEC.md) for supported behaviour and constraints, [docs/PRESETS.md](docs/PRESETS.md) for the current preset/support matrix, and [docs/ROADMAP.md](docs/ROADMAP.md) for what is built and what is next.
 
 ## Requirements
 
 - Windows 11 (Windows Graphics Capture; Windows 10 2004+ should work, untested)
-- Node 26 via `fnm`
+- Node.js 20+ (26 used in development)
 - Rust stable (MSVC toolchain) + Visual Studio Build Tools 2022 (C++ workload) + Windows SDK
 - WebView2 runtime (preinstalled on Windows 11)
 
@@ -42,16 +40,11 @@ Tray menu offers the same actions plus Quit.
 
 ## Calibrating
 
-1. Attach the game window (`Ctrl+Alt+T`, or tray → *Choose game window…*).
-2. Open calibration: tray → *Calibrate boxes…*, the **Calibrate** button in the picker, or the **calibrate** button the overlay shows when the running client size has no profile yet. The overlay reports the reason; it never opens the window by itself.
-3. **Freeze frame**, then drag boxes on the preview: the EXP text, and optionally the map label and one **Name / Job** box drawn loosely around the two stacked lines under the bars (job over name — the app splits them). The level needs no box: it is derived from the EXP value and the percentage. **Save boxes**. A client size the app ships a preset for (`src-tauri/presets/`, or a `data/presets/` override) already has its boxes filled in, so the only step left is learning the digits. Otherwise draw the EXP box with a few pixels of slack on the right — the number grows and gains a digit at 100,000, which would otherwise clip the trailing `]` and make parsing fail.
-4. Type exactly what the EXP box shows (for example `86,813 [55.81%]`) and press **Learn digits**. The card shows what is learned and which digits are still missing.
-5. Teach the map, character name and job once by typing their labels.
-6. **Test parse** reads the frozen frame with the saved boxes — it must match what is on screen before you rely on it.
-
-Moving the game window is harmless: boxes are relative to the client area. The minimap is detected automatically each second, so moving or resizing it does not invalidate map names. Calibration is stored **per client size** in `data/profiles/<W>x<H>.json`, so each resolution keeps its own set — changing resolution switches profiles rather than breaking anything, but a size you have never calibrated needs one calibration pass. Digits are learned per font size: the EXP font, the level tiles and the HP/MP numbers are separate variants.
-
-The two-digit EXP percentage is shown as `%.2f`. The prominent EXP/hour and time-to-level are both derived from the **5-minute average**: they show `—` until a full 5-minute window of the current session exists, again whenever that average is `0`, and the ETA stays `—` while idle.
+Calibration is a one-time pass per client size and UI Size. The full flow,
+preset support and troubleshooting are in
+[docs/SETUP.md §3](docs/SETUP.md#calibrate) and
+[docs/PRESETS.md](docs/PRESETS.md). The overlay reports when a pair needs
+calibration; it never opens the calibration window by itself.
 
 ## Where data lives
 
@@ -66,12 +59,14 @@ Sample format and invariants are documented in [docs/DATA.md](docs/DATA.md).
 | File | Purpose |
 |---|---|
 | [docs/SETUP.md](docs/SETUP.md) | Install dependencies, run from source, build a release |
+| [docs/PRESETS.md](docs/PRESETS.md) | Preset and support matrix, reset behavior, limitations |
 | [CHANGELOG.md](CHANGELOG.md) | What each version added, changed and fixed |
-| [docs/SPEC.md](docs/SPEC.md) | Behavioral spec — what v1 must do |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | What is built, what is next, acceptance criteria |
+| [docs/SPEC.md](docs/SPEC.md) | Behavioral spec |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | What is built, what is next, known gaps |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Decision log — why things are the way they are |
 | [docs/DATA.md](docs/DATA.md) | File formats, profiles, schema, invariants |
-| [docs/FONTS.md](docs/FONTS.md) | Client font findings and where the fonts live |
+| [docs/TEXT_RENDERING.md](docs/TEXT_RENDERING.md) | Developer reference for HUD glyphs, fonts and text matching |
+| [docs/SHIPPING.md](docs/SHIPPING.md) | What the app ships vs what it reads from the client/Windows |
 | [docs/DEV.md](docs/DEV.md) | Environment gotchas, testing, layout |
 
 ## Repository layout
@@ -81,7 +76,7 @@ src/                 React UI (live panel, history, calibration, chart, rates)
 src-tauri/src/       Rust: capture, OCR/matching, engine loop, profiles, tray/hotkeys
 src-tauri/           Tauri config, capabilities, app icons
 scripts/             dev-only mock sample generator
-docs/                setup, roadmap, decisions, data format, dev notes
+docs/                setup, presets, spec, roadmap, decisions, data, dev notes, rendering reference
 data/                runtime data (gitignored — personal, machine-specific)
 ```
 

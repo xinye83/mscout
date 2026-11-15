@@ -4,6 +4,57 @@ All notable changes to MScout are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the major version is `0`, the minor version is bumped for features and the patch for fixes; anything may still change between `0.x` releases.
 
+## [Unreleased]
+
+### Planned
+- Default/Filtered support: identify each pair's digit/level source and Arial rendering, then add presets and saved-frame tests.
+- Multi-resolution portability: anchor-relative boxes and scale-aware matching, so one calibration serves several client sizes.
+- Level-up stitching and death markers on the chart.
+- Retention: compact raw samples older than 7 days into one-minute aggregates.
+- History window pan/zoom.
+- Per-map comparison once enough real data exists.
+
+## [0.4.0] - 2026-11-14
+
+### Added
+- Automatic level readout: the level digits are seeded from the same client
+  atlas as EXP, segmented on bright ink over the pale tiles, and stored in the
+  profile's level atlas.
+- Automatic character name and job from Windows Arial, with the taught
+  fingerprints kept as the exact fallback.
+- Automatic map/street matching against the client's own `String_000.wz` name
+  table by whole-line DTW; teaching is now corrections only.
+- Shipped Ideal Ratio presets for 1366×768, 1920×1080 and 1920×1200, all with
+  EXP, level, name and job boxes.
+- Calibration panels now share one layout: readiness/source status, a `Read:`
+  line from the frozen frame, and manual corrections behind **Correct manually**.
+
+### Changed
+- Presets are geometry only and only Ideal Ratio ships. Default and Filtered
+  fall back to calibration instead of applying unverified boxes; the automatic
+  Arial/level/map path is Ideal-specific in this release.
+- Fresh Ideal profiles auto-seed EXP/level, Arial name/job and the map table
+  when the MSCW folder is configured; no per-character typing is required.
+- Map/name source tracking and calibration readouts are consistent across
+  corrections, profile switches and review frames.
+- Documentation is now release-agnostic at the top level: the README is a stable
+  entry point, while the current support matrix and Default/Filtered limits live
+  in `docs/PRESETS.md` and `docs/ROADMAP.md`. Removed the internal working-notes
+  session log; decisions and rendering evidence live in their reference docs.
+
+### Fixed
+- Level showing `unknown` after seeding on pale level tiles.
+- Long map names clipping against a stored box; label detection now wins.
+- Clean-install street matching requiring a drawn street box.
+- `EurobIood` → `Euroblood` via the mixed-case `l`/`I` rule.
+- The calibration level shape list flagging digits the reader had already read.
+- Map/street log spam from a shared change-detection slot.
+
+### Removed
+- Shipped Default/Filtered presets. They were not verified against the current
+  font/digit rendering; missing pairs now report uncalibrated rather than
+  silently applying stale geometry.
+
 ## [0.3.0] - 2026-11-13
 
 ### Added
@@ -37,15 +88,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - The level derivation accepting truncated EXP numbers, which is what put dips in the history.
 - Ideal Ratio glyphs never separating: a gradient background first, then a full-width rule, both defeating the adaptive threshold.
 
-## [Unreleased]
-
-### Planned
-- Multi-resolution portability: anchor-relative boxes and scale-aware matching, so one calibration serves several client sizes. Depends on a two-resolution capture diff to establish whether the game UI is fixed-size, integer-scaled or letterboxed.
-- Level-up stitching and death markers on the chart.
-- Retention: compact raw samples older than 7 days into one-minute aggregates.
-- History window pan/zoom.
-- Per-map comparison once enough real data exists.
-
 ## [0.1.0] — 2026-11-11
 
 First release. Read-only: it observes the screen and never interacts with the game process.
@@ -65,5 +107,8 @@ First release. Read-only: it observes the screen and never interacts with the ga
 - **Docs.** Setup guide, behavioral spec, roadmap, decision log, data formats, dev notes.
 - **Tests.** Rust unit tests for the EXP table, glyph segmentation and matching, thresholding, settings/profile round-trips and window enumeration, plus `#[ignore]`d diagnostics for live capture.
 
-[Unreleased]: https://github.com/xinye83/mscout/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/xinye83/mscout/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/xinye83/mscout/releases/tag/v0.4.0
+[0.3.0]: https://github.com/xinye83/mscout/releases/tag/v0.3.0
+[0.2.0]: https://github.com/xinye83/mscout/releases/tag/v0.2.0
 [0.1.0]: https://github.com/xinye83/mscout/releases/tag/v0.1.0

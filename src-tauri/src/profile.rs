@@ -30,6 +30,10 @@ pub struct Profile {
     /// could change how the EXP was read and vice versa.
     #[serde(default)]
     pub level_atlas: Atlas,
+    /// Name/job text atlas, seeded from the Windows Arial face. The taught
+    /// `identities` fingerprints remain the exact fallback.
+    #[serde(default)]
+    pub identity_atlas: Atlas,
     #[serde(default)]
     pub maps: Vec<Template>,
     /// Taught street lines (the top line of the minimap label). Separate from `maps`
@@ -41,10 +45,6 @@ pub struct Profile {
 }
 
 impl Profile {
-    pub fn new(client_w: u32, client_h: u32) -> Self {
-        Self::new_for_mode(client_w, client_h, UiMode::default())
-    }
-
     pub fn new_for_mode(client_w: u32, client_h: u32, ui_mode: UiMode) -> Self {
         Self {
             client_w,
@@ -73,6 +73,8 @@ impl Profile {
     }
 
     pub fn summary(&self) -> ProfileSummary {
+        let glyph_size = self.atlas.common_glyph_size();
+
         ProfileSummary {
             key: self.key(),
             client_w: self.client_w,
@@ -83,6 +85,8 @@ impl Profile {
             maps: self.maps.len(),
             name: self.identities.name.as_ref().map(|t| t.label.clone()),
             job: self.identities.job.as_ref().map(|t| t.label.clone()),
+            source: self.atlas.source.clone(),
+            glyph_size,
         }
     }
 }
@@ -99,6 +103,8 @@ pub struct ProfileSummary {
     pub maps: usize,
     pub name: Option<String>,
     pub job: Option<String>,
+    pub source: String,
+    pub glyph_size: String,
 }
 
 struct Active {
@@ -246,18 +252,6 @@ where
     Ok(current.profile.clone())
 }
 
-/// Adopt an externally loaded profile (e.g. after a calibration edit).
-#[allow(dead_code)]
-pub fn activate_with(profile: Profile) -> Result<Profile, String> {
-    save(&profile)?;
-    let key = profile.key();
-    *lock(&ACTIVE) = Some(Active {
-        key,
-        profile: profile.clone(),
-    });
-    Ok(profile)
-}
-
 /// Delete the saved set for a client size and UI Size. If that set is the active
 /// one, drop the active pointer so the engine re-derives it (as an empty
 /// profile) on the next tick. Missing files count as already removed.
@@ -374,13 +368,16 @@ mod tests {
 
     #[test]
     fn key_is_the_client_size() {
-        assert_eq!(Profile::new(1366, 768).key(), "1366x768");
-        assert_eq!(Profile::new(1920, 1080).key(), "1920x1080");
+        assert_eq!(Profile::new_for_mode(1366, 768, UiMode::Default).key(), "1366x768");
+        assert_eq!(
+            Profile::new_for_mode(1920, 1080, UiMode::Ideal).key(),
+            "1920x1080@ideal"
+        );
     }
 
     #[test]
     fn summary_reports_readiness() {
-        let mut profile = Profile::new(1366, 768);
+        let mut profile = Profile::new_for_mode(1366, 768, UiMode::Default);
         let summary = profile.summary();
         assert!(!summary.calibrated);
         assert_eq!(summary.glyphs, 0);
@@ -393,7 +390,7 @@ mod tests {
 
     #[test]
     fn profile_round_trips_through_json() {
-        let mut profile = Profile::new(1920, 1080);
+        let mut profile = Profile::new_for_mode(1920, 1080, UiMode::Default);
         profile.maps.push(Template {
             label: "Victoria Road\nKerning City".into(),
             w: 2,
@@ -410,7 +407,10 @@ mod tests {
 
     #[test]
     fn bom_prefixed_profile_still_parses() {
-        let text = format!("\u{feff}{}", serde_json::to_string(&Profile::new(1, 1)).unwrap());
+        let text = format!(
+            "\u{feff}{}",
+            serde_json::to_string(&Profile::new_for_mode(1, 1, UiMode::Default)).unwrap()
+        );
         assert!(parse_profile(&text).is_some());
     }
 

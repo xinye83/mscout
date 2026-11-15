@@ -68,7 +68,7 @@ Other environment traps — `NODE_ENV=production` hiding devDependencies, npm bl
 npm run tauri dev
 ```
 
-That starts the Vite dev server on `http://localhost:1420`, compiles the Rust crate in debug mode (the first run takes several minutes), and opens the overlay plus a tray icon. Leave the terminal open; closing it stops the app.
+That starts the Vite dev server on `http://localhost:1420`, compiles the Rust crate in debug mode, and opens the overlay plus a tray icon. Leave the terminal open; closing it stops the app.
 
 The overlay starts click-through (every click goes to the game). Use the hotkeys:
 
@@ -79,7 +79,30 @@ The overlay starts click-through (every click goes to the game). Use the hotkeys
 | `Ctrl+Alt+V` | Show / hide the overlay |
 | `Ctrl+Alt+H` | History window |
 
-Then run a one-time calibration — attach the window, freeze a frame, draw the boxes, learn the EXP digits, teach the map/name/job. Steps and pitfalls are in the README's *Calibrating* section.
+### Calibrate
+
+Attach the game window, then:
+
+1. Open calibration: tray → *Calibrate boxes…*, the **Calibrate** button in the
+   picker, or the overlay's **calibrate** button when the current pair has no
+   profile. The overlay reports the reason; it never opens the window by itself.
+2. **Freeze frame**, then draw boxes only when needed. Shipped presets fill the
+   EXP, level, name and job boxes for their supported client sizes/UI Size; other
+   pairs need one pass. Draw the EXP box with a few pixels of slack on the right
+   so a longer number cannot clip `]`.
+3. **Locate your MSCW folder** in the *Game assets* row. MScout reads the
+   client's digit atlas and seeds EXP/level, and matches map/street against the
+   client's own `String_000.wz` table. No typing or map teaching is needed.
+4. Name and job seed from Windows Arial once their boxes exist. Use **Correct
+   manually** only for a correction or a display the automatic path cannot read.
+5. **Test read** the frozen frame; it must match what is on screen before you
+   rely on it.
+
+Moving the game window is harmless: boxes are relative to the client area, and
+minimap detection follows the panel. Calibration is stored per client size and
+UI Size in `data/profiles/<W>x<H>[@mode].json`. Digits are per rendered font
+size, so EXP, level tiles and HP/MP numbers can have separate variants. Current
+preset support and the Default/Filtered status are in [PRESETS.md](PRESETS.md).
 
 ---
 
@@ -107,7 +130,7 @@ The release build sets `codegen-units = 1`, `lto = true` and `strip = true`, so 
 
 Equivalent for **portable** use: copy the release exe plus its `data/` folder anywhere.
 
-`data/` is gitignored because it contains personal state — your calibration bitmaps, character name, and captured play samples. See [DATA.md](DATA.md) for formats, and `data/profiles/<W>x<H>.json` for the per-resolution calibration.
+`data/` is gitignored because it contains personal state — your calibration bitmaps, character name, and captured play samples. See [DATA.md](DATA.md) for formats, and `data/profiles/<W>x<H>[@mode].json` for the per-resolution and UI-size calibration.
 
 ---
 
@@ -118,8 +141,8 @@ Equivalent for **portable** use: copy the release exe plus its `data/` folder an
 | `npm` not recognised | Node not on `PATH` — see the `fnm env` line above |
 | `link.exe not found` | Visual Studio Build Tools / C++ workload missing |
 | Blank window | WebView2 runtime missing |
-| Overlay shows `not calibrated for WxH` | that client size has no profile yet — run calibration |
-| Overlay shows `unknown` map | that map was never taught at this resolution |
+| Overlay shows `not calibrated for WxH` | that client size/UI Size has no profile yet — run calibration |
+| Overlay shows `unknown` map | the map is missing from the client table, or the UI Size's label size does not match the Ideal Arial Bold 12 index — teach a correction |
 | Build fails with `EBUSY` on a DLL | a previous instance is still running; quit it from the tray first |
 | Capture fails on fullscreen | the game must run windowed or borderless; exclusive fullscreen cannot be captured without hooking, which is out of scope |
 
@@ -130,6 +153,6 @@ Equivalent for **portable** use: copy the release exe plus its `data/` folder an
 The helper never touches the game process: no memory reading, no injection, no input. It reads pixels via the OS compositor. That imposes two rules on the game:
 
 - Run **windowed or borderless**. Exclusive fullscreen cannot be captured or overlaid.
-- Run at a **client size you have calibrated**. Changing resolution switches to that size's profile; a size never calibrated needs one calibration pass.
+- Run at a **client size and UI Size you have calibrated**. Changing either switches profiles; a pair never calibrated needs one calibration pass. Only Ideal Ratio ships presets (1366×768, 1920×1080, 1920×1200); Default/Filtered currently need manual calibration and do not have a verified automatic font/digit path.
 
 See [SPEC.md §1](SPEC.md) for the full constraint list and the reasoning behind it.

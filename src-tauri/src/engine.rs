@@ -20,6 +20,13 @@ const MAP_DISTANCE_LIMIT: f64 = 12.0;
 /// How close a read label has to be to a taught one before the taught name wins.
 /// Letters are read one glyph at a time, so a near miss is expected now and then.
 const MAP_SIMILARITY: f64 = 0.75;
+/// How often a profile with no glyphs retries seeding from the installed client.
+/// Parsing the 35 MB canvas archive is not free, and a readout that is not on
+/// screen yet would otherwise make the engine rebuild it every second.
+const SEED_RETRY: Duration = Duration::from_secs(30);
+/// Font-seeding retry cadence. Rendering Arial for every candidate size is
+/// heavier than the digit seed, so a failed attempt backs off the same way.
+const TEXT_SEED_RETRY: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -119,6 +126,8 @@ struct EngineState {
     published_profile: Option<Profile>,
     anchored: Option<(i32, i32)>,
     good_reads: usize,
+    last_seed_attempt: Option<std::time::Instant>,
+    identity_seed_attempt: Option<std::time::Instant>,
 }
 
 impl EngineState {
@@ -132,6 +141,8 @@ impl EngineState {
             published_profile: None,
             anchored: None,
             good_reads: 0,
+            last_seed_attempt: None,
+            identity_seed_attempt: None,
         }
     }
 
@@ -157,6 +168,8 @@ impl EngineState {
         self.outcomes.clear();
         self.last_sample = None;
         self.good_reads = 0;
+        self.last_seed_attempt = None;
+        self.identity_seed_attempt = None;
     }
 }
 
@@ -289,6 +302,78 @@ fn run<R: Runtime>(app: AppHandle<R>) {
     }
 }
 
+/// Seed the active profile's digit atlases from the installed client, using this
+/// frame to measure the rendered glyph height. Returns whether anything was
+/// written. Best-effort by design: an unset folder, a missing archive or a
+/// readout that is not on screen all leave the profile untouched.
+fn seed_from_game(frame: &Frame, profile: &profile::Profile) -> bool {
+    let Some(dir) = settings::mscw_dir() else {
+        return false;
+    };
+    let dir = std::path::Path::new(&dir);
+
+    let Some(exp) = profile
+        .calibration
+        .exp
+        .filter(Region::is_usable)
+        .and_then(|region| ocr::crop_gray(frame, region))
+    else {
+        return false;
+    };
+    let (stored, height) = match crate::game_font::seed_exp_atlas(&exp, dir) {
+        Ok(seeded) => seeded,
+        Err(error) => {
+            // Reachable every SEED_RETRY while the readout is hidden or the
+            // archive is unreadable; the log says why instead of failing silently.
+            crate::calibration::log(&format!("seed from game failed: {error}"));
+            return false;
+        }
+    };
+    if let Err(error) = settings::save_atlas(&stored) {
+        crate::calibration::log(&format!("seed from game could not save: {error}"));
+        return false;
+    }
+
+    // The level box is optional and may not be on screen; seed it when it reads.
+    if let Some(level) = profile
+        .calibration
+        .level
+        .filter(Region::is_usable)
+        .and_then(|region| ocr::crop_gray(frame, region))
+    {
+        if let Ok((level_stored, _)) = crate::game_font::seed_level_atlas(&level, dir) {
+            let _ = settings::save_level_atlas(&level_stored);
+        }
+    }
+
+    crate::calibration::log(&format!(
+        "auto-seeded {}x{} digits at h={height} from {}",
+        profile.client_w, profile.client_h, dir.display()
+    ));
+    true
+}
+
+/// Seed the name/job letter atlas from whichever of the two boxes is on screen.
+/// The job box usually has capitals and a descender, which is the best sample for
+/// choosing the Arial pixel height.
+fn seed_identity_from_frame(
+    frame: &Frame,
+    calibration: &Calibration,
+) -> Option<(settings::Atlas, u32)> {
+    for region in [calibration.job, calibration.name] {
+        let Some(region) = region.filter(Region::is_usable) else {
+            continue;
+        };
+        let Some(gray) = ocr::crop_gray(frame, region) else {
+            continue;
+        };
+        if let Some(seeded) = crate::font_seed::seed_identity(&gray) {
+            return Some(seeded);
+        }
+    }
+    None
+}
+
 fn tick(
     engine: &mut EngineState,
     status: &TargetStatus,
@@ -336,7 +421,7 @@ fn tick(
 
     // The profile is chosen by the live client size, so a resolution change
     // switches calibration sets instead of invalidating everything.
-    let profile = profile::activate(frame.width, frame.height)
+    let mut profile = profile::activate(frame.width, frame.height)
         .map_err(|error| TickError::Lost(format!("profile failed: {error}")))?;
 
     if !profile.is_calibrated() {
@@ -345,7 +430,47 @@ fn tick(
             profile.client_w, profile.client_h
         )));
     }
+
+    // Name/job are Arial: seed a text atlas from the live crop once, then read
+    // them without asking the player to teach the letters. Fingerprints remain
+    // the exact fallback.
+    let has_identity_box = profile
+        .calibration
+        .name
+        .or(profile.calibration.job)
+        .filter(Region::is_usable)
+        .is_some();
+    if has_identity_box && profile.identity_atlas.glyphs.is_empty() {
+        let due = engine
+            .identity_seed_attempt
+            .map_or(true, |attempt| attempt.elapsed() >= TEXT_SEED_RETRY);
+        if due {
+            engine.identity_seed_attempt = Some(std::time::Instant::now());
+            if let Some((stored, px)) = seed_identity_from_frame(&frame, &profile.calibration) {
+                profile.identity_atlas = stored.clone();
+                let _ = settings::save_identity_atlas(&stored);
+                crate::calibration::log(&format!(
+                    "auto-seeded name/job text at {px}px from Arial"
+                ));
+            }
+        }
+    }
+
     if !profile.has_glyphs() {
+        // The digits are a bitmap atlas the installed client already ships. Seed
+        // from it before reporting failure, so a known size reads with no
+        // calibration step. The next tick picks the seeded profile up; one second
+        // later is soon enough for a 1 Hz reader. Retried on a slow cadence so a
+        // readout that is not on screen cannot trigger a WZ parse every tick.
+        let due = engine
+            .last_seed_attempt
+            .map_or(true, |attempt| attempt.elapsed() >= SEED_RETRY);
+        if due {
+            engine.last_seed_attempt = Some(std::time::Instant::now());
+            if seed_from_game(&frame, &profile) {
+                return Err(TickError::Transient("seeded the digits from the game".into()));
+            }
+        }
         return Err(TickError::Uncalibrated(format!(
             "no digits learned for {}x{}",
             profile.client_w, profile.client_h
@@ -491,7 +616,7 @@ pub(crate) fn read_frame(
         CROSS_CHECK_TOLERANCE
     };
     let level_agrees = required
-        .map(|required| (pct - exp as f64 / required as f64 * 100.0).abs() <= tolerance)
+        .map(|required| (pct - exp as f64 / required * 100.0).abs() <= tolerance)
         .unwrap_or(true);
     let (lv, level_text) = if level_agrees {
         (lv, level_text)
@@ -503,30 +628,34 @@ pub(crate) fn read_frame(
         (0, String::new())
     };
     let expected_pct = match exp_table::required(lv) {
-        Some(required) => exp as f64 / required as f64 * 100.0,
+        Some(required) => exp as f64 / required * 100.0,
         None => pct,
     };
 
     // The map is stored as its name; the street is a separate fingerprint. Combine
     // them into the "street\nname" string the overlay splits into subtitle + headline.
     let map_name = match_map(frame, calibration, maps);
-    let street = match (calibration.street.filter(Region::is_usable), streets) {
-        (Some(region), streets) => match_street(frame, region, streets),
-        _ => None,
-    };
+    let street = match_street(frame, calibration.street, streets);
     let map = match street {
         Some(street) if map_name != "unknown" => format!("{street}\n{map_name}"),
         _ => map_name,
     };
 
-    let name = match (calibration.name.filter(Region::is_usable), identities.name.as_ref()) {
-        (Some(region), Some(template)) => match_template(frame, region, template),
-        _ => None,
-    };
-    let job = match (calibration.job.filter(Region::is_usable), identities.job.as_ref()) {
-        (Some(region), Some(template)) => match_template(frame, region, template),
-        _ => None,
-    };
+    // The name/job boxes are Arial: read them as text from the seeded letter
+    // atlas, and fall back to the exact fingerprint when that is not available.
+    let identity_atlas = Atlas::from_settings(&settings::load_identity_atlas());
+    let name = read_identity(
+        frame,
+        calibration.name,
+        &identity_atlas,
+        identities.name.as_ref(),
+    );
+    let job = read_identity(
+        frame,
+        calibration.job,
+        &identity_atlas,
+        identities.job.as_ref(),
+    );
 
     Ok(Readings {
         lv,
@@ -553,12 +682,20 @@ pub(crate) fn read_frame(
 /// one. The level is read every tick, so logging unconditionally would bury the
 /// log under thousands of identical lines.
 fn log_once(message: &str) {
-    static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
-    let mut last = LAST.lock().unwrap_or_else(|error| error.into_inner());
-    if *last == message {
+    use std::collections::HashMap;
+
+    // One last message per category (the text before the first colon), so the
+    // map and street matches can log independently instead of alternating and
+    // defeating a single shared slot.
+    static LAST: std::sync::Mutex<Option<HashMap<String, String>>> =
+        std::sync::Mutex::new(None);
+    let key = message.split(':').next().unwrap_or(message).to_string();
+    let mut guard = LAST.lock().unwrap_or_else(|error| error.into_inner());
+    let last = guard.get_or_insert_with(HashMap::new);
+    if last.get(&key).map(String::as_str) == Some(message) {
         return;
     }
-    *last = message.to_string();
+    last.insert(key, message.to_string());
     crate::calibration::log(message);
 }
 
@@ -581,7 +718,7 @@ fn level_reading(
         log_once("level_reading: no level glyphs learned yet");
         return unknown;
     }
-    match atlas.recognize(&gray) {
+    match atlas.recognize_level(&gray) {
         Ok((text, conf)) => match ocr::parse_level(&text) {
             Some(lv) if exp_table::required(lv).is_some() => Ok((lv, text, conf)),
             Some(lv) => {
@@ -604,6 +741,34 @@ fn level_reading(
             unknown
         }
     }
+}
+
+/// Read one identity line as text, falling back to its taught fingerprint.
+///
+/// The text path is what removes the one-time teach. It is only trusted when the
+/// line is non-empty and reasonably confident; a poor read is left to the exact
+/// fingerprint rather than displayed as a wrong name.
+fn read_identity(
+    frame: &Frame,
+    region: Option<Region>,
+    atlas: &Atlas,
+    template: Option<&Template>,
+) -> Option<String> {
+    let region = region.filter(Region::is_usable)?;
+
+    if !atlas.glyphs.is_empty() {
+        if let Some(gray) = ocr::crop_gray(frame, region) {
+            let gap = (gray.h as i32 / 3).max(2);
+            if let Ok((text, confidence)) = atlas.recognize_text(&gray, gap) {
+                let text = crate::font_seed::fix_identity_case(text.trim());
+                if !text.is_empty() && confidence >= 0.55 {
+                    return Some(text);
+                }
+            }
+        }
+    }
+
+    template.and_then(|template| match_template(frame, region, template))
 }
 
 fn match_template(frame: &Frame, region: Region, template: &Template) -> Option<String> {
@@ -629,7 +794,38 @@ fn match_template(frame: &Frame, region: Region, template: &Template) -> Option<
     }
 }
 
-fn match_street(frame: &Frame, region: Region, streets: &[Template]) -> Option<String> {
+fn match_street(
+    frame: &Frame,
+    region: Option<Region>,
+    streets: &[Template],
+) -> Option<String> {
+    if let Some(region) = region.filter(Region::is_usable) {
+        if let Some(street) = match_street_fingerprint(frame, region, streets) {
+            return Some(street);
+        }
+    }
+
+    // Nothing taught matched (or no box was drawn): the client's own map table
+    // has the street line, and detection finds it without a stored box.
+    let dir = settings::mscw_dir()?;
+    let index = crate::font_seed::label_index(std::path::Path::new(&dir))?;
+    let lines = ocr::map_label_lines(frame)?;
+    if lines.len() < 2 {
+        return None;
+    }
+    let (street, score) =
+        crate::font_seed::match_label(lines.first()?, &index.streets, 8, 0.55)?;
+    log_once(&format!(
+        "street from the client's map table: {street:?} (score {score:.2})"
+    ));
+    Some(street)
+}
+
+fn match_street_fingerprint(
+    frame: &Frame,
+    region: Region,
+    streets: &[Template],
+) -> Option<String> {
     let crop = ocr::crop_gray(frame, region)?;
     let mut best: Option<(&str, f64)> = None;
     for template in streets {
@@ -687,8 +883,15 @@ fn match_map(frame: &Frame, calibration: &Calibration, templates: &[Template]) -
         return name;
     }
 
-    // Nothing taught matched: read the label as text, which is how a map the app has
-    // never seen gets named. A near miss snaps to a name that was taught explicitly.
+    // Nothing taught matched: the client's own map table has the exact name. The
+    // label is Arial Bold 12, so a width filter plus a shape-sequence DTW against
+    // the rendered names identifies it without segmenting the line.
+    if let Some(name) = match_map_name(frame) {
+        return name;
+    }
+
+    // Last resort: read the label as text, which is how a map not in the table gets
+    // named. A near miss snaps to a name that was taught explicitly.
     let map_atlas = Atlas::from_settings(&settings::load_map_atlas());
     if let Some(lines) = ocr::read_map_text(frame, &map_atlas) {
         // The map name is the bottom line; the street is matched separately.
@@ -714,15 +917,27 @@ fn match_map(frame: &Frame, calibration: &Calibration, templates: &[Template]) -
     "unknown".into()
 }
 
+fn match_map_name(frame: &Frame) -> Option<String> {
+    let dir = settings::mscw_dir()?;
+    let index = crate::font_seed::label_index(std::path::Path::new(&dir))?;
+    let line = ocr::map_label_lines(frame)?.last()?.clone();
+    let (name, score) =
+        crate::font_seed::match_label(&line, &index.map_names, 8, 0.55)?;
+    log_once(&format!(
+        "map name from the client's map table: {name:?} (score {score:.2})"
+    ));
+    Some(name)
+}
+
 fn match_map_fingerprint(
     frame: &Frame,
     calibration: &Calibration,
     templates: &[Template],
 ) -> Option<String> {
-    // The drawn map box wins when there is one: it is placed by eye around the two
-    // label lines, whereas detection guesses the boundary from the panel and clips
-    // the ends of the name, which inflates every distance. Detection stays as the
-    // fallback for a profile whose minimap has not been boxed.
+    // Detection finds the whole label and follows a longer map name; `map_label`
+    // only falls back to the stored box when detection fails. A stored box drawn
+    // around a shorter name must not clip the next map's name, or two maps that
+    // share a prefix would look identical.
     let crop = ocr::map_label(frame, calibration.map_box())?;
 
     let mut best: Option<(&str, f64)> = None;
@@ -844,6 +1059,33 @@ mod tests {
         )
         .expect("read");
         println!("map={:?} (taught {:?})", readings.map, name);
+    }
+
+    #[test]
+    #[ignore = "diagnostic: a clipping stored map box must not override detection"]
+    fn map_label_ignores_a_clipping_box() {
+        let frame = load_bmp_frame(&crate::data_dir().unwrap().join("debug-frame.bmp"));
+        let detected = ocr::read_map_label(&frame).expect("detected label");
+        // The box the 1920x1080 Ideal profile shipped with, measured around a
+        // shorter name (70 px). It must not clip a 142 px name.
+        let boxed = ocr::map_label(
+            &frame,
+            Some(Region { x: 72, y: 85, w: 70, h: 11 }),
+        )
+        .expect("boxed label");
+        println!(
+            "detected {}x{}, boxed {}x{}, distance {:?}",
+            detected.w,
+            detected.h,
+            boxed.w,
+            boxed.h,
+            ocr::map_distance(&boxed, &detected)
+        );
+        assert_eq!(
+            ocr::map_distance(&boxed, &detected),
+            Some(0.0),
+            "a stored box must not clip the detected label"
+        );
     }
 
     #[test]
@@ -1177,6 +1419,97 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "proof: reads saved full frames, including the client map table"]
+    fn reads_saved_map_frames() {
+        let data = crate::data_dir().expect("data dir");
+        for (folder, map_name, street) in [
+            (
+                "20261114-122032",
+                "Kerning City Civic Center",
+                "Victoria Road",
+            ),
+            ("20261114-122137", "Sunset Sky", "Victoria Road"),
+        ] {
+            let path = data.join("map-samples").join(folder).join("frame.bmp");
+            if !path.is_file() {
+                println!("{folder}: no frame.bmp");
+                continue;
+            }
+            let frame = load_bmp_frame(&path);
+            let profile = profile::activate(frame.width, frame.height).expect("profile");
+            let mscw = settings::mscw_dir().map(std::path::PathBuf::from);
+
+            // Simulate a clean install: the preset supplies boxes, everything
+            // glyph-like is seeded from the saved frame + the installed client.
+            let exp_stored = if profile.atlas.glyphs.is_empty() {
+                let region = profile.calibration.exp.expect("EXP box");
+                let gray = ocr::crop_gray(&frame, region).expect("EXP crop");
+                let dir = mscw.as_ref().expect("mscwDir");
+                crate::game_font::seed_exp_atlas(&gray, dir)
+                    .expect("seed EXP")
+                    .0
+            } else {
+                profile.atlas.clone()
+            };
+            let level_stored = if profile.level_atlas.glyphs.is_empty() {
+                let mut stored = settings::Atlas::default();
+                if let Some(region) = profile.calibration.level {
+                    if let Some(gray) = ocr::crop_gray(&frame, region) {
+                        if let Ok((seeded, _)) = crate::game_font::seed_level_atlas(
+                            &gray,
+                            mscw.as_ref().expect("mscwDir"),
+                        ) {
+                            stored = seeded;
+                        }
+                    }
+                }
+                stored
+            } else {
+                profile.level_atlas.clone()
+            };
+            if profile.identity_atlas.glyphs.is_empty() {
+                for region in [profile.calibration.job, profile.calibration.name] {
+                    let Some(region) = region.filter(Region::is_usable) else {
+                        continue;
+                    };
+                    let Some(gray) = ocr::crop_gray(&frame, region) else {
+                        continue;
+                    };
+                    if let Some((stored, _)) = crate::font_seed::seed_identity(&gray) {
+                        settings::save_identity_atlas(&stored).expect("save identity");
+                        break;
+                    }
+                }
+            }
+
+            let readings = read_frame(
+                &frame,
+                &profile.calibration,
+                &Atlas::from_settings(&exp_stored),
+                &Atlas::from_settings(&level_stored),
+                &profile.maps,
+                &profile.streets,
+                &profile.identities,
+            )
+            .expect("read saved frame");
+            println!("{folder}: {readings:?}");
+            assert_eq!(
+                readings.map,
+                format!("{street}\n{map_name}"),
+                "the client map table should name this frame"
+            );
+            assert_eq!(readings.lv, 35, "level should be read/seeded");
+            assert!(
+                readings.exp > 70_000,
+                "EXP should be read/seeded: {}",
+                readings.exp
+            );
+            assert_eq!(readings.name.as_deref(), Some("Euroblood"));
+            assert_eq!(readings.job.as_deref(), Some("Page"));
+        }
+    }
+
+    #[test]
     #[ignore = "diagnostic: reads the live game with saved settings"]
     fn live_settings_read() {
         let selector = settings::WindowSelector {
@@ -1192,10 +1525,10 @@ mod tests {
             .ok()
             .and_then(|value| settings::UiMode::parse(&value))
             .unwrap_or_default();
-        let profile = crate::profile::load_for_mode(
+        // Activate it so `read_frame` sees the same profile the engine would.
+        let profile = crate::profile::activate(
             width.parse().expect("width"),
             height.parse().expect("height"),
-            ui_mode,
         )
         .expect("profile on disk");
         println!("profile {} ({:?})", profile.key(), ui_mode);
@@ -1305,6 +1638,61 @@ mod tests {
             Ok(readings) => println!("{readings:?}"),
             Err(error) => println!("read failed: {error}"),
         }
+    }
+
+    #[test]
+    #[ignore = "diagnostic: explains the live level box against the saved level atlas"]
+    fn explains_live_level_box() {
+        let width: u32 = std::env::var("MSCOUT_W")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1920);
+        let height: u32 = std::env::var("MSCOUT_H")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1080);
+        let ui_mode = std::env::var("MSCOUT_UI_MODE")
+            .ok()
+            .and_then(|value| settings::UiMode::parse(&value))
+            .unwrap_or(settings::UiMode::Ideal);
+        let profile = profile::load_for_mode(width, height, ui_mode).expect("profile");
+        let region = profile.calibration.level.expect("level box");
+
+        let selector = settings::WindowSelector {
+            title: "MapleStory".into(),
+            process: "MapleStory.exe".into(),
+        };
+        let window = window_target::resolve_selector(&selector).expect("game window");
+        let frame = capture::client_frame(window.hwnd).expect("frame");
+        let gray = ocr::crop_gray(&frame, region).expect("crop");
+        println!("level box {region:?} crop {}x{}", gray.w, gray.h);
+        println!(
+            "adaptive shapes: {:?}",
+            ocr::segments(&gray)
+                .iter()
+                .map(|shape| (shape.w, shape.h, shape.x, shape.y))
+                .collect::<Vec<_>>()
+        );
+        println!(
+            "bright shapes: {:?}",
+            ocr::bright_segments(&gray, ocr::TEXT_FLOOR_PUB)
+                .iter()
+                .map(|shape| (shape.w, shape.h, shape.x, shape.y))
+                .collect::<Vec<_>>()
+        );
+        for (row, line) in ocr::shape_art(&gray).iter().enumerate() {
+            println!("{row:2} {line}");
+        }
+
+        let atlas = Atlas::from_settings(&profile.level_atlas);
+        for guess in atlas.explain(&gray) {
+            println!(
+                "  shape {}x{} at {},{} -> '{}' d={:.1} known={}",
+                guess.w, guess.h, guess.x, guess.y, guess.ch, guess.distance, guess.known
+            );
+        }
+        println!("recognize = {:?}", atlas.recognize(&gray));
+        println!("recognize_level = {:?}", atlas.recognize_level(&gray));
     }
 
     #[test]

@@ -13,6 +13,9 @@ mod calibration;
 mod capture;
 mod engine;
 mod exp_table;
+mod font_seed;
+mod game_font;
+mod map_names;
 mod ocr;
 mod preset;
 mod profile;
@@ -555,6 +558,7 @@ pub fn run() {
             calibration::get_learning,
             calibration::learn_atlas,
             calibration::learn_level_atlas,
+            calibration::seed_atlas,
             calibration::teach_map,
             calibration::teach_street,
             calibration::map_label_crop,
@@ -578,7 +582,10 @@ pub fn run() {
             profile::active_profile,
             profile::delete_profile,
             settings::ui_modes,
-            settings::set_ui_mode
+            settings::set_ui_mode,
+            game_font::get_mscw_status,
+            game_font::set_mscw_dir,
+            game_font::pick_mscw_dir
         ])
         .setup(|app| {
             let handle = app.handle().clone();

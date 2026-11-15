@@ -47,6 +47,23 @@ pub struct LearningInfo {
     pub maps: Vec<String>,
     pub name: Option<String>,
     pub job: Option<String>,
+    /// `game` when seeded from the client atlas, `taught` when the player typed
+    /// the digits, empty for a preset or a legacy set.
+    pub source: String,
+    /// The most common stored glyph size, e.g. `5x7`.
+    pub glyph_size: String,
+    /// Where the level set came from. It is seeded from the same client atlas as
+    /// EXP but at its own rendered size, so it is reported separately.
+    pub level_source: String,
+    /// Most common stored level glyph size, e.g. `7x7`.
+    pub level_size: String,
+    /// Characters in the name/job letter atlas.
+    pub identity_letters: String,
+    /// `font` when the name/job atlas was seeded from Arial, `taught` when the
+    /// player corrected it, empty when nothing is seeded.
+    pub identity_source: String,
+    /// Most common identity glyph size, e.g. `5x7` (seeded from Arial 12 px).
+    pub identity_size: String,
 }
 
 fn digit_coverage(atlas: &Atlas) -> String {
@@ -56,14 +73,21 @@ fn digit_coverage(atlas: &Atlas) -> String {
         .collect()
 }
 
-fn learning_info(atlas: &Atlas) -> LearningInfo {
-    let identities = settings::load_identities();
-    let level_atlas = Atlas::from_settings(&settings::load_level_atlas());
+/// The learning view for a stored atlas. Everything shown comes from what is on
+/// disk, so the window cannot report a different source than the reader uses.
+fn learning_info(stored: &settings::Atlas) -> LearningInfo {
+    let atlas = Atlas::from_settings(stored);
+    let level_stored = settings::load_level_atlas();
+    let level_atlas = Atlas::from_settings(&level_stored);
+    let level_size = level_stored.common_glyph_size();
     let map_atlas = Atlas::from_settings(&settings::load_map_atlas());
+    let identity_stored = settings::load_identity_atlas();
+    let identity_atlas = Atlas::from_settings(&identity_stored);
+    let identities = settings::load_identities();
 
     LearningInfo {
         learned: atlas.learned(),
-        coverage: digit_coverage(atlas),
+        coverage: digit_coverage(&atlas),
         level_learned: level_atlas.learned(),
         level_coverage: digit_coverage(&level_atlas),
         map_letters: map_atlas.learned(),
@@ -73,6 +97,13 @@ fn learning_info(atlas: &Atlas) -> LearningInfo {
             .collect(),
         name: identities.name.map(|template| template.label),
         job: identities.job.map(|template| template.label),
+        source: stored.source.clone(),
+        glyph_size: stored.common_glyph_size(),
+        level_source: level_stored.source,
+        level_size,
+        identity_letters: identity_atlas.learned(),
+        identity_source: identity_stored.source.clone(),
+        identity_size: identity_stored.common_glyph_size(),
     }
 }
 
@@ -133,6 +164,7 @@ pub fn calibration_for(client_w: u32, client_h: u32) -> Option<Calibration> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // the IPC payload is one flat object per box
 pub fn set_calibration(
     client_w: u32,
     client_h: u32,
@@ -176,7 +208,7 @@ pub fn set_calibration(
 
 #[tauri::command]
 pub fn get_learning() -> LearningInfo {
-    learning_info(&Atlas::from_settings(&settings::load_atlas()))
+    learning_info(&settings::load_atlas())
 }
 
 /// Make the profile for this preview frame active, so every teach/probe command
@@ -231,14 +263,76 @@ fn learn_region(serial: u64, text: String, target: &str) -> Result<LearningInfo,
         log(&format!("learn_region failed: {error}"));
         return Err(error);
     }
+    let stored = atlas.to_settings();
     if level {
-        settings::save_level_atlas(&atlas.to_settings())?;
+        settings::save_level_atlas(&stored)?;
     } else {
-        settings::save_atlas(&atlas.to_settings())?;
+        settings::save_atlas(&stored)?;
     }
     log(&format!("learn_region: atlas now {} glyphs", atlas.glyphs.len()));
 
-    Ok(learning_info(&atlas))
+    Ok(learning_info(&stored))
+}
+
+/// Seed the EXP atlas from the installed client's bitmap atlas. The rendered
+/// size comes from the live EXP box, so the same client atlas serves every
+/// resolution that draws at that size.
+#[tauri::command]
+pub fn seed_atlas(serial: u64) -> Result<LearningInfo, String> {
+    let frame = cached_frame(serial)?;
+    use_frame_profile(&frame)?;
+    let calibration = settings::load_calibration();
+    let region = calibration
+        .exp
+        .filter(Region::is_usable)
+        .ok_or("save the EXP box first")?;
+    let gray =
+        ocr::crop_gray(&frame, region).ok_or("the EXP box is outside the window")?;
+    let dir = settings::mscw_dir().ok_or("choose your MapleStory MSCW folder first")?;
+    let (stored, height) =
+        crate::game_font::seed_exp_atlas(&gray, std::path::Path::new(&dir))?;
+    settings::save_atlas(&stored)?;
+
+    // The level box is optional, but when it is drawn and reads digits, seed it
+    // too — it is the same font drawn wider, so it needs no teaching.
+    let mut level_note = String::new();
+    if let Some(level_region) = calibration.level.filter(Region::is_usable) {
+        if let Some(level_gray) = ocr::crop_gray(&frame, level_region) {
+            match crate::game_font::seed_level_atlas(&level_gray, std::path::Path::new(&dir)) {
+                Ok((level_stored, (w, h))) => {
+                    settings::save_level_atlas(&level_stored)?;
+                    level_note = format!(", level {w}x{h}");
+                }
+                Err(error) => log(&format!("seed_atlas: level not seeded: {error}")),
+            }
+        }
+    }
+
+    // Name/job are Arial and can be seeded from the same frozen frame. A taught
+    // set is left alone; a font set is refreshed, since the size is measured.
+    let identity_stored = settings::load_identity_atlas();
+    let mut identity_note = String::new();
+    if identity_stored.glyphs.is_empty() || identity_stored.source == "font" {
+        for region in [calibration.job, calibration.name] {
+            let Some(region) = region.filter(Region::is_usable) else {
+                continue;
+            };
+            let Some(identity_gray) = ocr::crop_gray(&frame, region) else {
+                continue;
+            };
+            if let Some((identity, px)) = crate::font_seed::seed_identity(&identity_gray) {
+                settings::save_identity_atlas(&identity)?;
+                identity_note = format!(", name/job {px}px");
+                break;
+            }
+        }
+    }
+
+    log(&format!(
+        "seed_atlas: {} glyphs at h={height}{level_note}{identity_note} from {dir}",
+        stored.glyphs.len()
+    ));
+    Ok(learning_info(&stored))
 }
 
 #[tauri::command]
@@ -271,7 +365,7 @@ pub fn teach_map(serial: u64, name: String) -> Result<LearningInfo, String> {
     // Learn the map-name line (the bottom one) into the label letter atlas.
     if let Some(line) = ocr::map_label_lines(&frame).and_then(|lines| lines.last().cloned()) {
         let mut map_atlas = Atlas::from_settings(&settings::load_map_atlas());
-        let _ = map_atlas.learn(&name, &line);
+        let _ = map_atlas.learn_text(&name, &line);
         settings::save_map_atlas(&map_atlas.to_settings())?;
         log(&format!(
             "teach_map: learned letters {:?}",
@@ -279,7 +373,7 @@ pub fn teach_map(serial: u64, name: String) -> Result<LearningInfo, String> {
         ));
     }
 
-    Ok(learning_info(&Atlas::from_settings(&settings::load_atlas())))
+    Ok(learning_info(&settings::load_atlas()))
 }
 
 /// Taught separately from the map: a street is shared by several maps, so it is
@@ -315,11 +409,11 @@ pub fn teach_street(serial: u64, street: String) -> Result<LearningInfo, String>
     // Learn the street line (the top one) into the label letter atlas.
     if let Some(line) = ocr::map_label_lines(&frame).and_then(|lines| lines.first().cloned()) {
         let mut map_atlas = Atlas::from_settings(&settings::load_map_atlas());
-        let _ = map_atlas.learn(&street, &line);
+        let _ = map_atlas.learn_text(&street, &line);
         settings::save_map_atlas(&map_atlas.to_settings())?;
     }
 
-    Ok(learning_info(&Atlas::from_settings(&settings::load_atlas())))
+    Ok(learning_info(&settings::load_atlas()))
 }
 
 #[tauri::command]
@@ -361,7 +455,7 @@ pub fn teach_identity(serial: u64, kind: String, label: String) -> Result<Learni
     }
     settings::save_identities(&identities)?;
 
-    Ok(learning_info(&Atlas::from_settings(&settings::load_atlas())))
+    Ok(learning_info(&settings::load_atlas()))
 }
 
 #[tauri::command]
@@ -478,8 +572,8 @@ pub struct ExpGlyph {
     pub ch: String,
     pub distance: f64,
     pub known: bool,
-    /// The normalised shape, so it can be labelled without re-cropping.
-    pub cell: String,
+    /// The normalised native shape, so it can be labelled without re-cropping.
+    pub bitmap: String,
 }
 
 /// Every shape in a box with its best guess, so one that cannot be segmented can be
@@ -508,8 +602,12 @@ pub fn box_glyphs(serial: u64, kind: String) -> Result<Vec<ExpGlyph>, String> {
     let gray = ocr::crop_gray(&frame, region)
         .ok_or_else(|| format!("the {kind} box is outside the window"))?;
 
-    Ok(atlas
-        .explain(&gray)
+    let guesses = if level {
+        atlas.explain_level(&gray)
+    } else {
+        atlas.explain(&gray)
+    };
+    Ok(guesses
         .into_iter()
         .map(|guess| ExpGlyph {
             x: region.x + guess.x,
@@ -519,7 +617,7 @@ pub fn box_glyphs(serial: u64, kind: String) -> Result<Vec<ExpGlyph>, String> {
             ch: guess.ch.to_string(),
             distance: guess.distance,
             known: guess.known,
-            cell: settings::to_hex(&guess.cell),
+            bitmap: settings::to_hex(&guess.bitmap),
         })
         .collect())
 }
@@ -529,16 +627,16 @@ pub fn exp_glyphs(serial: u64) -> Result<Vec<ExpGlyph>, String> {
     box_glyphs(serial, "exp".into())
 }
 
-/// Label one shape as a character. The cell comes straight from `box_glyphs`, so
-/// the exact pixels the player looked at are what gets stored — no re-cropping,
-/// which would reject one-pixel shapes like `.`.
+/// Label one shape as a character. The native bitmap comes straight from
+/// `box_glyphs`, so the exact pixels the player looked at are what gets stored —
+/// no re-cropping, which would reject one-pixel shapes like `.`.
 #[tauri::command]
 pub fn label_glyph(
     client_w: u32,
     client_h: u32,
     kind: String,
     ch: String,
-    cell: String,
+    bitmap: String,
     w: u32,
     h: u32,
 ) -> Result<LearningInfo, String> {
@@ -549,30 +647,37 @@ pub fn label_glyph(
         .filter(|_| trimmed.chars().count() == 1)
         .ok_or("pick a single character")?;
 
-    let bytes = settings::from_hex(&cell).ok_or("the shape data is invalid")?;
-    if bytes.len() != ocr::CELL_LEN {
+    let bytes = settings::from_hex(&bitmap).ok_or("the shape data is invalid")?;
+    if w == 0 || h == 0 || bytes.len() != w as usize * h as usize {
         return Err("the shape data is invalid".into());
     }
-    let mut shape = [0u8; ocr::CELL_LEN];
-    shape.copy_from_slice(&bytes);
 
     profile::activate(client_w, client_h)?;
     // Each readout owns its glyph set, so the shape is stored where the reader that
     // produced it will look for it.
     let level = kind == "level";
-    let mut atlas = if level {
-        Atlas::from_settings(&settings::load_level_atlas())
+    let stored = if level {
+        settings::load_level_atlas()
     } else {
-        Atlas::from_settings(&settings::load_atlas())
+        settings::load_atlas()
     };
-    atlas.learn_glyph(character, shape, w, h);
-    if level {
-        settings::save_level_atlas(&atlas.to_settings())?;
+    let source = stored.source.clone();
+    let mut atlas = Atlas::from_settings(&stored);
+    atlas.learn_glyph(character, bytes, w, h);
+    let mut updated = atlas.to_settings();
+    // A correction on a game-seeded set stays game-sourced, so the UI keeps
+    // showing "auto" and does not fall back to the type-the-readout flow.
+    updated.source = if source.is_empty() {
+        "taught".into()
     } else {
-        settings::save_atlas(&atlas.to_settings())?;
+        source
+    };
+    if level {
+        settings::save_level_atlas(&updated)?;
+    } else {
+        settings::save_atlas(&updated)?;
     }
-
-    Ok(learning_info(&atlas))
+    Ok(learning_info(&updated))
 }
 
 /// Forget every taught map fingerprint for this size, so stale or bad ones can be
@@ -581,11 +686,12 @@ pub fn label_glyph(
 pub fn clear_maps(client_w: u32, client_h: u32) -> Result<LearningInfo, String> {
     profile::activate(client_w, client_h)?;
     crate::profile::update(|profile| profile.maps.clear())?;
-    Ok(learning_info(&Atlas::from_settings(&settings::load_atlas())))
+    Ok(learning_info(&settings::load_atlas()))
 }
 
-/// Restore a size to its shipped preset: the boxes and glyph set are replaced,
-/// while the per-player teaches (map, name, job) are kept.
+/// Restore a size to its shipped preset: the boxes are replaced and both digit
+/// atlases are cleared, so the next frame reseeds them from the installed client
+/// (or they can be taught again). The per-player teaches (map, name, job) are kept.
 #[tauri::command]
 pub fn apply_preset(client_w: u32, client_h: u32) -> Result<(), String> {
     let ui_mode = crate::settings::ui_mode();
@@ -621,7 +727,11 @@ pub fn apply_preset(client_w: u32, client_h: u32) -> Result<(), String> {
         }
         profile.calibration.client_w = source.client_w.or(profile.calibration.client_w);
         profile.calibration.client_h = source.client_h.or(profile.calibration.client_h);
+        // Presets ship no glyph art, so this clears the digits. Both readouts are
+        // reset together: a preset that reseeded EXP but kept a stale level set
+        // would leave the two half-calibrated.
         profile.atlas = preset.atlas.clone();
+        profile.level_atlas = preset.level_atlas.clone();
     })?;
     Ok(())
 }
@@ -926,7 +1036,7 @@ pub fn review_frames() -> Vec<ReviewFrame> {
         })
         .collect();
 
-    frames.sort_by(|a, b| b.t.cmp(&a.t));
+    frames.sort_by_key(|frame| std::cmp::Reverse(frame.t));
     frames
 }
 
@@ -948,7 +1058,9 @@ pub fn label_review(id: String, text: String) -> Result<LearningInfo, String> {
         return Err("the stored frame is the wrong size".into());
     }
 
-    let mut atlas = Atlas::from_settings(&settings::load_atlas());
+    let stored = settings::load_atlas();
+    let source = stored.source.clone();
+    let mut atlas = Atlas::from_settings(&stored);
     atlas.learn(
         &text,
         &ocr::Gray {
@@ -957,10 +1069,18 @@ pub fn label_review(id: String, text: String) -> Result<LearningInfo, String> {
             px,
         },
     )?;
-    settings::save_atlas(&atlas.to_settings())?;
+    let mut updated = atlas.to_settings();
+    // A rejected frame on a game-seeded set fills a gap; it does not turn the
+    // whole set into a taught one, which would hide the "auto" state in the UI.
+    updated.source = if source.is_empty() {
+        "taught".into()
+    } else {
+        source
+    };
+    settings::save_atlas(&updated)?;
     let _ = std::fs::remove_file(&path);
 
-    Ok(learning_info(&atlas))
+    Ok(learning_info(&updated))
 }
 
 #[tauri::command]

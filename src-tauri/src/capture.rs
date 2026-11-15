@@ -489,6 +489,152 @@ mod tests {
         }
     }
 
+    fn binarize(gray: &crate::ocr::Gray, threshold: u8) -> crate::ocr::Gray {
+        crate::ocr::Gray {
+            w: gray.w,
+            h: gray.h,
+            px: gray
+                .px
+                .iter()
+                .map(|pixel| if *pixel > threshold { 255 } else { 0 })
+                .collect(),
+        }
+    }
+
+    #[test]
+    #[ignore = "diagnostic: snapshot the live minimap label for font research"]
+    fn snapshot_map_sample() {
+        let selector = crate::settings::WindowSelector {
+            title: "MapleStory".into(),
+            process: "MapleStory.exe".into(),
+        };
+        let window = crate::window_target::resolve_selector(&selector).expect("game window");
+        let frame = client_frame(window.hwnd).expect("capture failed");
+
+        // Activate the profile so its boxes/atlases can be saved with the sample.
+        let profile = crate::profile::activate(frame.width, frame.height).expect("profile");
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+        let dir = crate::data_dir()
+            .expect("data dir")
+            .join("map-samples")
+            .join(&stamp);
+        std::fs::create_dir_all(&dir).expect("sample dir");
+
+        // The full frame is the most valuable part: any crop can be redone later.
+        write_bmp(&frame, &dir.join("frame.bmp"));
+        std::fs::write(
+            dir.join("profile.json"),
+            serde_json::to_string_pretty(&profile).expect("profile json"),
+        )
+        .expect("write profile");
+
+        let panel = crate::ocr::detect_minimap_panel(&frame);
+        let label = panel.and_then(|panel| crate::ocr::detect_map_label(&frame, panel));
+        let mut lines = Vec::new();
+
+        if let Some(label_region) = label {
+            let label_gray =
+                crate::ocr::crop_gray(&frame, label_region).expect("label crop");
+            write_bmp(&magnify(&label_gray, 5), &dir.join("label-magnified.bmp"));
+            for threshold in [160u8, 180, 200] {
+                let binary = binarize(&label_gray, threshold);
+                write_bmp(
+                    &magnify(&binary, 5),
+                    &dir.join(format!("label-t{threshold}-magnified.bmp")),
+                );
+            }
+
+            for (index, (x, y, w, h)) in crate::ocr::text_lines(&label_gray)
+                .into_iter()
+                .enumerate()
+            {
+                let region = crate::settings::Region {
+                    x: label_region.x + x,
+                    y: label_region.y + y,
+                    w,
+                    h,
+                };
+                let Some(gray) = crate::ocr::crop_gray(&frame, region) else {
+                    continue;
+                };
+                write_bmp(&magnify(&gray, 1), &dir.join(format!("line-{index}.bmp")));
+                write_bmp(
+                    &magnify(&gray, 5),
+                    &dir.join(format!("line-{index}-magnified.bmp")),
+                );
+                for threshold in [160u8, 180, 200] {
+                    let binary = binarize(&gray, threshold);
+                    write_bmp(
+                        &magnify(&binary, 5),
+                        &dir.join(format!("line-{index}-t{threshold}-magnified.bmp")),
+                    );
+                }
+                lines.push(serde_json::json!({
+                    "index": index,
+                    "x": region.x,
+                    "y": region.y,
+                    "w": region.w,
+                    "h": region.h,
+                }));
+            }
+        }
+
+        let mut stored_boxes = serde_json::Map::new();
+        for (name, region) in [
+            ("street", profile.calibration.street),
+            ("map", profile.calibration.map),
+        ] {
+            let Some(region) = region.filter(|region| region.is_usable()) else {
+                continue;
+            };
+            if let Some(gray) = crate::ocr::crop_gray(&frame, region) {
+                write_bmp(
+                    &magnify(&gray, 5),
+                    &dir.join(format!("stored-{name}-magnified.bmp")),
+                );
+            }
+            stored_boxes.insert(
+                name.to_string(),
+                serde_json::json!({"x": region.x, "y": region.y, "w": region.w, "h": region.h}),
+            );
+        }
+
+        let readings = crate::engine::read_frame(
+            &frame,
+            &profile.calibration,
+            &crate::ocr::Atlas::from_settings(&profile.atlas),
+            &crate::ocr::Atlas::from_settings(&profile.level_atlas),
+            &profile.maps,
+            &profile.streets,
+            &profile.identities,
+        )
+        .ok();
+
+        let meta = serde_json::json!({
+            "capturedAt": chrono::Local::now().to_rfc3339(),
+            "client": {"w": frame.width, "h": frame.height},
+            "uiMode": crate::settings::ui_mode().id(),
+            "profile": profile.key(),
+            "panel": panel.and_then(|region| serde_json::to_value(region).ok()),
+            "label": label.and_then(|region| serde_json::to_value(region).ok()),
+            "lines": lines,
+            "storedBoxes": stored_boxes,
+            "readings": readings.and_then(|readings| serde_json::to_value(readings).ok()),
+        });
+        std::fs::write(
+            dir.join("meta.json"),
+            serde_json::to_string_pretty(&meta).expect("meta json"),
+        )
+        .expect("write meta");
+
+        println!(
+            "map sample: {} (panel {:?}, label {:?})",
+            dir.display(),
+            panel,
+            label
+        );
+    }
+
     #[test]
     #[ignore = "diagnostic: dumps the detected minimap panel and label, magnified"]
     fn dumps_map_label() {

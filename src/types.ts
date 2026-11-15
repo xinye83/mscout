@@ -80,6 +80,30 @@ export type LearningInfo = {
   maps: string[];
   name: string | null;
   job: string | null;
+  /** "game", "taught", or empty for a preset / legacy set. */
+  source: string;
+  /** Most common stored glyph size, e.g. "5x7". */
+  glyphSize: string;
+  /** Where the level set came from: "game", "taught", or empty. */
+  levelSource: string;
+  /** Most common level glyph size, e.g. "7x7". */
+  levelSize: string;
+  /** Characters in the name/job letter atlas. */
+  identityLetters: string;
+  /** "font" when seeded from Arial, "taught", or empty. */
+  identitySource: string;
+  /** Most common identity glyph size, e.g. "5x7" (seeded from Arial 12 px). */
+  identitySize: string;
+};
+
+/** The player's MapleStory MSCW folder and whether its glyph atlas is usable. */
+export type MscwStatus = {
+  path: string | null;
+  exists: boolean;
+  atlasFound: boolean;
+  /** Map/street names found in the client's String.wz. */
+  mapNames: number;
+  error: string | null;
 };
 
 export type Profile = {
@@ -95,7 +119,8 @@ export type GlyphGuess = {
   ch: string;
   distance: number;
   known: boolean;
-  cell: string;
+  /** Native glyph bitmap, one hex byte per pixel (00/ff). */
+  bitmap: string;
 };
 
 export type ProfileSummary = {
@@ -108,6 +133,8 @@ export type ProfileSummary = {
   maps: number;
   name: string | null;
   job: string | null;
+  source: string;
+  glyphSize: string;
 };
 
 /** One option of the game's Graphics → UI Size setting. */

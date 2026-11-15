@@ -7,6 +7,7 @@ import type {
   GlyphGuess,
   LabelCrop,
   LearningInfo,
+  MscwStatus,
   ProfileSummary,
   Readings,
   Region,
@@ -319,7 +320,7 @@ function ShapeList({
         clientH,
         kind,
         ch: character,
-        cell: guess.cell,
+        bitmap: guess.bitmap,
         w: guess.w,
         h: guess.h,
       });
@@ -407,9 +408,12 @@ export default function Calibration() {
   const [active, setActive] = useState<Readout>("exp");
   // A readout that is fully set up folds away; this re-opens one on demand.
   const [expanded, setExpanded] = useState<Partial<Record<Readout, boolean>>>({});
+  // Manual correction controls are hidden when the automatic source is ready.
+  const [manual, setManual] = useState<Partial<Record<Readout, boolean>>>({});
   const [drawer, setDrawer] = useState<"profiles" | "fixes" | null>(null);
   const [drag, setDrag] = useState<Region | null>(null);
   const [learning, setLearning] = useState<LearningInfo | null>(null);
+  const [mscw, setMscw] = useState<MscwStatus | null>(null);
   const [typed, setTyped] = useState("");
   const [typedLevel, setTypedLevel] = useState("");
   const [mapName, setMapName] = useState("");
@@ -434,6 +438,16 @@ export default function Calibration() {
   const [shapeReload, setShapeReload] = useState(0);
 
   const bumpShapes = useCallback(() => setShapeReload((n) => n + 1), []);
+
+  // Read the frozen frame for the per-panel "Read:" lines. Best effort: a panel
+  // with no box or a rejected read simply shows "—".
+  const probeNow = useCallback(async (serial: number) => {
+    if (!serial) return;
+    const readings = await invoke<Readings>("parse_probe", { serial }).catch(
+      () => null,
+    );
+    setProbe(readings);
+  }, []);
 
   // A profile with no saved map box would show nothing for the map, so seed the
   // detector's label and split it into its two lines. Nothing is saved until some
@@ -482,6 +496,9 @@ export default function Calibration() {
       .catch(() => undefined);
     invoke<ReviewFrame[]>("review_frames")
       .then(setReviewFrames)
+      .catch(() => undefined);
+    invoke<MscwStatus>("get_mscw_status")
+      .then(setMscw)
       .catch(() => undefined);
   }, []);
 
@@ -547,6 +564,28 @@ export default function Calibration() {
       await persist(next);
       setError(null);
       setMessage(note);
+      // Drawing the EXP box is the moment the seed can run. Do it here so the
+      // first read works without a separate Load digits press. A complete taught
+      // set is not overwritten; only an empty or incomplete one is seeded.
+      if (
+        preview &&
+        next.exp &&
+        mscw?.atlasFound &&
+        learning !== null &&
+        (learning.source === "" || learning.coverage.length < 10)
+      ) {
+        try {
+          const info = await invoke<LearningInfo>("seed_atlas", {
+            serial: preview.serial,
+          });
+          setLearning(info);
+          bumpShapes();
+          setMessage(`${note} · digits loaded (${info.glyphSize})`);
+        } catch {
+          // The Load digits button reports the reason.
+        }
+      }
+      if (preview) void probeNow(preview.serial);
     } catch (cause) {
       setRegions(before);
       setMessage(null);
@@ -583,6 +622,7 @@ export default function Calibration() {
   const freeze = useCallback(async () => {
     setError(null);
     setMessage(null);
+    setProbe(null);
     try {
       const raw = await invoke<ArrayBuffer | number[]>("capture_preview");
       const bytes =
@@ -617,11 +657,81 @@ export default function Calibration() {
       seedMapBox(serial);
       // The active profile can change under us (the engine picks it by client
       // size), so re-read what is learned as well as the shapes.
-      invoke<LearningInfo>("get_learning").then(setLearning).catch(() => undefined);
+      const info = await invoke<LearningInfo>("get_learning").catch(() => null);
+      if (info) setLearning(info);
+      const status = await invoke<MscwStatus>("get_mscw_status").catch(() => null);
+      if (status) setMscw(status);
+      // Read the boxes back: the freeze callback was built before this render's
+      // drags, so `regions` here can be a frame behind. The saved set cannot.
+      const calibration = await invoke<Calibration>("get_calibration").catch(
+        () => null,
+      );
+      if (calibration) setRegions(calibration);
+      const levelBox = usable(calibration?.level ?? null);
+      // Seed when the set is absent or incomplete. A complete taught set is left
+      // alone: reseeding replaces corrections the player made by hand.
+      const needsSeed =
+        status?.atlasFound &&
+        (!info ||
+          info.coverage.length < 10 ||
+          info.source === "" ||
+          (levelBox && info.levelSource !== "game" && info.levelCoverage.length < 10));
+      if (needsSeed) {
+        try {
+          const seeded = await invoke<LearningInfo>("seed_atlas", { serial });
+          setLearning(seeded);
+          bumpShapes();
+          setMessage(`Digits loaded from the game (${seeded.glyphSize})`);
+        } catch {
+          // The EXP box may not be saved yet; the Load digits button retries.
+        }
+      }
+      await probeNow(serial);
     } catch (cause) {
       setError(String(cause));
     }
-  }, [bumpShapes, seedMapBox]);
+  }, [bumpShapes, probeNow, seedMapBox]);
+
+  const seedNow = async () => {
+    if (!preview) return;
+    if (!usable(regions.exp)) {
+      setError("draw the EXP box first, then load the digits");
+      return;
+    }
+    setError(null);
+    setMessage(null);
+    try {
+      await persist(regions);
+      const info = await invoke<LearningInfo>("seed_atlas", {
+        serial: preview.serial,
+      });
+      setLearning(info);
+      bumpShapes();
+      setMessage(`Digits loaded from the game (${info.glyphSize})`);
+      await probeNow(preview.serial);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+
+  const locateGame = async () => {
+    setError(null);
+    setMessage(null);
+    try {
+      const path = await invoke<string | null>("pick_mscw_dir");
+      if (!path) return;
+      const status = await invoke<MscwStatus>("set_mscw_dir", { path });
+      setMscw(status);
+      if (status.atlasFound) {
+        setMessage(`Game assets found: ${status.path}`);
+        if (preview) await seedNow();
+      } else {
+        setError(status.error ?? "Game assets not found in that folder");
+      }
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
 
   useEffect(() => {
     invoke<Calibration>("get_calibration")
@@ -759,6 +869,7 @@ export default function Calibration() {
       setLearning(info);
       bumpShapes();
       setMessage(`Learned: ${info.learned || "—"}`);
+      void probeNow(preview?.serial ?? 0);
     } catch (cause) {
       setError(String(cause));
     }
@@ -776,6 +887,7 @@ export default function Calibration() {
       setLearning(info);
       bumpShapes();
       setMessage(`Learned from the level box: ${info.learned || "—"}`);
+      void probeNow(preview?.serial ?? 0);
     } catch (cause) {
       setError(String(cause));
     }
@@ -794,6 +906,7 @@ export default function Calibration() {
       setLearning(info);
       setMessage(`Map taught: ${name}`);
       refreshProfiles();
+      void probeNow(preview?.serial ?? 0);
     } catch (cause) {
       setError(String(cause));
     }
@@ -812,6 +925,7 @@ export default function Calibration() {
       setLearning(info);
       setMessage(`Street taught: ${street}`);
       refreshProfiles();
+      void probeNow(preview?.serial ?? 0);
     } catch (cause) {
       setError(String(cause));
     }
@@ -831,6 +945,7 @@ export default function Calibration() {
       setLearning(info);
       setMessage(`${kind === "name" ? "Name" : "Job"} taught: ${label.trim()}`);
       refreshProfiles();
+      void probeNow(preview?.serial ?? 0);
     } catch (cause) {
       setError(String(cause));
     }
@@ -870,7 +985,24 @@ export default function Calibration() {
       refreshProfiles();
       bumpShapes();
       seedMapBox(preview.serial);
-      setMessage("Reset to the preset boxes and glyphs");
+      // The reset cleared both digit atlases; seed them now rather than making
+      // the player wait for the next engine tick or press Load digits.
+      if (mscw?.atlasFound && usable(cal.exp)) {
+        try {
+          const seeded = await invoke<LearningInfo>("seed_atlas", {
+            serial: preview.serial,
+          });
+          setLearning(seeded);
+          bumpShapes();
+          setMessage(`Reset to the preset boxes · digits reloaded (${seeded.glyphSize})`);
+          void probeNow(preview.serial);
+          return;
+        } catch {
+          // Fall through to the deferred message.
+        }
+      }
+      setMessage("Reset to the preset boxes — digits will reload from the game");
+      void probeNow(preview.serial);
     } catch (cause) {
       setError(String(cause));
     }
@@ -938,34 +1070,149 @@ export default function Calibration() {
   };
 
   const mark = (ok: boolean) => (ok ? "box ✓" : "box ✗");
+  const mapNames = mscw?.mapNames ?? 0;
+  const taughtMaps = learning?.maps.length ?? 0;
+  const mapAuto = mapNames > 0;
+  const identityAuto =
+    learning?.identitySource === "font" && !!learning.identityLetters;
+  const identityTaught = !!learning?.name && !!learning?.job;
+
+  const sourceLabel =
+    learning?.source === "game"
+      ? "auto"
+      : learning?.source === "taught"
+        ? "taught"
+        : learning?.learned
+          ? "learned"
+          : "";
+  const sizeLabel = learning?.glyphSize ? ` ${learning.glyphSize}` : "";
+  const levelSourceLabel =
+    learning?.levelSource === "game"
+      ? "auto"
+      : learning?.levelSource === "taught"
+        ? "taught"
+        : learning?.levelLearned
+          ? "learned"
+          : "";
+  const levelSizeLabel = learning?.levelSize ? ` ${learning.levelSize}` : "";
+  const identitySourceLabel = identityAuto
+    ? `auto${learning?.identitySize ? ` ${learning.identitySize}` : ""}`
+    : learning?.identitySource === "taught"
+      ? "taught"
+      : learning?.identityLetters
+        ? "learned"
+        : "";
+  const mapStatus = mapAuto
+    ? `auto · ${mapNames} names${taughtMaps ? ` · ${taughtMaps} taught` : ""}`
+    : taughtMaps
+      ? `taught · ${taughtMaps} maps`
+      : "no map table";
+  const mapNote = mapAuto
+    ? `Street and map are matched automatically from the client's own map table (${mapNames} names). Use Correct manually only to fix a map that is missing or misread.`
+    : taughtMaps
+      ? "Using the taught map fingerprints; no client map table is loaded. Use Correct manually to add maps."
+      : "No client map table found — locate the MSCW folder, or use Correct manually to teach street/map here.";
+  const identityNote =
+    !nameUsable || !jobUsable
+      ? identityAuto || identityTaught
+        ? "Name/job data is ready; draw one box around both lines (job over name) to read them."
+        : "Draw one box around both lines (job over name), then freeze; or use Correct manually to teach them here."
+      : identityAuto
+        ? `Name and job are read automatically from Arial (${learning?.identitySize}). Use Correct manually only to fix a misread.`
+        : identityTaught
+          ? "Name and job are using the taught fingerprints. Use Correct manually only to fix a misread."
+          : "No automatic name/job set yet — use Correct manually to teach them here.";
+
   const statusFor: Record<Readout, string> = {
-    exp: `${mark(expUsable)} · ${coverage.length}/10 digits`,
-    level: `${mark(levelUsable)} · ${levelCoverage.length}/10 digits`,
-    map: `${mark(mapUsable)}${
-      learning?.maps.length ? ` · ${learning.maps.length} taught` : ""
-    }`,
-    identity: `name ${nameUsable ? "✓" : "✗"} · job ${jobUsable ? "✓" : "✗"}`,
+    exp: [
+      mark(expUsable),
+      `${coverage.length}/10 digits`,
+      sourceLabel ? `${sourceLabel}${sizeLabel}` : "no digits",
+    ].join(" · "),
+    level: [
+      mark(levelUsable),
+      `${levelCoverage.length}/10 digits`,
+      levelSourceLabel ? `${levelSourceLabel}${levelSizeLabel}` : "no digits",
+    ].join(" · "),
+    map: mapStatus,
+    identity: [
+      `name ${nameUsable ? "✓" : "✗"}`,
+      `job ${jobUsable ? "✓" : "✗"}`,
+      identitySourceLabel || "no glyphs",
+    ].join(" · "),
   };
 
-  // A readout folds once it is set up: the EXP/level boxes hold every digit, a map is
-  // taught, or both name and job are taught. Clicking the header re-opens a folded one.
+  // The automatic source is the default; manual teaching is a correction.
+  const autoReady: Record<Readout, boolean> = {
+    exp: coverage.length === 10,
+    level: levelCoverage.length === 10,
+    map: mapAuto || taughtMaps > 0,
+    identity: identityAuto || identityTaught,
+  };
+  const showManual = (key: Readout) => manual[key] ?? !autoReady[key];
+  const toggleManual = (key: Readout) =>
+    setManual((current) => ({ ...current, [key]: !showManual(key) }));
+
+  // A readout folds once it is ready from either the automatic source or taught
+  // data. The map no longer needs a drawn box: detection + the client table is
+  // enough; identity folds once Arial is seeded and both boxes exist.
   const done: Record<Readout, boolean> = {
     exp: expUsable && missing.length === 0,
     level: levelUsable && levelCoverage.length === 10,
-    map: mapUsable && (learning?.maps.length ?? 0) > 0,
-    identity: nameUsable && jobUsable && !!learning?.name && !!learning?.job,
+    map: mapAuto || taughtMaps > 0,
+    identity: nameUsable && jobUsable && (identityAuto || identityTaught),
   };
   const showBody = (key: Readout) => expanded[key] ?? !done[key];
 
   const ready = expUsable && missing.length === 0;
+  const seeded = learning?.source === "game";
+  const allAuto =
+    seeded && levelSourceLabel === "auto" && identityAuto && mapAuto;
+  const expNote =
+    coverage.length === 10
+      ? sourceLabel === "auto"
+        ? "EXP digits are seeded from the client glyph atlas. Use Correct manually or a shape below to fix a misread."
+        : "EXP digits are learned for this box. Use Correct manually or a shape below to fix a misread."
+      : "No complete automatic set yet. Type exactly what the box shows, punctuation included.";
+  const levelNote =
+    levelCoverage.length === 10
+      ? levelSourceLabel === "auto"
+        ? "Level digits are seeded from the client glyph atlas. The level sits on pale tiles, so the reader segments it on bright ink. Use Correct manually or a shape below to fix a misread."
+        : "Level digits are learned for this box. Use Correct manually or a shape below to fix a misread."
+      : "No complete automatic level set yet. Draw the level box, then type just the digits — no \"LV.\"";
   const statusText = !expUsable
     ? "EXP box needed — MScout cannot read without it"
-    : missing.length > 0
-      ? `Reading · EXP digits missing ${missing.join(" ")}`
-      : ready
-        ? "Ready to read"
-        : "Reading";
+    : !ready && !seeded && mscw?.atlasFound
+      ? "Asset found — freeze a frame or press Load digits to seed the atlas"
+      : !ready && !seeded
+        ? "No digits yet — locate the MSCW folder or learn the digits"
+        : missing.length > 0
+          ? `Reading · EXP digits missing ${missing.join(" ")}`
+          : ready
+            ? allAuto
+              ? "Ready to read · digits, name/job and map/street auto"
+              : "Ready to read"
+            : "Reading";
   const statusTone = ready ? "ok" : "warn";
+
+  const readValue = (key: Readout): string | null => {
+    switch (key) {
+      case "exp":
+        return probe?.expText || null;
+      case "level":
+        return probe && probe.lv > 0 ? `Lv ${probe.lv}` : null;
+      case "map":
+        return probe?.map && probe.map !== "unknown"
+          ? probe.map.replace(/\n/g, " / ")
+          : null;
+      case "identity":
+        return probe?.name || probe?.job
+          ? `${probe?.name ?? "—"} / ${probe?.job ?? "—"}`
+          : null;
+      default:
+        return null;
+    }
+  };
 
   const liveMode = uiModes.find((option) => option.active)?.id ?? "default";
   const liveModeLabel = uiModes.find((option) => option.active)?.label ?? "—";
@@ -1046,6 +1293,36 @@ export default function Calibration() {
           {message && <p className="ok small">{message}</p>}
         </div>
       )}
+
+      <section className="cal-assets">
+        <div className="cal-row">
+          <span className="muted small">Game assets</span>
+          {mscw?.atlasFound ? (
+            <span className="ok small">
+              digits available · map table {mscw.mapNames} names · {mscw.path}
+            </span>
+          ) : mscw?.exists ? (
+            <span className="warn small">folder found, no HUD atlas</span>
+          ) : (
+            <span className="warn small">not set — locate your MSCW folder</span>
+          )}
+          <button
+            className="ghost"
+            style={{ marginLeft: "auto" }}
+            onClick={() => void locateGame()}
+          >
+            Locate…
+          </button>
+          <button
+            className="ghost"
+            disabled={!preview || !mscw?.atlasFound || !expUsable}
+            onClick={() => void seedNow()}
+          >
+            Load digits
+          </button>
+        </div>
+        {mscw?.error && <p className="error small">{mscw.error}</p>}
+      </section>
 
       <div className="cal-main">
         <div className="cal-preview-col">
@@ -1144,11 +1421,20 @@ export default function Calibration() {
                     >
                       Clear box
                     </button>
+                    <button
+                      className="ghost"
+                      onClick={() => toggleManual(key)}
+                    >
+                      {showManual(key) ? "Hide corrections" : "Correct manually"}
+                    </button>
                   </div>
                 )}
 
                 {showBody(key) && (
                   <div className="readout-body">
+                    <p className="readout-read muted small">
+                      Read: {readValue(key) ?? "—"}
+                    </p>
                     {key === "exp" && (
                       <>
                         <CropPreview
@@ -1156,22 +1442,25 @@ export default function Calibration() {
                           serial={serial}
                           caption={() => "The EXP box, as the reader sees it"}
                         />
-                        <p className="muted small">
-                          Type exactly what the box shows, punctuation included.
-                        </p>
-                        <input
-                          className="cal-input"
-                          value={typed}
-                          placeholder="10,105 [91.53%]"
-                          onChange={(event) => setTyped(event.target.value)}
-                        />
-                        <button
-                          className="ghost on"
-                          disabled={!preview}
-                          onClick={() => void learn()}
-                        >
-                          Learn digits
-                        </button>
+                        <p className="muted small">{expNote}</p>
+                        {showManual("exp") && (
+                          <>
+                            <p className="muted small">Manual correction:</p>
+                            <input
+                              className="cal-input"
+                              value={typed}
+                              placeholder="10,105 [91.53%]"
+                              onChange={(event) => setTyped(event.target.value)}
+                            />
+                            <button
+                              className="ghost on"
+                              disabled={!preview}
+                              onClick={() => void learn()}
+                            >
+                              Learn digits
+                            </button>
+                          </>
+                        )}
                         <ShapeList
                           kind="exp"
                           serial={serial}
@@ -1199,22 +1488,25 @@ export default function Calibration() {
                           serial={serial}
                           caption={() => "The level box, as the reader sees it"}
                         />
-                        <p className="muted small">
-                          Type just the digits — no "LV." — once the level box is drawn.
-                        </p>
-                        <input
-                          className="cal-input"
-                          value={typedLevel}
-                          placeholder="35"
-                          onChange={(event) => setTypedLevel(event.target.value)}
-                        />
-                        <button
-                          className="ghost on"
-                          disabled={!preview}
-                          onClick={() => void learnLevel()}
-                        >
-                          Learn level digits
-                        </button>
+                        <p className="muted small">{levelNote}</p>
+                        {showManual("level") && (
+                          <>
+                            <p className="muted small">Manual correction:</p>
+                            <input
+                              className="cal-input"
+                              value={typedLevel}
+                              placeholder="35"
+                              onChange={(event) => setTypedLevel(event.target.value)}
+                            />
+                            <button
+                              className="ghost on"
+                              disabled={!preview}
+                              onClick={() => void learnLevel()}
+                            >
+                              Learn level digits
+                            </button>
+                          </>
+                        )}
                         <ShapeList
                           kind="level"
                           serial={serial}
@@ -1237,102 +1529,111 @@ export default function Calibration() {
 
                     {key === "map" && (
                       <>
+                        <p className="muted small">{mapNote}</p>
                         <CropPreview
                           kind="street"
                           serial={serial}
                           caption={() => "The street line, as the reader sees it"}
                         />
-                        <input
-                          className="cal-input"
-                          value={streetName}
-                          placeholder="Street name"
-                          onChange={(event) => setStreetName(event.target.value)}
-                        />
-                        <button
-                          className="ghost on"
-                          disabled={!preview || !streetUsable}
-                          onClick={() => void teachStreet()}
-                        >
-                          Teach street
-                        </button>
                         <CropPreview
                           kind="map"
                           serial={serial}
                           caption={() => "The map name line, as the reader sees it"}
                         />
-                        <input
-                          className="cal-input"
-                          value={mapName}
-                          placeholder="Map name"
-                          onChange={(event) => setMapName(event.target.value)}
-                        />
-                        <button
-                          className="ghost on"
-                          disabled={!preview}
-                          onClick={() => void teach()}
-                        >
-                          Teach map
-                        </button>
-                        <p className="muted small">
-                          Known maps:{" "}
-                          {learning?.maps.length
-                            ? learning.maps
-                                .map((name) => name.replace(/\n/g, " · "))
-                                .join(", ")
-                            : "—"}
-                        </p>
-                        <p className="muted small">
-                          Map letters: {learning?.mapLetters || "—"} — each map you teach
-                          also teaches its letters.
-                        </p>
+                        {showManual("map") && (
+                          <>
+                            <p className="muted small">Manual correction:</p>
+                            <input
+                              className="cal-input"
+                              value={streetName}
+                              placeholder="Street name"
+                              onChange={(event) => setStreetName(event.target.value)}
+                            />
+                            <button
+                              className="ghost on"
+                              disabled={!preview || !streetUsable}
+                              onClick={() => void teachStreet()}
+                            >
+                              Teach street
+                            </button>
+                            <input
+                              className="cal-input"
+                              value={mapName}
+                              placeholder="Map name"
+                              onChange={(event) => setMapName(event.target.value)}
+                            />
+                            <button
+                              className="ghost on"
+                              disabled={!preview}
+                              onClick={() => void teach()}
+                            >
+                              Teach map
+                            </button>
+                            <p className="muted small">
+                              Taught map fingerprints:{" "}
+                              {learning?.maps.length
+                                ? learning.maps
+                                    .map((name) => name.replace(/\n/g, " · "))
+                                    .join(", ")
+                                : "—"}
+                            </p>
+                            <p className="muted small">
+                              Taught label letters (fallback):{" "}
+                              {learning?.mapLetters || "—"}
+                            </p>
+                          </>
+                        )}
                       </>
                     )}
 
                     {key === "identity" && (
                       <>
-                        <p className="muted small">
-                          Draw one box around both lines (job over name) — the app
-                          splits them.
-                        </p>
+                        <p className="muted small">{identityNote}</p>
                         <CropPreview
                           kind="name"
                           serial={serial}
                           caption={() => "The name line, as the reader sees it"}
                         />
-                        <input
-                          className="cal-input"
-                          value={nameLabel}
-                          placeholder="Character name"
-                          onChange={(event) => setNameLabel(event.target.value)}
-                        />
-                        <button
-                          className="ghost on"
-                          disabled={!preview || !nameUsable}
-                          onClick={() => void teachIdentity("name")}
-                        >
-                          Teach name
-                        </button>
                         <CropPreview
                           kind="job"
                           serial={serial}
                           caption={() => "The job line, as the reader sees it"}
                         />
-                        <input
-                          className="cal-input"
-                          value={jobLabel}
-                          placeholder="Job (e.g. Page)"
-                          onChange={(event) => setJobLabel(event.target.value)}
-                        />
-                        <button
-                          className="ghost on"
-                          disabled={!preview || !jobUsable}
-                          onClick={() => void teachIdentity("job")}
-                        >
-                          Teach job
-                        </button>
-                        <p className="muted small">
-                          Name: {learning?.name ?? "—"} · Job: {learning?.job ?? "—"}
-                        </p>
+                        {showManual("identity") && (
+                          <>
+                            <p className="muted small">Manual correction:</p>
+                            <input
+                              className="cal-input"
+                              value={nameLabel}
+                              placeholder="Character name"
+                              onChange={(event) => setNameLabel(event.target.value)}
+                            />
+                            <button
+                              className="ghost on"
+                              disabled={!preview || !nameUsable}
+                              onClick={() => void teachIdentity("name")}
+                            >
+                              Teach name
+                            </button>
+                            <input
+                              className="cal-input"
+                              value={jobLabel}
+                              placeholder="Job (e.g. Page)"
+                              onChange={(event) => setJobLabel(event.target.value)}
+                            />
+                            <button
+                              className="ghost on"
+                              disabled={!preview || !jobUsable}
+                              onClick={() => void teachIdentity("job")}
+                            >
+                              Teach job
+                            </button>
+                            <p className="muted small">
+                              Taught override: {learning?.name ?? "—"} /{" "}
+                              {learning?.job ?? "—"}
+                            </p>
+                          </>
+                        )}
                       </>
                     )}
                   </div>
@@ -1465,6 +1766,9 @@ export default function Calibration() {
                     {" · "}
                     {profile.calibrated ? "calibrated" : "boxes missing"}
                     {` · ${profile.glyphs} digits · ${profile.maps} maps`}
+                    {profile.source
+                      ? ` · ${profile.source} ${profile.glyphSize}`
+                      : ""}
                     {profile.name ? ` · ${profile.name}` : ""}
                     {profile.job ? ` · ${profile.job}` : ""}
                   </span>
@@ -1524,9 +1828,7 @@ export default function Calibration() {
         </button>
         {probe && (
           <span className="muted small probe">
-            Lv {probe.lv} · {probe.exp.toLocaleString()} EXP · {probe.pct.toFixed(2)}% ·{" "}
-            {probe.map} · {probe.name ?? "—"} · {probe.job ?? "—"} · conf{" "}
-            {probe.conf.toFixed(2)}
+            read ok · conf {probe.conf.toFixed(2)}
           </span>
         )}
       </footer>
