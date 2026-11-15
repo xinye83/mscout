@@ -5,22 +5,26 @@ import type { CaptureStatus, Profile, Sample, TargetStatus } from "./types";
 import { etaSeconds, formatDuration, formatRate, rateOver, total } from "./rates";
 import { expRequired } from "./expTable";
 import ExpChart from "./ExpChart";
+import { dotState } from "./overlayState";
 
 const MAP_MAX = 30;
 const MAX_SAMPLES = 5400;
+/** Solid dash placeholders, sized to the element they stand in for. */
+const PLACEHOLDER = {
+  map: "———",
+  street: "———",
+  name: "———",
+  job: "——",
+  level: "—",
+  pct: "—%",
+  rate: "—/h",
+  eta: "—",
+  next: "—",
+};
 
 function joinWords(words: string[]): string {
   if (words.length <= 1) return words[0] ?? "";
   return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
-}
-
-function dotClass(status: CaptureStatus | null, unrecognised: boolean) {
-  if (!status) return "off";
-  if (status.state === "lost") return "lost";
-  if (status.state === "uncalibrated") return "uncalibrated";
-  if (status.state === "degraded") return "degraded";
-  // The figures are good but something the overlay shows could not be recognised.
-  return unrecognised ? "nomap" : "reading";
 }
 
 function lastGainAt(samples: Sample[]): number | null {
@@ -161,7 +165,8 @@ export default function App() {
           : target.process || target.title || "attached"
         : "not found";
 
-  const mapUnknown = current?.map === "unknown";
+  const mapHidden = current?.mapHidden === true;
+  const mapUnknown = current?.map === "unknown" && !mapHidden;
   // Anything the overlay cannot show because it was never recognised. `profile` is
   // null until the first reading arrives, so it is not treated as missing. A level
   // of 0 is the backend's "not recognised" for the level box.
@@ -171,7 +176,7 @@ export default function App() {
   if (profile && !profile.job) unrecognised.push("job");
   if (current && current.lv <= 0) unrecognised.push("level");
 
-  const dot = dotClass(capture, unrecognised.length > 0);
+  const dot = dotState(capture, unrecognised, mapHidden);
   const lastHeight = useRef(0);
 
   // The window is created at a fixed size, and content that wraps (a multi-line
@@ -217,19 +222,37 @@ export default function App() {
   const lv = current?.lv ?? 0;
   const requirement = expRequired(lv);
 
+  const rateText = (value: number | null | undefined) =>
+    value === null || value === undefined ? PLACEHOLDER.rate : formatRate(value);
+  const etaText = (value: number | null | undefined) =>
+    value === null || value === undefined ? PLACEHOLDER.eta : formatDuration(value);
+
   // The label is stored as "street\nmap name". The map name (last line) is what
   // actually identifies the map, so it is the headline; the street is context.
-  const mapLines = (current?.map ?? "unknown").split("\n");
-  const mapName = mapLines[mapLines.length - 1];
+  // A collapsed minimap draws no name at all: both lines become placeholders and
+  // "minimap collapsed" joins the warnings at the bottom.
+  const mapLines =
+    mapHidden || !current
+      ? []
+      : current.map.split("\n");
+  const mapName =
+    mapHidden || !current ? PLACEHOLDER.map : mapLines[mapLines.length - 1];
   const mapLabel =
     mapName.length > MAP_MAX ? `${mapName.slice(0, MAP_MAX - 1)}…` : mapName;
-  const mapSub = current && mapLines.length > 1 ? mapLines[0] : null;
+  const mapSub =
+    current && !mapHidden && mapLines.length > 1
+      ? mapLines[0]
+      : PLACEHOLDER.street;
+  const mapSubRead = current && !mapHidden && mapLines.length > 1;
 
   return (
     <div className={`panel ${expanded ? "expanded" : ""} ${interactive ? "active" : ""}`}>
       <div className="row head" data-tauri-drag-region>
-        <span className={`dot ${dot}`} />
-        <span className={`map ${current ? "" : "muted"}`} data-tauri-drag-region>
+        <span className={`dot ${dot.tone}`} title={dot.title} />
+        <span
+          className={`map ${current && !mapHidden && !mapUnknown ? "" : "muted"}`}
+          data-tauri-drag-region
+        >
           {mapLabel}
         </span>
         {capture && capture.state !== "reading" && (
@@ -237,46 +260,31 @@ export default function App() {
         )}
       </div>
 
-      {(readReason || recognisable) && (
-        <div
-          className={`row status-reason ${
-            capture && capture.state !== "reading" ? capture.state : "unrecognised"
-          }`}
-        >
-          <span>
-            {readReason &&
-              (recognisable ? readReason.split(" — ")[0].trim() : readReason)}
-            {readReason && recognisable && " · "}
-            {recognisable && (
-              <>
-                <strong>{joinWords(unrecognised)}</strong> not recognised — teach{" "}
-                {unrecognised.length > 1 ? "them" : "it"} in Calibration
-              </>
-            )}
-          </span>
-        </div>
-      )}
-
       {mapSub && (
-        <div className="row map-sub" data-tauri-drag-region>
+        <div
+          className={`row map-sub ${mapSubRead ? "" : "muted"}`}
+          data-tauri-drag-region
+        >
           <span>{mapSub}</span>
         </div>
       )}
 
       <div className="row identity">
         <span className={profile?.name ? undefined : "muted"}>
-          {profile?.name ?? "unknown"}
+          {profile?.name ?? PLACEHOLDER.name}
         </span>
         <span className={profile?.job ? undefined : "muted"}>
-          {profile?.job ?? "unknown"}
+          {profile?.job ?? PLACEHOLDER.job}
         </span>
       </div>
 
       <div className="row">
         <span className={lv > 0 ? "level" : "level muted"}>
-          Lv {lv > 0 ? lv : "unknown"}
+          Lv {lv > 0 ? lv : PLACEHOLDER.level}
         </span>
-        <span className={`pct ${current ? "" : "muted"}`}>{pct.toFixed(2)}%</span>
+        <span className={`pct ${current ? "" : "muted"}`}>
+          {current ? `${pct.toFixed(2)}%` : PLACEHOLDER.pct}
+        </span>
       </div>
 
       <div className="bar">
@@ -284,16 +292,16 @@ export default function App() {
       </div>
 
       <div className="row stats">
-        <span className="rate">{formatRate(derived?.rate5 ?? null)}</span>
-        <span className="eta">{formatDuration(derived?.eta ?? null)}</span>
+        <span className="rate">{rateText(derived?.rate5)}</span>
+        <span className="eta">{etaText(derived?.eta)}</span>
       </div>
 
       {expanded && (
         <>
           <div className="sub">
-            <span>1m {formatRate(derived?.rate1 ?? null)}</span>
-            <span>5m {formatRate(derived?.rate5 ?? null)}</span>
-            <span>30m {formatRate(derived?.rate30 ?? null)}</span>
+            <span>1m {rateText(derived?.rate1)}</span>
+            <span>5m {rateText(derived?.rate5)}</span>
+            <span>30m {rateText(derived?.rate30)}</span>
           </div>
           <ExpChart samples={chartData} height={140} />
           <div className="foot">
@@ -301,7 +309,7 @@ export default function App() {
               next:{" "}
               {requirement
                 ? `${requirement.value.toLocaleString()} exp${requirement.estimated ? " (est.)" : ""}`
-                : "—"}
+                : PLACEHOLDER.next}
             </span>
             <button className="ghost" onClick={() => setExpanded(false)}>
               less
@@ -345,6 +353,32 @@ export default function App() {
             >
               calibrate
             </button>
+          </span>
+        </div>
+      )}
+
+      {(readReason || recognisable || mapHidden) && (
+        <div
+          className={`row status-reason ${
+            capture && capture.state !== "reading" ? capture.state : "unrecognised"
+          }`}
+        >
+          <span>
+            {mapHidden && (
+              <>
+                minimap collapsed
+                {(readReason || recognisable) && " · "}
+              </>
+            )}
+            {readReason &&
+              (recognisable ? readReason.split(" — ")[0].trim() : readReason)}
+            {readReason && recognisable && " · "}
+            {recognisable && (
+              <>
+                <strong>{joinWords(unrecognised)}</strong> not recognised — teach{" "}
+                {unrecognised.length > 1 ? "them" : "it"} in Calibration
+              </>
+            )}
           </span>
         </div>
       )}

@@ -50,7 +50,7 @@ fingerprints/letters; the app does not download or install fonts.
 - `data/profiles/<W>x<H>[@mode].json` — boxes, EXP/level/identity atlases
   (seeded from the client/Arial), taught map/street fingerprints, identities.
   Player-specific and may contain derived Nexon/Arial glyphs.
-- `data/samples/`, `data/review/`, `data/map-samples/`, logs, backups.
+- `data/samples/`, `data/map-samples/`, logs, backups.
 - `data/fonts/` — extracted Noto TTF if used for diagnostics.
 - `data/settings.json` — target window, UI Size, `mscwDir`.
 - `fonts/` — local reference copies of `arial.ttf` and `Font_000.wz`
@@ -61,9 +61,17 @@ fingerprints/letters; the app does not download or install fonts.
 `data/` and `fonts/` are gitignored because they are machine-specific and may
 contain redistributable-restricted content.
 
+## Test fixtures (shipped as test data only)
+
+- A small, curated corpus of real HUD screenshots/crops with a ground-truth
+  manifest may ship under the test fixtures (D28). It is used only by tests, is
+  not loaded by the running app, and does not include runtime atlases, fonts or
+  name lists.
+
 ## Never shipped
 
-- Nexon bitmap atlases/glyphs, minimap/UI art, game fonts.
+- Nexon bitmap atlases/glyphs, minimap/UI art, game fonts as runtime assets. The
+  narrow test-fixture exception is D28.
 - Arial / Arial Bold (proprietary), Nexon brand fonts.
 - A generated map/street name list or rendered name templates.
 - Player profiles, fingerprints, samples.

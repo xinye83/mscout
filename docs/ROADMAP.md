@@ -45,12 +45,21 @@ Last updated: 2026-11-14
 - [x] From-empty-atlas proof: seeding reads `74,521[42.78%]` on the Ideal captures (1366, 1920×1080, 1920×1200) and the 1920×1200 Default capture; the Ideal level reads `35`
 - [x] **Automatic name/job**: seed an Arial 1-bit atlas from the live crop and read both lines as text (`Euroblood` / `Page` verified), with the taught fingerprints as the exact fallback
 - [x] **Automatic map/street**: read the client's own `String_000.wz/Map.img` table, render each name in Arial Bold 12, and match the whole label line by width filter + column-pattern DTW; both saved maps (`Kerning City Civic Center`, `Sunset Sky`) and `Victoria Road` read exactly, no teaching
-- [x] UI/code/docs audit after the read rework: source tracking (`game`/`taught`) is consistent across corrections and review frames; stale 12×16/preset-glyph docs corrected; dead helpers removed; engine seeding retries throttled to 30 s
+- [x] UI/code/docs audit after the read rework: source tracking (`game`/`taught`) is consistent across corrections and profile switches; stale 12×16/preset-glyph docs corrected; dead helpers removed; engine seeding retries throttled to 30 s
 - [x] Clean-install audit: with no profiles/atlases/overrides, the 1920×1080 Ideal preset (now with level/name/job boxes) + client files + Windows Arial read both saved frames exactly; the street fallback no longer requires a drawn street box
+
+## Post-0.4.0
+
+- [x] Three-state minimap detection anchored on the `WORLD` badge: expanded, title-bar-only, folded
+- [x] Folded-bar map reading: match the single `Street :Map` line against the client table in Arial Regular 12
+- [x] Roman-numeral tie-break: names that differ only by `I`/`II`/`III` are separated by rendered width
+- [x] No carried map: a state with no name on screen reports `unknown`
+- [x] Calibration audit: preset geometry is not drawn as a box, Street/Map is detection-only, panel headers share one status vocabulary, and the legacy `Fixes waiting` review queue is removed
 
 ## Next
 
 - [ ] **Default/Filtered UI sizes**: identify each pair's digit/level source and Arial rendering, add the map-name index at its label size, then ship presets and saved-frame tests. The 1920×1080 Default frame currently drops EXP punctuation, reads only the level's `5`, and does not match Arial; 1920×1200 Default EXP is exact, so this is pair-specific.
+- [ ] **Real-screenshot regression suite**: ship a small labelled corpus of captured frames/crops with ground truth in a manifest — client size, UI size, minimap state, character name/job, level, EXP text/value/percentage, street/map, and expected boxes. Replay it through the reader and minimap detector as a regression gate. Keep it small and treat it as test data, not runtime assets (see D28).
 - [ ] **Map/street matching at other UI sizes**: the name index is rendered at Arial Bold 12, which matches Ideal. Render it at the label's measured pixel size for Default/Filtered; the client table itself is size-independent.
 - [ ] **Multi-resolution portability** (layers 1–2): anchor-relative boxes + scale-aware matching, so one calibration serves several resolutions. Blocked on a two-resolution capture diff to learn whether the UI is fixed-size, integer-scaled, or letterboxed.
 - [ ] Level-up stitching and death-event marking on the chart

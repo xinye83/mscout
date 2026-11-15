@@ -226,6 +226,22 @@ reader matches whole rendered names instead of OCR. See
 
 ---
 
+## Minimap states
+
+The minimap zooms through three states, and the label is drawn differently in
+each:
+
+| State | Chrome | Name rendering |
+|---|---|---|
+| Expanded | `#99BBCC` panel, 59 px tall, icon + name band | two lines, Arial Bold 12 white on `#99BBCC` |
+| Title-bar only | `#99BBCC` panel, 16 px tall | none |
+| Folded | `#DDDDDD` bar, 18 px tall | one line `Street :Map`, Arial Regular 12, black on light |
+
+The `WORLD` badge (`#DD9911` border, `#FFCC55` fill, 34×10) is present in all
+three and anchors detection; the surrounding fill classifies the state. The
+folded line is matched against rendered `"{street} :{name}"` candidates after
+inverting the crop, which scores 0.000 on both captured folded bars.
+
 ## Map and street names
 
 The minimap's two lines are the client's own `mapName` and `streetName` strings

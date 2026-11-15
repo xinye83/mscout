@@ -6,13 +6,55 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-### Planned
-- Default/Filtered support: identify each pair's digit/level source and Arial rendering, then add presets and saved-frame tests.
-- Multi-resolution portability: anchor-relative boxes and scale-aware matching, so one calibration serves several client sizes.
-- Level-up stitching and death markers on the chart.
-- Retention: compact raw samples older than 7 days into one-minute aggregates.
-- History window pan/zoom.
-- Per-map comparison once enough real data exists.
+### Added
+- Three-state minimap detection anchored on the `WORLD` badge: expanded,
+  title-bar-only, and folded.
+- Folded-bar map reading: the single `Street :Map` line is matched against the
+  client table in Arial Regular 12, returning both street and map.
+
+### Fixed
+- Map names ending in a roman numeral (`Thicket Around the Beach III`) could read
+  as `unknown`; the matcher now breaks near-ties by rendered width and picks the
+  correct numeral.
+- Folding the minimap no longer forces the overlay to `unknown` permanently.
+- Name/job could read as unknown after a profile switch or reseed because the
+  reader re-loaded the identity atlas from a stale active-profile cache; it now
+  uses the profile the engine just loaded/seeded.
+- Reloading the overlay webview could leave name/job empty until the next
+  profile change because the engine only emits on change; `get_profile` now
+  returns the last published reading.
+- The yellow status/unrecognised warning moved below the reading rows instead of
+  sitting between the map and street names; `minimap collapsed` is one of those
+  warnings, not the street line.
+- The overlay status dot is decided in one place (`overlayState.ts`), so a
+  collapsed minimap reliably shows yellow instead of falling through to green.
+
+### Changed
+- Calibration panels use one status vocabulary in both expanded and folded
+  states: `<source> · <coverage>` (`auto · 10/10 digits`, `auto · 347 names`,
+  `auto · Arial`, `no box`). The old `box ✓` / `name ✓ · job ✓` mixtures are gone.
+- Preset geometry is no longer drawn as a calibration box. Only boxes that differ
+  from the shipped preset are outlined, so a preset-only profile shows no boxes.
+- Street / Map is fully detected, so its Draw/Clear box controls and preview ROI
+  are removed. Its two line previews now use the detector's exact line regions
+  rather than stale saved boxes.
+- Calibration body order is consistent: `Read:` line, source note, preview,
+  optional manual correction.
+- The map line seeding now runs after the saved calibration is loaded, so legacy
+  map boxes cannot overwrite the detected lines in the preview.
+- Removed the unused `map_label_crop` command and the “Taught label letters”
+  fallback line.
+- Removed the `Fixes waiting` review queue (rejected frames, `data/review/`, and
+  its Calibration drawer). The automatic atlases and the per-panel manual
+  correction cover the same ground without a separate labelling queue.
+- A frame whose minimap shows no name reports `unknown`; the last map is never
+  carried forward. The overlay shows placeholders for the map and street, a yellow
+  dot, and `minimap collapsed` as a warning at the bottom; it does not prompt
+  calibration for it.
+- At startup, every unread value (map, street, name, job, level, EXP %, rate, ETA,
+  next) uses a dash placeholder sized to its element instead of a mix of
+  `unknown` and `0.00%`. The street row and the EXP % slot are reserved from the
+  first frame, so the reading rows do not move when the first sample arrives.
 
 ## [0.4.0] - 2026-11-14
 

@@ -101,6 +101,11 @@ The name and job are Arial 12 px, 1-bit GDI and reproduce pixel-exact. The engin
 The minimap label is **Arial Bold 12 px** with a 1 px shadow. Seeding it per glyph fails because anti-aliasing fragments the strokes, but whole-line comparison identifies the face; D23 uses the client's name table and whole-line DTW instead of segmentation.
 Consequence: name and job need no per-character teaching.
 
+The engine passes the profile's `identityAtlas` into `read_frame` explicitly
+rather than letting the reader re-load it from the active-profile cache. The
+cache can lag a profile switch or a just-seeded atlas, which made name/job read
+as unknown even though the profile on disk was complete.
+
 ## D23 — Map/street names come from the client's map table
 The two minimap lines are the client's own `mapName` and `streetName` strings in `Data/String/String_000.wz` → `Map.img/<region>/<map id>`. The current client exposes 347 map names and 11 unique streets; the count is client-version-specific and is never shipped as a list. Both saved samples are present (`VictoriaIsland/010003007` = Kerning City Civic Center / Victoria Road, `010003070` = Sunset Sky / Victoria Road).
 The label is Arial Bold 12 px, so the reader renders every candidate name with GDI Arial Bold 12, keeps those whose width is within 8 px of the live line, and scores the whole line with a column-pattern DTW. The correct name scores 0.236 / 0.346 / 0.268 on the three saved lines; a 0.05 margin over the runner-up and a 0.55 cap reject ambiguous lines. No glyph segmentation is involved, which is what made per-glyph Arial seeding fail.
@@ -120,3 +125,57 @@ Consequence: presets carry zero glyphs (verified), `.gitignore` excludes `fonts/
 Evidence: on the live 1920×1080 Default frame the EXP digits read but punctuation drops, the level's `3` is far from the scaled Ideal/EXP glyph (`41.7` versus `27.8` for `5`), and Arial seeding finds no matching size for name/job. 1920×1200 Default EXP reads exactly, so this needs a pair-by-pair rendering investigation, not a global "Default" switch. Filtered keeps Default's positions but changes the glyph drawing, so it needs its own seeding.
 
 Consequence: the supported matrix is explicit in [PRESETS.md](PRESETS.md). Adding a Default/Filtered preset requires a live capture, a source/size check for digits and level, an Arial quality/size match, a map index at that label size, and a saved-frame test first.
+
+## D26 — The minimap has three states; detect the state before reading the name
+
+The minimap widget zooms through three states: expanded (icon + two-line name
+band), title-bar-only (no name drawn at all), and folded (one light bar showing
+`Street :Map` on a single line).
+
+Detection is anchored on the orange `WORLD` badge — a fixed 34×10 chip present in
+all three states — rather than on the panel fill, because the folded state has no
+`#99BBCC` panel at all. The fill around the badge classifies the state: the panel
+component at 59 px is expanded, the same component at 16 px is title-bar-only,
+and a `#DDDDDD` bar is folded. This also fixes the old `PANEL_MIN_H = 20`
+rejection, which made the 16 px title bar look like "no minimap".
+
+The folded bar's font is Arial Regular 12, anti-aliased and inverted (black on
+light), scoring 0.000 against rendered `"{street} :{name}"` candidates. Matching
+the whole line returns both fields at once, so no colon detection or glyph
+segmentation is involved.
+
+State 2 draws no name, so the frame is flagged `mapHidden` and the overlay shows
+placeholders for map and street, a yellow dot, and `minimap collapsed` in the
+bottom warning list. It does not carry the previous map forward — a name that is
+not on screen must not be assumed — and it does not suggest calibration, because
+there is nothing to read.
+
+Consequence: one detector call per frame feeds both the map and street readers;
+fingerprints only run for the expanded state, since their stored-box fallback
+would feed a garbage crop into the fingerprint comparison on a folded frame.
+Names that differ only by a trailing roman numeral (`... Beach I/II/III`) render
+3 px apart and overlap in DTW score, so the matcher breaks that tie by rendered
+width.
+
+## D27 — Calibration shows the player's edits, not preset geometry
+
+The calibration window distinguishes the shipped preset from a box the player
+drew. A box equal to the preset's box is not outlined and does not offer Clear;
+the preset is starting geometry, not a calibration the player made. Drawing
+anywhere replaces it and makes the box visible/clearable again.
+
+Street / Map is detection-only. Its Draw/Clear controls and its preview ROI are
+gone; the two cards show the exact line crops from the same detector the overlay
+uses. The stored street/map boxes remain only as a fallback for a frame where
+detection fails and for legacy taught fingerprints. Header status is one
+vocabulary for every panel — `auto · 10/10 digits`, `auto · 347 names`,
+`auto · Arial`, `no box` — instead of the old mix of `box ✓` and `name ✓ · job ✓`.
+
+## D28 — A small labelled screenshot corpus may ship as test fixtures
+
+A curated set of real HUD screenshots/crops may be committed and shipped as test
+fixtures, together with a manifest of ground truth (client size, UI size, minimap
+state, name/job, level, EXP text/value/percentage, street/map, expected boxes).
+This is a narrow exception to D24: the corpus is test data only, is not used by the
+running app, and stays small. It does not permit shipping runtime glyph atlases,
+map-name lists, fonts, or other client assets.

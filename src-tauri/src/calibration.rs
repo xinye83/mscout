@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::capture::{self, Frame};
@@ -475,6 +475,7 @@ pub fn parse_probe(serial: u64) -> Result<Readings, String> {
         &calibration,
         &atlas,
         &Atlas::from_settings(&settings::load_level_atlas()),
+        &Atlas::from_settings(&settings::load_identity_atlas()),
         &maps,
         &settings::load_streets(),
         &identities,
@@ -788,34 +789,6 @@ pub(crate) fn open_calibration_window_on_main<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// How many rejected frames to keep. Each is a few kilobytes.
-const REVIEW_LIMIT: usize = 50;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReviewRecord {
-    pub t: i64,
-    pub reason: String,
-    pub w: u32,
-    pub h: u32,
-    pub px: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReviewFrame {
-    pub id: String,
-    pub t: i64,
-    pub reason: String,
-    pub w: u32,
-    pub h: u32,
-    pub px: String,
-}
-
-fn review_dir() -> Result<std::path::PathBuf, String> {
-    Ok(crate::data_dir()?.join("review"))
-}
-
 /// Append a line to `data/debug.log`. The calibration window has no console, so a
 /// click that appears to do nothing has to leave a trace somewhere.
 pub(crate) fn log(message: &str) {
@@ -834,26 +807,6 @@ pub(crate) fn log(message: &str) {
     let _ = writeln!(file, "{} {message}", chrono::Local::now().format("%H:%M:%S"));
 }
 
-fn review_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("json"))
-        .collect();
-    files.sort();
-    files
-}
-
-fn prune_reviews(dir: &std::path::Path) {
-    let mut files = review_files(dir);
-    while files.len() > REVIEW_LIMIT {
-        let oldest = files.remove(0);
-        let _ = std::fs::remove_file(oldest);
-    }
-}
-
 /// A minimap label at full resolution, so the window can show what it is looking at.
 /// Typing the map name blind is how a fingerprint ended up stored under a name that
 /// belonged to a different map.
@@ -867,19 +820,40 @@ pub struct LabelCrop {
 }
 
 /// The crop of any box, so every card in the calibration window can show what its
-/// box actually covers. `map` and `street` are the two lines of the minimap label;
-/// a drawn `map` box wins over detection, which otherwise clips the name's ends.
+/// box actually covers. `map` and `street` use the line detector, matching the
+/// overlay; a saved box is only the fallback when detection fails.
 #[tauri::command]
 pub fn box_crop(serial: u64, kind: String) -> Result<LabelCrop, String> {
     let frame = cached_frame(serial)?;
+    use_frame_profile(&frame)?;
     let calibration = settings::load_calibration();
 
     let (gray, lines) = match kind.as_str() {
         "street" | "map" => {
             let map_line = kind == "map";
-            // A saved box is used only for a proper street/map split. An older profile
-            // may have stored the whole two-line label as `map`, which would otherwise
-            // show both lines here; fall back to the detected line in that case.
+            // The line detector is what the overlay reads. Prefer its regions over
+            // legacy saved boxes: an older profile can hold the whole two-line label
+            // as `map`, which shows the wrong pixels for both cards.
+            if let Some(lines) = ocr::map_label_line_regions(&frame) {
+                let picked = if map_line {
+                    lines.last()
+                } else if lines.len() > 1 {
+                    lines.first()
+                } else {
+                    return Err("the street line was not found".into());
+                };
+                if let Some((_, gray)) = picked {
+                    return Ok(LabelCrop {
+                        w: gray.w as u32,
+                        h: gray.h as u32,
+                        px: settings::to_hex(&gray.px),
+                        lines: if map_line { 1 } else { 0 },
+                    });
+                }
+            }
+
+            // Detection failed (for example the minimap is folded): fall back to a
+            // saved split box.
             let split = calibration.street.filter(Region::is_usable).is_some();
             let saved = if map_line {
                 if split {
@@ -900,15 +874,8 @@ pub fn box_crop(serial: u64, kind: String) -> Result<LabelCrop, String> {
                 };
                 (gray, lines)
             } else {
-                // Nothing split yet: use the detected label's own line.
-                let detected =
-                    ocr::map_label_lines(&frame).ok_or("the map label was not found")?;
-                let gray = if map_line {
-                    detected.last().ok_or("the map label has no name line")?.clone()
-                } else {
-                    detected.first().ok_or("the map label has no street line")?.clone()
-                };
-                (gray, if map_line { 1 } else { 0 })
+                // Nothing saved and nothing detected.
+                return Err(format!("the {kind} line was not found"));
             }
         }
         other => {
@@ -935,162 +902,60 @@ pub fn box_crop(serial: u64, kind: String) -> Result<LabelCrop, String> {
     })
 }
 
+/// The shipped preset's boxes for this client size, if one exists. The calibration
+/// window uses it to tell the player's own boxes apart from geometry that merely
+/// came from the preset.
+#[tauri::command]
+pub fn preset_calibration(client_w: u32, client_h: u32) -> Option<Calibration> {
+    let ui_mode = settings::ui_mode();
+    crate::preset::for_size(client_w, client_h, ui_mode).map(|profile| profile.calibration)
+}
+
+/// The exact line regions the map reader detects, so the calibration window can
+/// show and store the boxes the overlay is actually using.
+#[tauri::command]
+pub fn map_line_regions(serial: u64) -> Result<Vec<Region>, String> {
+    let frame = cached_frame(serial)?;
+    use_frame_profile(&frame)?;
+    Ok(ocr::map_label_line_regions(&frame)
+        .map(|lines| {
+            lines
+                .into_iter()
+                .map(|(region, _)| region)
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 /// The map box the detector would use for this frame, so the calibration window can
 /// show one where the profile has none. Nothing is stored: the player can adjust the
 /// box and save it, and a saved box then wins over detection.
 #[tauri::command]
 pub fn map_region(serial: u64) -> Result<Option<Region>, String> {
     let frame = cached_frame(serial)?;
+    if let Some(lines) = ocr::map_label_line_regions(&frame) {
+        let left = lines.iter().map(|(region, _)| region.x).min();
+        let top = lines.iter().map(|(region, _)| region.y).min();
+        let right = lines
+            .iter()
+            .map(|(region, _)| region.x + region.w)
+            .max();
+        let bottom = lines
+            .iter()
+            .map(|(region, _)| region.y + region.h)
+            .max();
+        if let (Some(left), Some(top), Some(right), Some(bottom)) = (left, top, right, bottom) {
+            return Ok(Some(Region {
+                x: left,
+                y: top,
+                w: right - left,
+                h: bottom - top,
+            }));
+        }
+    }
+
     let Some(panel) = ocr::detect_minimap_panel(&frame) else {
         return Ok(None);
     };
     Ok(ocr::detect_map_label(&frame, panel))
-}
-
-#[tauri::command]
-pub fn map_label_crop(serial: u64) -> Result<LabelCrop, String> {
-    let frame = cached_frame(serial)?;
-    let panel = ocr::detect_minimap_panel(&frame).ok_or("the minimap panel was not found")?;
-    let label = ocr::detect_map_label(&frame, panel).ok_or("the map label was not found")?;
-    let gray = ocr::crop_gray(&frame, label).ok_or("the map label is outside the window")?;
-    let lines = ocr::text_lines(&gray).len();
-
-    Ok(LabelCrop {
-        w: gray.w as u32,
-        h: gray.h as u32,
-        px: settings::to_hex(&gray.px),
-        lines,
-    })
-}
-
-/// Keep the EXP box of a frame the reader rejected. It is the training data that
-/// matters: a frame the reader could not handle, which a person can label once and
-/// turn into a glyph it will recognise from then on.
-pub(crate) fn save_review(frame: &capture::Frame, reason: &str) {
-    // Keyed to the frame's own size rather than the active profile, so it captures
-    // the box that was actually being read.
-    let Some(region) = profile::load(frame.width, frame.height)
-        .and_then(|profile| profile.calibration.exp)
-        .filter(Region::is_usable)
-    else {
-        return;
-    };
-    let Some(gray) = ocr::crop_gray(frame, region) else {
-        return;
-    };
-    let Ok(dir) = review_dir() else {
-        return;
-    };
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-
-    let px = settings::to_hex(&gray.px);
-
-    // A frame that fails stays on screen and fails again every second; keep it
-    // once rather than fifty times.
-    if let Some(newest) = review_files(&dir).pop() {
-        if let Ok(text) = std::fs::read_to_string(newest) {
-            if let Ok(record) = serde_json::from_str::<ReviewRecord>(&text) {
-                if record.px == px {
-                    return;
-                }
-            }
-        }
-    }
-
-    let record = ReviewRecord {
-        t: chrono::Utc::now().timestamp(),
-        reason: reason.to_string(),
-        w: gray.w as u32,
-        h: gray.h as u32,
-        px,
-    };
-    let Ok(text) = serde_json::to_string(&record) else {
-        return;
-    };
-    let _ = std::fs::write(dir.join(format!("{}.json", record.t)), text);
-    prune_reviews(&dir);
-}
-
-#[tauri::command]
-pub fn review_frames() -> Vec<ReviewFrame> {
-    let Ok(dir) = review_dir() else {
-        return Vec::new();
-    };
-
-    let mut frames: Vec<ReviewFrame> = review_files(&dir)
-        .into_iter()
-        .filter_map(|path| {
-            let id = path.file_stem()?.to_str()?.to_string();
-            let text = std::fs::read_to_string(&path).ok()?;
-            let record: ReviewRecord = serde_json::from_str(&text).ok()?;
-            Some(ReviewFrame {
-                id,
-                t: record.t,
-                reason: record.reason,
-                w: record.w,
-                h: record.h,
-                px: record.px,
-            })
-        })
-        .collect();
-
-    frames.sort_by_key(|frame| std::cmp::Reverse(frame.t));
-    frames
-}
-
-/// Label a rejected frame: learn its glyphs into the atlas for the size in use,
-/// then drop the frame. The typed text is the ground truth the frame was missing.
-#[tauri::command]
-pub fn label_review(id: String, text: String) -> Result<LearningInfo, String> {
-    let text = text.trim().to_string();
-    if text.is_empty() {
-        return Err("type what the box shows".into());
-    }
-
-    let path = review_dir()?.join(format!("{id}.json"));
-    let raw = std::fs::read_to_string(&path).map_err(|_| "that frame is gone".to_string())?;
-    let record: ReviewRecord = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-
-    let px = settings::from_hex(&record.px).ok_or("the stored frame is unreadable")?;
-    if px.len() != record.w as usize * record.h as usize {
-        return Err("the stored frame is the wrong size".into());
-    }
-
-    let stored = settings::load_atlas();
-    let source = stored.source.clone();
-    let mut atlas = Atlas::from_settings(&stored);
-    atlas.learn(
-        &text,
-        &ocr::Gray {
-            w: record.w as usize,
-            h: record.h as usize,
-            px,
-        },
-    )?;
-    let mut updated = atlas.to_settings();
-    // A rejected frame on a game-seeded set fills a gap; it does not turn the
-    // whole set into a taught one, which would hide the "auto" state in the UI.
-    updated.source = if source.is_empty() {
-        "taught".into()
-    } else {
-        source
-    };
-    settings::save_atlas(&updated)?;
-    let _ = std::fs::remove_file(&path);
-
-    Ok(learning_info(&updated))
-}
-
-#[tauri::command]
-pub fn clear_review() -> Result<usize, String> {
-    let dir = review_dir()?;
-    let mut removed = 0usize;
-    for path in review_files(&dir) {
-        if std::fs::remove_file(path).is_ok() {
-            removed += 1;
-        }
-    }
-    Ok(removed)
 }

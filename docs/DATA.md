@@ -41,16 +41,6 @@ One JSON object per line, one line per second of captured play, grouped by local
 
 `repair_history` (the **repair history** button on the History page) marks rows that break those invariants with `bad: true`. A row is only marked when it sits below the running high-water mark *and* the recording later climbs back over it — a genuine loss of EXP never recovers, so it is left alone. Rows are flagged rather than deleted: the file stays as evidence of how often the reader failed, and a mistaken flag can be removed by hand.
 
-## Rejected frames — `data/review/*.json`
-
-Whenever a read is rejected, the EXP box that produced it is saved here, so it can be labelled by hand instead of being lost. Cap at the 50 most recent; a frame that fails every second while it sits on screen is stored once.
-
-```json
-{"t":1762800000,"reason":"EXP read inconsistent (25.83% vs 26.44%)","w":152,"h":22,"px":"1f1f…"}
-```
-
-`px` is one hex byte per pixel, plain luminance. The **Review frames** panel in Calibration lists them, magnified; typing what the box shows learns those glyphs into the atlas and clears the entry. That is the fallback when the client atlas cannot be located — the seeded set is complete on its own, so rejections become rare.
-
 ## Profiles — `data/profiles/<W>x<H>[@mode].json`
 
 Calibration is scoped to the game's **client size and UI Size**. Each pair gets one file:
@@ -135,6 +125,36 @@ Taught **fingerprints** still win when they match, and a taught `mapAtlas` lette
 The name-table match is only trusted when the best whole-line DTW score is below 0.55 and clear of the runner-up; an ambiguous line is reported `unknown` rather than guessed. The taught letter-atlas text path keeps its old rule (nearly every shape matched), and a near miss is snapped onto a name that was taught explicitly — that restores the spaces a glyph read drops (`VictoriaRoad` → `Victoria Road`) and ignores the channel marker, so `Free Market <15>` still matches on channel 16.
 
 The label glyph set is per UI Size like every other raster, so switching mode starts its letters over.
+
+### Minimap states
+
+The minimap has three zoom states, and the reader handles each:
+
+| State | What is on screen | Map name |
+|---|---|---|
+| Expanded | title bar + icon/name band | two-line label, Arial Bold 12 white |
+| Title-bar only | title bar + map graphic, no icon/name | **not drawn — reported `unknown`** |
+| Folded | one bar with `Street :Map` inside | matched against the client table |
+
+Detection is anchored on the orange `WORLD` badge, which is present in every
+state (34×10, `#DD9911` border / `#FFCC55` fill). The fill around it identifies
+the state: the normal `#99BBCC` panel component is expanded at 59 px and
+title-bar-only at 16 px; a light `#DDDDDD` bar is folded. The `-`/`+` button
+fills corroborate the state but are not required.
+
+The folded bar draws black text on `#DDDDDD` and joins the two fields with a
+colon (`Victoria Road :Kerning City`). It is Arial Regular 12 anti-aliased, so
+the reader renders `"{street} :{name}"` for every client-table pair and matches
+the whole line; the winning entry supplies both fields. The folded crop is
+inverted before matching because the existing matcher expects ink-on-dark.
+
+A frame that carries no name — title-bar-only — records `map: "unknown"` with
+`mapHidden: true`. The overlay shows placeholders for the map and street, a yellow
+dot, and `minimap collapsed` as a warning at the bottom; it does not offer
+calibration, because there is nothing on screen to read. A label that is present but fails to match
+records `unknown` with `mapHidden: false`, which is the case that does warrant a
+correction. The app never carries the last name forward: if the name is not on
+screen, it is not assumed.
 
 ### Managing profiles
 

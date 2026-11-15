@@ -38,6 +38,10 @@ pub struct Sample {
     pub map: String,
     pub state: String,
     pub conf: f64,
+    /// True when the minimap is collapsed to its title bar, so no map name is on
+    /// screen. Absent in older rows, so it defaults to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub map_hidden: bool,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -53,6 +57,9 @@ pub struct Readings {
     pub level_text: String,
     pub name: Option<String>,
     pub job: Option<String>,
+    /// True when the minimap is collapsed to its title bar. There is no map name
+    /// to read and nothing to calibrate; the overlay shows a distinct state.
+    pub map_hidden: bool,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -61,6 +68,10 @@ pub struct Profile {
     pub name: Option<String>,
     pub job: Option<String>,
 }
+
+/// Last profile published by the reader, so a frontend reload can recover it
+/// without waiting for the next change event.
+static LAST_PROFILE: std::sync::Mutex<Option<Profile>> = std::sync::Mutex::new(None);
 
 /// A successful tick: the reading plus whether it may be recorded yet.
 struct TickOutcome {
@@ -233,6 +244,7 @@ fn run<R: Runtime>(app: AppHandle<R>) {
             map: String::new(),
             state: "idle".into(),
             conf: 1.0,
+            map_hidden: false,
         });
     }
 
@@ -252,6 +264,10 @@ fn run<R: Runtime>(app: AppHandle<R>) {
             Ok(outcome) => {
                 if engine.published_profile.as_ref() != Some(&outcome.profile) {
                     engine.published_profile = Some(outcome.profile.clone());
+                    *LAST_PROFILE
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) =
+                        Some(outcome.profile.clone());
                     let _ = app.emit("profile", &outcome.profile);
                 }
 
@@ -284,11 +300,6 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                 publish_capture(&app, &mut engine, CaptureStatus::uncalibrated(reason));
             }
             Err(TickError::Parse(reason)) => {
-                // A rejected read is the frame worth keeping: it is exactly the one
-                // the reader could not handle, so labelling it fills the gap.
-                if let Some(frame) = engine.last_frame.clone() {
-                    crate::calibration::save_review(&frame, &reason);
-                }
                 engine.keep_outcome(false);
                 let status = engine.status(Some(reason));
                 publish_capture(&app, &mut engine, status);
@@ -499,11 +510,13 @@ fn tick(
     let calibration = profile.calibration.clone();
     let atlas = Atlas::from_settings(&profile.atlas);
     let level_atlas = Atlas::from_settings(&profile.level_atlas);
+    let identity_atlas = Atlas::from_settings(&profile.identity_atlas);
     let readings = read_frame(
         &frame,
         &calibration,
         &atlas,
         &level_atlas,
+        &identity_atlas,
         &profile.maps,
         &profile.streets,
         &profile.identities,
@@ -563,6 +576,7 @@ fn tick(
             map: readings.map,
             state: state.into(),
             conf: readings.conf,
+            map_hidden: readings.map_hidden,
         },
         profile: Profile {
             name: readings.name.clone(),
@@ -572,11 +586,13 @@ fn tick(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn read_frame(
     frame: &Frame,
     calibration: &Calibration,
     atlas: &Atlas,
     level_atlas: &Atlas,
+    identity_atlas: &Atlas,
     maps: &[Template],
     streets: &[Template],
     identities: &Identities,
@@ -632,28 +648,28 @@ pub(crate) fn read_frame(
         None => pct,
     };
 
-    // The map is stored as its name; the street is a separate fingerprint. Combine
-    // them into the "street\nname" string the overlay splits into subtitle + headline.
-    let map_name = match_map(frame, calibration, maps);
-    let street = match_street(frame, calibration.street, streets);
+    // The minimap has three zoom states. Detection runs once and both the map and
+    // street readers consume it, instead of each re-running panel detection.
+    let minimap = ocr::detect_minimap(frame);
+    let (map_name, street, map_hidden) =
+        match_map_and_street(frame, calibration, maps, streets, minimap);
     let map = match street {
         Some(street) if map_name != "unknown" => format!("{street}\n{map_name}"),
         _ => map_name,
     };
 
-    // The name/job boxes are Arial: read them as text from the seeded letter
-    // atlas, and fall back to the exact fingerprint when that is not available.
-    let identity_atlas = Atlas::from_settings(&settings::load_identity_atlas());
+    // The caller passes the atlas from the profile it just loaded/seeded, so the
+    // read never depends on a separate active-profile cache being in sync.
     let name = read_identity(
         frame,
         calibration.name,
-        &identity_atlas,
+        identity_atlas,
         identities.name.as_ref(),
     );
     let job = read_identity(
         frame,
         calibration.job,
-        &identity_atlas,
+        identity_atlas,
         identities.job.as_ref(),
     );
 
@@ -668,6 +684,7 @@ pub(crate) fn read_frame(
         level_text,
         name,
         job,
+        map_hidden,
     })
 }
 
@@ -917,6 +934,55 @@ fn match_map(frame: &Frame, calibration: &Calibration, templates: &[Template]) -
     "unknown".into()
 }
 
+/// Resolve the map and street for the minimap state on this frame.
+///
+/// Expanded reads the two-line label; folded reads the single `Street :Map` bar;
+/// title-bar-only has no text at all and returns nothing. A frame with no
+/// detectable minimap keeps the old fingerprint/name-table path.
+fn match_map_and_street(
+    frame: &Frame,
+    calibration: &Calibration,
+    maps: &[Template],
+    streets: &[Template],
+    minimap: Option<ocr::Minimap>,
+) -> (String, Option<String>, bool) {
+    match minimap.as_ref().map(|minimap| minimap.state) {
+        Some(ocr::MinimapState::TitleBarOnly) => ("unknown".into(), None, true),
+        Some(ocr::MinimapState::Folded) => {
+            let Some(minimap) = minimap.as_ref() else {
+                return ("unknown".into(), None, false);
+            };
+            let Some(label) = ocr::folded_label(frame, minimap) else {
+                log_once("folded minimap: no label crop");
+                return ("unknown".into(), None, false);
+            };
+            let Some(dir) = settings::mscw_dir() else {
+                return ("unknown".into(), None, false);
+            };
+            let Some(index) = crate::font_seed::label_index(std::path::Path::new(&dir)) else {
+                return ("unknown".into(), None, false);
+            };
+            match crate::font_seed::match_folded_label(&label, &index.folded_lines, 8, 0.55) {
+                Some(((street, name), score)) => {
+                    log_once(&format!(
+                        "folded minimap: {street:?} / {name:?} (score {score:.3})"
+                    ));
+                    (name, Some(street), false)
+                }
+                None => {
+                    log_once("folded minimap: label did not match the client table");
+                    ("unknown".into(), None, false)
+                }
+            }
+        }
+        _ => {
+            let map_name = match_map(frame, calibration, maps);
+            let street = match_street(frame, calibration.street, streets);
+            (map_name, street, false)
+        }
+    }
+}
+
 fn match_map_name(frame: &Frame) -> Option<String> {
     let dir = settings::mscw_dir()?;
     let index = crate::font_seed::label_index(std::path::Path::new(&dir))?;
@@ -960,6 +1026,17 @@ fn match_map_fingerprint(
 
 #[tauri::command]
 pub fn get_profile() -> Profile {
+    // The frontend calls this on every mount. Return the last reading, not just
+    // the taught identities: a webview reload would otherwise come back empty
+    // and the engine would not re-emit a profile that has not changed.
+    if let Some(profile) = LAST_PROFILE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+    {
+        return profile;
+    }
+
     let identities = settings::load_identities();
     Profile {
         name: identities.name.map(|template| template.label),
@@ -1053,6 +1130,7 @@ mod tests {
             &calibration,
             &atlas,
             &Atlas::from_settings(&settings::load_level_atlas()),
+            &Atlas::from_settings(&settings::load_identity_atlas()),
             &maps,
             &streets,
             &identities,
@@ -1349,25 +1427,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "diagnostic: writes one review frame from the live game"]
-    fn dumps_a_review_frame() {
-        let selector = settings::WindowSelector {
-            title: "MapleStory".into(),
-            process: "MapleStory.exe".into(),
-        };
-        let window = window_target::resolve_selector(&selector).expect("game window");
-        let frame = crate::capture::client_frame(window.hwnd).expect("frame");
-
-        crate::calibration::save_review(&frame, "diagnostic");
-        let dir = crate::data_dir().expect("data dir").join("review");
-        let count = std::fs::read_dir(&dir).map(|entries| entries.count()).unwrap_or(0);
-        println!("review frames now: {count}");
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            println!("  {}", entry.file_name().to_string_lossy());
-        }
-    }
-
-    #[test]
     #[ignore = "diagnostic: learns the live minimap label into a label atlas and reads it back"]
     fn map_text_round_trip() {
         let selector = settings::WindowSelector {
@@ -1487,6 +1546,7 @@ mod tests {
                 &profile.calibration,
                 &Atlas::from_settings(&exp_stored),
                 &Atlas::from_settings(&level_stored),
+                &Atlas::from_settings(&profile.identity_atlas),
                 &profile.maps,
                 &profile.streets,
                 &profile.identities,
@@ -1506,6 +1566,61 @@ mod tests {
             );
             assert_eq!(readings.name.as_deref(), Some("Euroblood"));
             assert_eq!(readings.job.as_deref(), Some("Page"));
+        }
+    }
+
+    #[test]
+    #[ignore = "proof: reads the map name in all three minimap states"]
+    fn reads_minimap_states() {
+        let data = crate::data_dir().expect("data dir");
+        for (folder, expected) in [
+            ("20261114-194246", Some("Victoria Road\nKerning City")),
+            ("20261114-194533", None),
+            ("20261114-194948", Some("Victoria Road\nKerning City")),
+            (
+                "20261114-193427-folded",
+                Some("Hidden Street\n1st Accompaniment <Exit>"),
+            ),
+        ] {
+            let path = data.join("map-samples").join(folder).join("frame.bmp");
+            if !path.is_file() {
+                println!("{folder}: no frame.bmp");
+                continue;
+            }
+            let frame = load_bmp_frame(&path);
+            let profile = profile::activate(frame.width, frame.height).expect("profile");
+            let readings = read_frame(
+                &frame,
+                &profile.calibration,
+                &Atlas::from_settings(&profile.atlas),
+                &Atlas::from_settings(&profile.level_atlas),
+                &Atlas::from_settings(&profile.identity_atlas),
+                &profile.maps,
+                &profile.streets,
+                &profile.identities,
+            )
+            .expect("read saved frame");
+            println!(
+                "{folder}: state={:?} map={:?}",
+                ocr::detect_minimap(&frame).map(|minimap| minimap.state),
+                readings.map
+            );
+            match expected {
+                Some(expected) => {
+                    assert_eq!(readings.map, expected, "{folder}: wrong map");
+                    assert!(!readings.map_hidden, "{folder}: should not be hidden");
+                }
+                None => {
+                    assert_eq!(
+                        readings.map, "unknown",
+                        "{folder}: a frame with no name must report unknown"
+                    );
+                    assert!(
+                        readings.map_hidden,
+                        "{folder}: title-bar-only must be flagged as hidden"
+                    );
+                }
+            }
         }
     }
 
@@ -1631,6 +1746,7 @@ mod tests {
             &calibration,
             &atlas,
             &Atlas::from_settings(&profile.level_atlas),
+            &Atlas::from_settings(&profile.identity_atlas),
             &maps,
             &streets,
             &identities,

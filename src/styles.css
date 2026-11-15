@@ -112,6 +112,11 @@ body,
   background: #facc15;
 }
 
+/* Reading is fine, but the minimap is collapsed and draws no map name. */
+.dot.hidden {
+  background: #facc15;
+}
+
 .dot.lost {
   background: #f87171;
 }
@@ -151,6 +156,8 @@ body,
 
 .pct {
   margin-left: auto;
+  min-width: 6ch;
+  text-align: right;
   font-size: 13px;
   color: #f8fafc;
 }
@@ -265,8 +272,16 @@ body.page-body #root {
 }
 
 .muted {
-  margin: 2px 0 0;
   color: #94a3b8;
+}
+
+/* Paragraphs used the muted style as their spacing; inline spans must not inherit
+   paragraph margins or sizes, or a placeholder row reflows differently from a read. */
+p.muted {
+  margin: 2px 0 0;
+}
+
+p.muted:not(.small) {
   font-size: 11px;
 }
 
@@ -520,14 +535,6 @@ body.page-body #root {
   background: #38bdf8;
 }
 
-.roi-map {
-  border-color: #f59e0b;
-}
-
-.roi-map span {
-  background: #f59e0b;
-}
-
 .roi-identity {
   border-color: #c084fc;
 }
@@ -581,9 +588,14 @@ body.page-body #root {
   border: 1px solid rgba(148, 163, 184, 0.14);
 }
 
-.readout.on {
-  border-color: rgba(74, 222, 128, 0.5);
-  background: rgba(74, 222, 128, 0.08);
+.readout.open {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(148, 163, 184, 0.10);
+}
+
+.readout.folded {
+  border-color: rgba(148, 163, 184, 0.10);
+  background: rgba(148, 163, 184, 0.035);
 }
 
 .readout-head {
@@ -696,31 +708,6 @@ button:disabled {
   align-items: center;
   gap: 6px;
   margin-bottom: 8px;
-}
-
-.review-row {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  padding: 6px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.review-crop {
-  width: 304px;
-  height: 44px;
-  image-rendering: pixelated;
-  background: #10141c;
-  border-radius: 4px;
-  flex: none;
-}
-
-.review-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
 }
 
 .glyph-list {

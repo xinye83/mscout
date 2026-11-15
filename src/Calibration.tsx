@@ -11,7 +11,6 @@ import type {
   ProfileSummary,
   Readings,
   Region,
-  ReviewFrame,
   TargetStatus,
   UiModeOption,
 } from "./types";
@@ -391,6 +390,9 @@ export default function Calibration() {
   const startRef = useRef<{ x: number; y: number } | null>(null);
 
   const [preview, setPreview] = useState<Preview | null>(null);
+  // Shipped boxes for this size. A profile box equal to the preset is not a
+  // calibration the player made, so the preview does not draw it as one.
+  const [presetCal, setPresetCal] = useState<Calibration | null>(null);
   // Rendered size of the preview element, so ROI labels can be placed clear of the
   // boxes and of each other.
   const [previewBox, setPreviewBox] = useState<{ w: number; h: number } | null>(null);
@@ -410,7 +412,7 @@ export default function Calibration() {
   const [expanded, setExpanded] = useState<Partial<Record<Readout, boolean>>>({});
   // Manual correction controls are hidden when the automatic source is ready.
   const [manual, setManual] = useState<Partial<Record<Readout, boolean>>>({});
-  const [drawer, setDrawer] = useState<"profiles" | "fixes" | null>(null);
+  const [drawer, setDrawer] = useState<"profiles" | null>(null);
   const [drag, setDrag] = useState<Region | null>(null);
   const [learning, setLearning] = useState<LearningInfo | null>(null);
   const [mscw, setMscw] = useState<MscwStatus | null>(null);
@@ -427,9 +429,6 @@ export default function Calibration() {
   const [activeProfile, setActiveProfile] = useState<ProfileSummary | null>(null);
   const [uiModes, setUiModes] = useState<UiModeOption[]>([]);
   const [sizeChoice, setSizeChoice] = useState<string | null>(null);
-  const [reviewFrames, setReviewFrames] = useState<ReviewFrame[]>([]);
-  const [reviewId, setReviewId] = useState<string | null>(null);
-  const [reviewText, setReviewText] = useState("");
   const [client, setClient] = useState<{ w: number; h: number } | null>(null);
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -449,37 +448,51 @@ export default function Calibration() {
     setProbe(readings);
   }, []);
 
-  // A profile with no saved map box would show nothing for the map, so seed the
-  // detector's label and split it into its two lines. Nothing is saved until some
-  // other action saves; a box already held (drawn or saved) is left alone.
+  // The map is read by detection, so seed the preview from the detected line
+  // regions rather than legacy saved boxes. Nothing is persisted here; a drawn box
+  // is saved by the usual action.
   const seedMapBox = useCallback((serial: number) => {
     if (!serial) return;
-    invoke<Region | null>("map_region", { serial })
-      .then(async (region) => {
-        if (!region) return;
-        let street: Region | null = null;
-        let map: Region = region;
-        try {
-          const pair = await invoke<Region[]>("split_identity", {
-            serial,
-            x: region.x,
-            y: region.y,
-            w: region.w,
-            h: region.h,
-          });
-          if (pair.length === 2) {
-            street = pair[0];
-            map = pair[1];
-          }
-        } catch {
-          // Keep the unsplit label as the map-name line.
+    // The reader detects both lines; mirror those regions so the preview overlays
+    // and the cards show the pixels the overlay actually reads. Saved boxes in an
+    // older profile can hold the whole label and are only the fallback.
+    invoke<Region[]>("map_line_regions", { serial })
+      .then((lines) => {
+        if (lines.length > 0) {
+          setRegions((current) => ({
+            ...current,
+            street: lines.length > 1 ? lines[0] : null,
+            map: lines[lines.length - 1],
+          }));
+          return;
         }
-        setRegions((current) => {
-          // Fill the street line even when a map box already exists (an older profile
-          // may hold an unsplit full-label box); only take the map line if missing.
-          if (current.street) return current;
-          return { ...current, street, map: current.map ?? map };
-        });
+
+        return invoke<Region | null>("map_region", { serial }).then(
+          async (region) => {
+            if (!region) return;
+            let street: Region | null = null;
+            let map: Region = region;
+            try {
+              const pair = await invoke<Region[]>("split_identity", {
+                serial,
+                x: region.x,
+                y: region.y,
+                w: region.w,
+                h: region.h,
+              });
+              if (pair.length === 2) {
+                street = pair[0];
+                map = pair[1];
+              }
+            } catch {
+              // Keep the unsplit label as the map-name line.
+            }
+            setRegions((current) => {
+              if (current.street) return current;
+              return { ...current, street, map: current.map ?? map };
+            });
+          },
+        );
       })
       .catch(() => undefined);
   }, []);
@@ -494,43 +507,10 @@ export default function Calibration() {
     invoke<UiModeOption[]>("ui_modes")
       .then(setUiModes)
       .catch(() => undefined);
-    invoke<ReviewFrame[]>("review_frames")
-      .then(setReviewFrames)
-      .catch(() => undefined);
     invoke<MscwStatus>("get_mscw_status")
       .then(setMscw)
       .catch(() => undefined);
   }, []);
-
-  const labelReview = async (frame: ReviewFrame) => {
-    setError(null);
-    setMessage(null);
-    try {
-      const info = await invoke<LearningInfo>("label_review", {
-        id: frame.id,
-        text: reviewText,
-      });
-      setLearning(info);
-      setMessage(`Learned ${reviewText.trim()} from the saved frame`);
-      setReviewId(null);
-      setReviewText("");
-      refreshProfiles();
-    } catch (cause) {
-      setError(String(cause));
-    }
-  };
-
-  const clearReview = async () => {
-    setError(null);
-    try {
-      const removed = await invoke<number>("clear_review");
-      setMessage(`Cleared ${removed} saved frames`);
-      setReviewId(null);
-      refreshProfiles();
-    } catch (cause) {
-      setError(String(cause));
-    }
-  };
 
   // The one save path: whatever set of boxes the window is showing goes to the profile
   // for this frame's client size. A drawn or cleared box is persisted immediately, so
@@ -654,7 +634,6 @@ export default function Calibration() {
       context.putImageData(new ImageData(pixels, width, height), 0, 0);
       setPreview({ width, height, serial });
       bumpShapes();
-      seedMapBox(serial);
       // The active profile can change under us (the engine picks it by client
       // size), so re-read what is learned as well as the shapes.
       const info = await invoke<LearningInfo>("get_learning").catch(() => null);
@@ -667,6 +646,9 @@ export default function Calibration() {
         () => null,
       );
       if (calibration) setRegions(calibration);
+      // Run after the saved set is installed: detection is the source of truth for
+      // the two map lines, so it must not be overwritten by legacy saved boxes.
+      seedMapBox(serial);
       const levelBox = usable(calibration?.level ?? null);
       // Seed when the set is absent or incomplete. A complete taught set is left
       // alone: reseeding replaces corrections the player made by hand.
@@ -743,6 +725,19 @@ export default function Calibration() {
     void freeze();
   }, [freeze]);
 
+  useEffect(() => {
+    if (!preview) {
+      setPresetCal(null);
+      return;
+    }
+    invoke<Calibration | null>("preset_calibration", {
+      clientW: preview.width,
+      clientH: preview.height,
+    })
+      .then(setPresetCal)
+      .catch(() => setPresetCal(null));
+  }, [preview]);
+
   // Track the preview element's rendered size so label placement can use real pixels.
   useEffect(() => {
     const element = previewRef.current;
@@ -787,7 +782,7 @@ export default function Calibration() {
   };
 
   const onPointerDown = (event: ReactPointerEvent) => {
-    if (!preview) return;
+    if (!preview || active === "map") return;
     const start = point(event);
     startRef.current = start;
     setDrag({ x: start.x, y: start.y, w: 0, h: 0 });
@@ -806,7 +801,12 @@ export default function Calibration() {
     setDrag(null);
     if (!drawn || drawn.w <= 4 || drawn.h <= 4) return;
 
-    if (active !== "identity" && active !== "map") {
+    if (active === "map") {
+      // Map lines are detected, not drawn.
+      return;
+    }
+
+    if (active !== "identity") {
       await applyRegions(
         withRegion(regions, active, drawn),
         `Saved the ${READOUT_TITLE[active]} box`,
@@ -814,9 +814,9 @@ export default function Calibration() {
       return;
     }
 
-    // One box around both stacked lines (job over name, or street over map name);
-    // split it into its two lines. If that fails, split it in half so the player
-    // still gets two boxes to nudge.
+    // One box around both stacked lines (job over name); split it into its two
+    // lines. If that fails, split it in half so the player still gets two boxes
+    // to nudge.
     let pair: Region[] | null = null;
     try {
       pair = await invoke<Region[]>("split_identity", {
@@ -837,22 +837,16 @@ export default function Calibration() {
       ];
     }
 
-    if (active === "map") {
-      const [street, map] = pair;
-      await applyRegions({ ...regions, street, map }, "Saved the map box");
-    } else {
-      const [job, name] = pair;
-      await applyRegions({ ...regions, job, name }, "Saved the name / job box");
-    }
+    const [job, name] = pair;
+    await applyRegions({ ...regions, job, name }, "Saved the name / job box");
   };
 
   const clearReadout = async (readout: Readout) => {
+    if (readout === "map") return;
     const next =
       readout === "identity"
         ? { ...regions, name: null, job: null }
-        : readout === "map"
-          ? { ...regions, street: null, map: null }
-          : withRegion(regions, readout, null);
+        : withRegion(regions, readout, null);
     await applyRegions(next, `Cleared the ${READOUT_TITLE[readout]} box`);
   };
 
@@ -1034,42 +1028,35 @@ export default function Calibration() {
     .split("")
     .filter((digit) => !coverage.includes(digit));
 
-  // The map box is stored as its two lines (street over map name); the reader
-  // fingerprints the whole label, so the preview shows one box around both.
-  const mapBox =
-    regions.street && regions.map
-      ? {
-          x: Math.min(regions.street.x, regions.map.x),
-          y: Math.min(regions.street.y, regions.map.y),
-          w:
-            Math.max(
-              regions.street.x + regions.street.w,
-              regions.map.x + regions.map.w,
-            ) - Math.min(regions.street.x, regions.map.x),
-          h:
-            Math.max(
-              regions.street.y + regions.street.h,
-              regions.map.y + regions.map.h,
-            ) - Math.min(regions.street.y, regions.map.y),
-        }
-      : regions.street ?? regions.map;
-
   const expUsable = usable(regions.exp);
   const levelUsable = usable(regions.level);
-  const mapUsable = usable(mapBox);
   const streetUsable = usable(regions.street);
   const nameUsable = usable(regions.name);
   const jobUsable = usable(regions.job);
   const identityUsable = nameUsable || jobUsable;
 
-  const boxFor: Record<Readout, boolean> = {
-    exp: expUsable,
-    level: levelUsable,
-    map: mapUsable,
-    identity: identityUsable,
+  // A preset only supplies starting geometry; it is not something the player
+  // calibrated. Draw a box only when the box differs from the shipped preset.
+  const sameRegion = (a: Region | null, b: Region | null) =>
+    !!a &&
+    !!b &&
+    a.x === b.x &&
+    a.y === b.y &&
+    a.w === b.w &&
+    a.h === b.h;
+  const isPresetBox = (key: "exp" | "level" | "name" | "job") =>
+    sameRegion(regions[key], presetCal?.[key] ?? null);
+  const showBox = (key: "exp" | "level" | "name" | "job") =>
+    usable(regions[key]) && !isPresetBox(key);
+  const showIdentityBox = showBox("name") || showBox("job");
+  const canClear = (key: Readout) => {
+    if (key === "map") return false;
+    if (key === "identity") {
+      return identityUsable && (!isPresetBox("name") || !isPresetBox("job"));
+    }
+    return showBox(key);
   };
 
-  const mark = (ok: boolean) => (ok ? "box ✓" : "box ✗");
   const mapNames = mscw?.mapNames ?? 0;
   const taughtMaps = learning?.maps.length ?? 0;
   const mapAuto = mapNames > 0;
@@ -1085,7 +1072,6 @@ export default function Calibration() {
         : learning?.learned
           ? "learned"
           : "";
-  const sizeLabel = learning?.glyphSize ? ` ${learning.glyphSize}` : "";
   const levelSourceLabel =
     learning?.levelSource === "game"
       ? "auto"
@@ -1094,9 +1080,8 @@ export default function Calibration() {
         : learning?.levelLearned
           ? "learned"
           : "";
-  const levelSizeLabel = learning?.levelSize ? ` ${learning.levelSize}` : "";
   const identitySourceLabel = identityAuto
-    ? `auto${learning?.identitySize ? ` ${learning.identitySize}` : ""}`
+    ? "auto · Arial"
     : learning?.identitySource === "taught"
       ? "taught"
       : learning?.identityLetters
@@ -1108,7 +1093,7 @@ export default function Calibration() {
       ? `taught · ${taughtMaps} maps`
       : "no map table";
   const mapNote = mapAuto
-    ? `Street and map are matched automatically from the client's own map table (${mapNames} names). Use Correct manually only to fix a map that is missing or misread.`
+    ? `Street and map are detected and matched from the client's map table (${mapNames} names). Use Correct manually only to fix a missing or misread map.`
     : taughtMaps
       ? "Using the taught map fingerprints; no client map table is loaded. Use Correct manually to add maps."
       : "No client map table found — locate the MSCW folder, or use Correct manually to teach street/map here.";
@@ -1123,23 +1108,21 @@ export default function Calibration() {
           ? "Name and job are using the taught fingerprints. Use Correct manually only to fix a misread."
           : "No automatic name/job set yet — use Correct manually to teach them here.";
 
+  const identityBoxes = (nameUsable ? 1 : 0) + (jobUsable ? 1 : 0);
+  const digitStatus = (hasBox: boolean, covered: number, source: string) =>
+    !hasBox
+      ? "no box"
+      : `${source ? `${source} · ` : ""}${covered}/10 digits`;
   const statusFor: Record<Readout, string> = {
-    exp: [
-      mark(expUsable),
-      `${coverage.length}/10 digits`,
-      sourceLabel ? `${sourceLabel}${sizeLabel}` : "no digits",
-    ].join(" · "),
-    level: [
-      mark(levelUsable),
-      `${levelCoverage.length}/10 digits`,
-      levelSourceLabel ? `${levelSourceLabel}${levelSizeLabel}` : "no digits",
-    ].join(" · "),
+    exp: digitStatus(expUsable, coverage.length, sourceLabel),
+    level: digitStatus(levelUsable, levelCoverage.length, levelSourceLabel),
     map: mapStatus,
-    identity: [
-      `name ${nameUsable ? "✓" : "✗"}`,
-      `job ${jobUsable ? "✓" : "✗"}`,
-      identitySourceLabel || "no glyphs",
-    ].join(" · "),
+    identity:
+      identityBoxes === 0
+        ? "no box"
+        : identityBoxes === 1
+          ? "1 of 2 boxes"
+          : identitySourceLabel || "no glyphs",
   };
 
   // The automatic source is the default; manual teaching is a correction.
@@ -1167,18 +1150,25 @@ export default function Calibration() {
   const ready = expUsable && missing.length === 0;
   const seeded = learning?.source === "game";
   const allAuto =
-    seeded && levelSourceLabel === "auto" && identityAuto && mapAuto;
+    seeded &&
+    ready &&
+    levelUsable &&
+    levelSourceLabel === "auto" &&
+    identityAuto &&
+    nameUsable &&
+    jobUsable &&
+    mapAuto;
   const expNote =
     coverage.length === 10
       ? sourceLabel === "auto"
-        ? "EXP digits are seeded from the client glyph atlas. Use Correct manually or a shape below to fix a misread."
-        : "EXP digits are learned for this box. Use Correct manually or a shape below to fix a misread."
+        ? "EXP digits are loaded from the client atlas. Correct manually only if the value is wrong."
+        : "EXP digits are learned for this box. Correct manually only if the value is wrong."
       : "No complete automatic set yet. Type exactly what the box shows, punctuation included.";
   const levelNote =
     levelCoverage.length === 10
       ? levelSourceLabel === "auto"
-        ? "Level digits are seeded from the client glyph atlas. The level sits on pale tiles, so the reader segments it on bright ink. Use Correct manually or a shape below to fix a misread."
-        : "Level digits are learned for this box. Use Correct manually or a shape below to fix a misread."
+        ? "Level digits are loaded from the client atlas. Correct manually only if the value is wrong."
+        : "Level digits are learned for this box. Correct manually only if the value is wrong."
       : "No complete automatic level set yet. Draw the level box, then type just the digits — no \"LV.\"";
   const statusText = !expUsable
     ? "EXP box needed — MScout cannot read without it"
@@ -1202,6 +1192,7 @@ export default function Calibration() {
       case "level":
         return probe && probe.lv > 0 ? `Lv ${probe.lv}` : null;
       case "map":
+        if (probe?.mapHidden) return "minimap collapsed";
         return probe?.map && probe.map !== "unknown"
           ? probe.map.replace(/\n/g, " / ")
           : null;
@@ -1251,10 +1242,15 @@ export default function Calibration() {
   // A label starts above its box and is pushed up a row when it would otherwise cover
   // a box or another label. Needs the preview's pixel size to compare against.
   const labelBoxes: LabelBox[] = [
-    regions.exp && { key: "exp", region: regions.exp, text: "EXP" },
-    regions.level && { key: "level", region: regions.level, text: "LV" },
-    mapBox && { key: "map", region: mapBox, text: "MAP" },
-    identityBox && { key: "identity", region: identityBox, text: "NAME / JOB" },
+    regions.exp && showBox("exp")
+      ? { key: "exp", region: regions.exp, text: "EXP" }
+      : null,
+    regions.level && showBox("level")
+      ? { key: "level", region: regions.level, text: "LV" }
+      : null,
+    identityBox && showIdentityBox
+      ? { key: "identity", region: identityBox, text: "NAME / JOB" }
+      : null,
   ].filter((box): box is LabelBox => box !== null);
   const labelTops: Record<string, number> =
     preview && previewBox && preview.width > 0
@@ -1309,9 +1305,10 @@ export default function Calibration() {
           <button
             className="ghost"
             style={{ marginLeft: "auto" }}
+            title="Choose the MapleStory MSCW folder"
             onClick={() => void locateGame()}
           >
-            Locate…
+            Locate MSCW folder…
           </button>
           <button
             className="ghost"
@@ -1334,7 +1331,7 @@ export default function Calibration() {
             onPointerUp={onPointerUp}
           >
             <canvas ref={canvasRef} />
-            {preview && regions.exp && (
+            {preview && showBox("exp") && regions.exp && (
               <Box
                 region={regions.exp}
                 preview={preview}
@@ -1343,7 +1340,7 @@ export default function Calibration() {
                 labelTop={labelTops.exp}
               />
             )}
-            {preview && regions.level && (
+            {preview && showBox("level") && regions.level && (
               <Box
                 region={regions.level}
                 preview={preview}
@@ -1352,16 +1349,7 @@ export default function Calibration() {
                 labelTop={labelTops.level}
               />
             )}
-            {preview && mapBox && (
-              <Box
-                region={mapBox}
-                preview={preview}
-                className="roi-map"
-                label="MAP"
-                labelTop={labelTops.map}
-              />
-            )}
-            {preview && identityBox && (
+            {preview && showIdentityBox && identityBox && (
               <Box
                 region={identityBox}
                 preview={preview}
@@ -1382,7 +1370,9 @@ export default function Calibration() {
           </div>
           <p className="muted small">
             {preview
-              ? `Drag on the image to draw the ${READOUT_TITLE[active]} box.`
+              ? active === "map"
+                ? "Street and map are detected automatically — no box needed."
+                : `Drag on the image to draw the ${READOUT_TITLE[active]} box.`
               : "Press Freeze frame to capture the game, then draw the boxes."}
           </p>
         </div>
@@ -1391,15 +1381,19 @@ export default function Calibration() {
           {READOUTS.map((readout) => {
             const key = readout.key;
             return (
-              <section key={key} className={`readout ${active === key ? "on" : ""}`}>
+              <section
+                key={key}
+                className={`readout ${showBody(key) ? "open" : "folded"}`}
+              >
                 <header
                   className="readout-head"
-                  onClick={() =>
+                  onClick={() => {
+                    setActive(key);
                     setExpanded((current) => {
                       const shown = current[key] ?? !done[key];
                       return { ...current, [key]: !shown };
-                    })
-                  }
+                    });
+                  }}
                 >
                   <span className="readout-caret">{showBody(key) ? "▾" : "▸"}</span>
                   <span className="readout-name">{readout.title}</span>
@@ -1408,19 +1402,22 @@ export default function Calibration() {
 
                 {showBody(key) && (
                   <div className="readout-actions">
-                    <button
-                      className={`ghost ${active === key ? "on" : ""}`}
-                      onClick={() => setActive(key)}
-                    >
-                      Draw box
-                    </button>
-                    <button
-                      className="ghost"
-                      disabled={!boxFor[key]}
-                      onClick={() => void clearReadout(key)}
-                    >
-                      Clear box
-                    </button>
+                    {key !== "map" && (
+                      <button
+                        className={`ghost ${active === key ? "on" : ""}`}
+                        onClick={() => setActive(key)}
+                      >
+                        Draw box
+                      </button>
+                    )}
+                    {key !== "map" && canClear(key) && (
+                      <button
+                        className="ghost"
+                        onClick={() => void clearReadout(key)}
+                      >
+                        Clear box
+                      </button>
+                    )}
                     <button
                       className="ghost"
                       onClick={() => toggleManual(key)}
@@ -1437,12 +1434,12 @@ export default function Calibration() {
                     </p>
                     {key === "exp" && (
                       <>
+                        <p className="muted small">{expNote}</p>
                         <CropPreview
                           kind="exp"
                           serial={serial}
                           caption={() => "The EXP box, as the reader sees it"}
                         />
-                        <p className="muted small">{expNote}</p>
                         {showManual("exp") && (
                           <>
                             <p className="muted small">Manual correction:</p>
@@ -1483,12 +1480,12 @@ export default function Calibration() {
 
                     {key === "level" && (
                       <>
+                        <p className="muted small">{levelNote}</p>
                         <CropPreview
                           kind="level"
                           serial={serial}
                           caption={() => "The level box, as the reader sees it"}
                         />
-                        <p className="muted small">{levelNote}</p>
                         {showManual("level") && (
                           <>
                             <p className="muted small">Manual correction:</p>
@@ -1577,10 +1574,6 @@ export default function Calibration() {
                                     .join(", ")
                                 : "—"}
                             </p>
-                            <p className="muted small">
-                              Taught label letters (fallback):{" "}
-                              {learning?.mapLetters || "—"}
-                            </p>
                           </>
                         )}
                       </>
@@ -1644,68 +1637,6 @@ export default function Calibration() {
         </div>
       </div>
 
-      {drawer === "fixes" && (
-        <section className="cal-drawer">
-          <div className="drawer-head">
-            <strong>Fixes waiting</strong>
-            <span className="muted small">
-              Reads the overlay rejected — label one and its digits are learned.
-            </span>
-            {reviewFrames.length > 0 && (
-              <button className="ghost" onClick={() => void clearReview()}>
-                Clear all
-              </button>
-            )}
-          </div>
-          {reviewFrames.length === 0 && (
-            <span className="muted small">Nothing waiting — no rejected reads saved.</span>
-          )}
-          {reviewFrames.map((frame) => (
-            <div key={frame.id} className="review-row">
-              <canvas
-                className="review-crop"
-                ref={(element) => paintReview(element, frame)}
-              />
-              <div className="review-meta">
-                <span className="muted small">
-                  {new Date(frame.t * 1000).toLocaleTimeString()} · {frame.reason}
-                </span>
-                {reviewId === frame.id ? (
-                  <div className="cal-row">
-                    <input
-                      className="cal-input"
-                      value={reviewText}
-                      placeholder="what the box shows, e.g. 45,004 [25.83%]"
-                      onChange={(event) => setReviewText(event.target.value)}
-                    />
-                    <button
-                      className="ghost on"
-                      disabled={!reviewText.trim()}
-                      onClick={() => void labelReview(frame)}
-                    >
-                      learn
-                    </button>
-                    <button className="ghost" onClick={() => setReviewId(null)}>
-                      cancel
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    className="ghost"
-                    onClick={() => {
-                      setReviewId(frame.id);
-                      setReviewText("");
-                    }}
-                  >
-                    label…
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-        </section>
-      )}
-
       {drawer === "profiles" && (
         <section className="cal-drawer">
           <div className="drawer-head">
@@ -1748,7 +1679,7 @@ export default function Calibration() {
               <span className="muted small">
                 No profile for{" "}
                 {chosenSize ? chosenSize.replace("x", "×") : "this client size"} yet —
-                freeze a frame and draw a box to create one.
+                freeze a frame to create one.
               </span>
             )}
             {shownProfiles.map((profile) => (
@@ -1764,7 +1695,7 @@ export default function Calibration() {
                     {uiModes.find((option) => option.id === profile.uiMode)?.label ??
                       profile.uiMode}
                     {" · "}
-                    {profile.calibrated ? "calibrated" : "boxes missing"}
+                    {profile.calibrated ? "can read" : "needs EXP box"}
                     {` · ${profile.glyphs} digits · ${profile.maps} maps`}
                     {profile.source
                       ? ` · ${profile.source} ${profile.glyphSize}`
@@ -1817,12 +1748,6 @@ export default function Calibration() {
       )}
 
       <footer className="cal-foot">
-        <button
-          className={`ghost ${drawer === "fixes" ? "on" : ""}`}
-          onClick={() => setDrawer(drawer === "fixes" ? null : "fixes")}
-        >
-          Fixes waiting: {reviewFrames.length}
-        </button>
         <button className="ghost" onClick={() => void test()} disabled={!preview}>
           Test read
         </button>

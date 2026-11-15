@@ -865,10 +865,17 @@ pub(crate) fn dtw_distance(live: &Gray, rendered: &Gray) -> f64 {
     best
 }
 
-/// A rendered Arial Bold 12 name, cached for whole-line matching.
+/// One rendered `(street, name)` folded-bar line.
+pub type FoldedLine = ((String, String), Gray);
+
+/// Rendered label candidates, cached for whole-line matching.
 pub struct LabelIndex {
     pub map_names: Vec<(String, Gray)>,
     pub streets: Vec<(String, Gray)>,
+    /// The folded bar's single line: `"{street} :{name}"`, rendered in the folded
+    /// bar's font (Arial Regular 12, anti-aliased). Matching it returns both
+    /// fields at once, so no colon detection or segmentation is needed.
+    pub folded_lines: Vec<FoldedLine>,
 }
 
 static LABEL_INDEX: std::sync::Mutex<Option<(String, std::sync::Arc<LabelIndex>)>> =
@@ -893,8 +900,10 @@ pub fn label_index(mscw_dir: &std::path::Path) -> Option<std::sync::Arc<LabelInd
     let entries = crate::map_names::load(mscw_dir).ok()?;
     let mut seen_names = std::collections::HashSet::new();
     let mut seen_streets = std::collections::HashSet::new();
+    let mut seen_pairs = std::collections::HashSet::new();
     let mut map_names = Vec::new();
     let mut streets = Vec::new();
+    let mut folded_lines = Vec::new();
 
     for entry in entries {
         if seen_names.insert(entry.name.clone()) {
@@ -907,11 +916,64 @@ pub fn label_index(mscw_dir: &std::path::Path) -> Option<std::sync::Arc<LabelInd
                 streets.push((entry.street.clone(), gray));
             }
         }
+        if seen_pairs.insert((entry.street.clone(), entry.name.clone())) {
+            let line = format!("{} :{}", entry.street, entry.name);
+            if let Some(gray) = render_text_bitmap("Arial", 12, false, 4, 180, &line) {
+                folded_lines.push(((entry.street, entry.name), gray));
+            }
+        }
     }
 
-    let index = std::sync::Arc::new(LabelIndex { map_names, streets });
+    let index = std::sync::Arc::new(LabelIndex {
+        map_names,
+        streets,
+        folded_lines,
+    });
     *guard = Some((key, index.clone()));
     Some(index)
+}
+
+/// Match a folded-bar line against `(street, name)` candidates and return both
+/// fields from the winning entry.
+pub fn match_folded_label(
+    live: &Gray,
+    candidates: &[FoldedLine],
+    max_width_delta: i32,
+    max_score: f64,
+) -> Option<((String, String), f64)> {
+    let binaries: Vec<Gray> = [160u8, 180, 200]
+        .into_iter()
+        .map(|threshold| binarize_gray(live, threshold))
+        .collect();
+
+    let mut scored: Vec<(f64, i32, &FoldedLine)> = Vec::new();
+    for candidate in candidates {
+        let rendered = &candidate.1;
+        let mut best: Option<(f64, i32)> = None;
+        for binary in &binaries {
+            let delta = (binary.w as i32 - rendered.w as i32).abs();
+            if delta > max_width_delta {
+                continue;
+            }
+            let score = dtw_distance(binary, rendered);
+            if best.map_or(true, |(current, _)| score < current) {
+                best = Some((score, delta));
+            }
+        }
+        if let Some((score, delta)) = best {
+            scored.push((score, delta, candidate));
+        }
+    }
+    scored.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    });
+    let (best_score, _best_delta, best_candidate) = *scored.first()?;
+    if best_score > max_score {
+        return None;
+    }
+    Some((best_candidate.0.clone(), best_score))
 }
 
 /// Match a live label line against rendered candidates. The width filter is what
@@ -923,42 +985,72 @@ pub fn match_label(
     max_width_delta: i32,
     max_score: f64,
 ) -> Option<(String, f64)> {
-    let mut best: Option<(String, f64)> = None;
-    let mut second = f64::MAX;
-    for threshold in [160u8, 180, 200] {
-        let binary = binarize_gray(live, threshold);
-        for (text, rendered) in candidates {
-            if (binary.w as i32 - rendered.w as i32).abs() > max_width_delta {
+    let binaries: Vec<Gray> = [160u8, 180, 200]
+        .into_iter()
+        .map(|threshold| binarize_gray(live, threshold))
+        .collect();
+
+    // Score every width-compatible candidate once, taking its best threshold.
+    let mut scored: Vec<(f64, i32, &str)> = Vec::new();
+    for (text, rendered) in candidates {
+        let mut best: Option<(f64, i32)> = None;
+        for binary in &binaries {
+            let delta = (binary.w as i32 - rendered.w as i32).abs();
+            if delta > max_width_delta {
                 continue;
             }
-            let score = dtw_distance(&binary, rendered);
-            match &best {
-                None => best = Some((text.clone(), score)),
-                Some((best_text, best_score)) => {
-                    if score < *best_score {
-                        if text != best_text {
-                            second = second.min(*best_score);
-                        }
-                        best = Some((text.clone(), score));
-                    } else if text != best_text && score < second {
-                        second = score;
-                    }
-                }
+            let score = dtw_distance(binary, rendered);
+            if best.map_or(true, |(current, _)| score < current) {
+                best = Some((score, delta));
             }
         }
-        if best.as_ref().is_some_and(|(_, score)| *score < 0.35) {
-            break;
+        if let Some((score, delta)) = best {
+            scored.push((score, delta, text.as_str()));
+        }
+    }
+    if scored.is_empty() {
+        return None;
+    }
+    scored.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    });
+
+    let (best_score, _best_delta, best_text) = scored[0];
+    if best_score > max_score {
+        return None;
+    }
+
+    // A close runner-up means the line is ambiguous; refuse rather than display a
+    // plausible-looking wrong map. Names that differ only by a trailing roman
+    // numeral ("... Beach I/II/III") render 3 px apart, so the DTW scores overlap.
+    // In that case the rendered width is the discriminator: the true name is the
+    // one whose width matches the live ink most closely, and only if that winner
+    // is unique.
+    if let Some(second) = scored.get(1) {
+        if best_score + 0.05 > second.0 {
+            let rivals: Vec<&(f64, i32, &str)> = scored
+                .iter()
+                .take_while(|(score, _, _)| *score <= best_score + 0.05)
+                .collect();
+            if rivals.len() > 1 {
+                let mut by_width = rivals.clone();
+                by_width.sort_by_key(|(_, delta, _)| *delta);
+                let (_, first_delta, first_text) = *by_width[0];
+                let unique = by_width
+                    .iter()
+                    .skip(1)
+                    .all(|(_, delta, _)| *delta > first_delta);
+                if unique {
+                    return Some((first_text.to_string(), best_score));
+                }
+                return None;
+            }
         }
     }
 
-    let (text, score) = best?;
-    // A close runner-up means the line is ambiguous (two similar names); refuse
-    // rather than display a plausible-looking wrong map.
-    if score <= max_score && score + 0.05 <= second {
-        Some((text, score))
-    } else {
-        None
-    }
+    Some((best_text.to_string(), best_score))
 }
 
 #[cfg(test)]
@@ -1601,6 +1693,131 @@ mod tests {
                     "   shape {}x{} at {} -> '{}' d={:.1}",
                     guess.w, guess.h, guess.x, guess.ch, guess.distance
                 );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "diagnostic: score the live map line against the client table"]
+    fn probe_live_map_line() {
+        let data = crate::data_dir().expect("data dir");
+        let path = data.join("debug-frame.bmp");
+        if !path.is_file() {
+            println!("no {}", path.display());
+            return;
+        }
+        let frame = load_bmp(&path);
+        let lines = crate::ocr::map_label_lines(&frame);
+        let Some(lines) = lines else {
+            println!("no label lines");
+            return;
+        };
+        println!("{} lines", lines.len());
+        let Some(mscw) = crate::settings::mscw_dir() else {
+            println!("no mscw dir");
+            return;
+        };
+        let index = label_index(std::path::Path::new(&mscw)).expect("index");
+        for (i, line) in lines.iter().enumerate() {
+            println!("line {i}: {}x{}", line.w, line.h);
+            let mut scored: Vec<(f64, String)> = index
+                .map_names
+                .iter()
+                .map(|(name, rendered)| (dtw_distance(line, rendered), name.clone()))
+                .collect();
+            scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            for (score, name) in scored.iter().take(5) {
+                println!("   {score:.3}  {name}");
+            }
+            println!("   match_label(8,0.55) = {:?}", match_label(line, &index.map_names, 8, 0.55));
+            println!("   match_label(16,0.55) = {:?}", match_label(line, &index.map_names, 16, 0.55));
+            println!("   match_label(24,0.70) = {:?}", match_label(line, &index.map_names, 24, 0.70));
+            for row in crate::ocr::shape_art(line) {
+                println!("   |{row}|");
+            }
+            let bin = binarize_gray(line, 200);
+            println!("   -- binarized t200 --");
+            for row in crate::ocr::shape_art(&bin) {
+                println!("   |{row}|");
+            }
+        }
+        for (name, rendered) in &index.map_names {
+            if name.contains("Thicket") || name.contains("Beach") {
+                println!("table: {name:?} rendered {}x{}", rendered.w, rendered.h);
+            }
+        }
+        for (name, rendered) in &index.map_names {
+            if name == "Thicket Around the Beach II" {
+                println!("-- rendered {name:?} {}x{} --", rendered.w, rendered.h);
+                for row in crate::ocr::shape_art(rendered) {
+                    println!("   |{row}|");
+                }
+                for t in [160u8, 180, 200] {
+                    let bin = binarize_gray(&lines[1], t);
+                    println!("   true-name dtw at t{t} = {:.3}", dtw_distance(&bin, rendered));
+                }
+                let mut scored: Vec<(f64, String)> = Vec::new();
+                for t in [160u8, 180, 200] {
+                    let bin = binarize_gray(&lines[1], t);
+                    for (name, rendered) in &index.map_names {
+                        scored.push((dtw_distance(&bin, rendered), format!("{name} t{t}")));
+                    }
+                }
+                scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                println!("   best with binarized live:");
+                for (score, name) in scored.iter().take(6) {
+                    println!("      {score:.3}  {name}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "diagnostic: identify the folded minimap bar font"]
+    fn probe_folded_font() {
+        let data = crate::data_dir().expect("data dir");
+        for (dir, street, name) in [
+            ("20261114-194948", "Victoria Road", "Kerning City"),
+            ("20261114-193427-folded", "Hidden Street", "1st Accompaniment <Exit>"),
+        ] {
+            let path = data.join("map-samples").join(dir).join("frame.bmp");
+            if !path.is_file() {
+                println!("{dir}: missing");
+                continue;
+            }
+            let frame = load_bmp(&path);
+            let Some(minimap) = crate::ocr::detect_minimap(&frame) else {
+                println!("{dir}: no minimap");
+                continue;
+            };
+            let Some(live) = crate::ocr::folded_label(&frame, &minimap) else {
+                println!("{dir}: no folded label");
+                continue;
+            };
+            println!("{dir}: live {}x{}", live.w, live.h);
+            let text = format!("{street} :{name}");
+            for face in ["Arial", "Consolas", "Courier New", "Lucida Console", "Tahoma", "MS Sans Serif"] {
+                for bold in [false, true] {
+                    for px in 8..=14 {
+                        for (quality, threshold) in [(1u8, 128u8), (4, 180)] {
+                            let Some(rendered) =
+                                render_text_bitmap(face, px, bold, quality, threshold, &text)
+                            else {
+                                continue;
+                            };
+                            if (rendered.w as i32 - live.w as i32).abs() > 8 {
+                                continue;
+                            }
+                            let score = dtw_distance(&binarize_gray(&live, 180), &rendered);
+                            if score < 0.40 {
+                                println!(
+                                    "   {score:.3} {face} bold={bold} px={px} q={quality} t={threshold} -> {}x{}",
+                                    rendered.w, rendered.h
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
     }

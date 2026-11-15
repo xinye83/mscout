@@ -40,17 +40,17 @@ export function etaSeconds(sample: Sample, ratePerHour: number | null): number |
 }
 
 export function formatRate(ratePerHour: number | null): string {
-  if (ratePerHour === null) return "—";
+  if (ratePerHour === null) return "-";
   const abs = Math.abs(ratePerHour);
   if (abs >= 1_000_000) return `${(ratePerHour / 1_000_000).toFixed(2)}M/h`;
   if (abs >= 1_000) return `${(ratePerHour / 1_000).toFixed(1)}k/h`;
   const rounded = Math.round(ratePerHour);
-  if (rounded === 0) return "—";
+  if (rounded === 0) return "-";
   return `${rounded}/h`;
 }
 
 export function formatDuration(seconds: number | null): string {
-  if (seconds === null || !Number.isFinite(seconds)) return "—";
+  if (seconds === null || !Number.isFinite(seconds)) return "-";
   const s = Math.max(0, Math.round(seconds));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);

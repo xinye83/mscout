@@ -1388,6 +1388,429 @@ pub fn detect_map_label(frame: &Frame, panel: Region) -> Option<Region> {
     })
 }
 
+/// The three states of the minimap widget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MinimapState {
+    /// Title bar plus the icon/name band.
+    Expanded,
+    /// Title bar only; no name is drawn.
+    TitleBarOnly,
+    /// One-line bar with the whole `Street :Map` label inside it.
+    Folded,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Minimap {
+    pub state: MinimapState,
+    /// The chrome band: the title bar in states 1/2, the whole bar when folded.
+    pub bar: Region,
+    /// The `MINI MAP` title text, states 1/2 only. Exposed as an anchor for
+    /// diagnostics and future text bounds.
+    #[allow(dead_code)]
+    pub title: Option<Region>,
+    /// The `WORLD` badge (the orange chip).
+    pub badge: Region,
+    /// The map icon in the name band, state 1 only. Exposed as an anchor.
+    #[allow(dead_code)]
+    pub icon: Option<Region>,
+    /// Active (bright blue) zoom buttons found in the title bar.
+    #[allow(dead_code)]
+    pub active_buttons: usize,
+}
+
+const FOLDED_FILL: (i32, i32, i32) = (221, 221, 221);
+
+fn near_rgb(frame: &Frame, x: usize, y: usize, rgb: (i32, i32, i32), tol: i32) -> bool {
+    let w = frame.width as usize;
+    let index = (y * w + x) * 4;
+    (frame.rgba[index] as i32 - rgb.0).abs() <= tol
+        && (frame.rgba[index + 1] as i32 - rgb.1).abs() <= tol
+        && (frame.rgba[index + 2] as i32 - rgb.2).abs() <= tol
+}
+
+/// Bounding box of the largest connected colour blob whose size passes `accept`.
+///
+/// A plain bbox over the whole frame is unusable here: the same orange appears in
+/// the minimap icon and scenery, so the union spans half the screen. The badge is
+/// a single small chip, so we take the largest component that fits its shape.
+fn colour_box(
+    frame: &Frame,
+    rgb: (i32, i32, i32),
+    tol: i32,
+    accept: impl Fn(i32, i32) -> bool,
+) -> Option<Region> {
+    component_regions(frame, |x, y| near_rgb(frame, x, y, rgb, tol), accept)
+        .into_iter()
+        .next()
+}
+
+/// Every connected component whose size passes `accept`, largest first.
+fn component_regions(
+    frame: &Frame,
+    matches: impl Fn(usize, usize) -> bool,
+    accept: impl Fn(i32, i32) -> bool,
+) -> Vec<Region> {
+    let w = frame.width as usize;
+    let h = frame.height as usize;
+    let mut mask = vec![false; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            mask[y * w + x] = matches(x, y);
+        }
+    }
+
+    let mut visited = vec![false; w * h];
+    let mut out: Vec<Region> = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+    for start in 0..w * h {
+        if !mask[start] || visited[start] {
+            continue;
+        }
+        stack.clear();
+        stack.push(start);
+        visited[start] = true;
+        let mut min_x = usize::MAX;
+        let mut min_y = usize::MAX;
+        let mut max_x = 0usize;
+        let mut max_y = 0usize;
+        while let Some(index) = stack.pop() {
+            let x = index % w;
+            let y = index / w;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+            for (nx, ny) in [
+                (x.wrapping_sub(1), y),
+                (x + 1, y),
+                (x, y.wrapping_sub(1)),
+                (x, y + 1),
+            ] {
+                if nx < w && ny < h {
+                    let next = ny * w + nx;
+                    if mask[next] && !visited[next] {
+                        visited[next] = true;
+                        stack.push(next);
+                    }
+                }
+            }
+        }
+        if min_x == usize::MAX {
+            continue;
+        }
+        let region = Region {
+            x: min_x as i32,
+            y: min_y as i32,
+            w: (max_x - min_x + 1) as i32,
+            h: (max_y - min_y + 1) as i32,
+        };
+        if accept(region.w, region.h) {
+            out.push(region);
+        }
+    }
+    out.sort_by_key(|region| -(region.w * region.h));
+    out
+}
+
+/// The badge is dithered between its border and fill shades, so it is matched as
+/// an orange range rather than one exact colour.
+fn is_badge_pixel(frame: &Frame, x: usize, y: usize) -> bool {
+    let index = (y * frame.width as usize + x) * 4;
+    let r = frame.rgba[index] as i32;
+    let g = frame.rgba[index + 1] as i32;
+    let b = frame.rgba[index + 2] as i32;
+    r >= 190 && (130..=235).contains(&g) && b <= 130
+}
+
+/// Count the active (bright blue) zoom buttons in the title bar.
+///
+/// State 1 has one active button (`-` blue, `+` grey); state 2 has two. This
+/// corroborates the panel-height test, so a clipped expanded panel (shorter
+/// component) cannot be mistaken for the title-bar-only state.
+fn active_zoom_buttons(frame: &Frame, bar: Region, badge: Region) -> usize {
+    let w = frame.width as usize;
+    let x0 = (badge.x - 72).max(bar.x).max(0) as usize;
+    let x1 = badge.x.max(0) as usize;
+    let y0 = badge.y.max(0) as usize;
+    let y1 = (badge.y + badge.h).max(0) as usize;
+    if x1 <= x0 || y1 <= y0 || y1 > frame.height as usize || x1 > w {
+        return 0;
+    }
+
+    let mut column_blue = vec![false; x1 - x0];
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let index = (y * w + x) * 4;
+            let r = frame.rgba[index] as i32;
+            let g = frame.rgba[index + 1] as i32;
+            let b = frame.rgba[index + 2] as i32;
+            if b > 190 && b - r > 70 && g > 140 {
+                column_blue[x - x0] = true;
+            }
+        }
+    }
+
+    let mut runs = 0;
+    let mut in_run = false;
+    let mut gap = 0;
+    for blue in column_blue {
+        if blue {
+            if !in_run {
+                runs += 1;
+                in_run = true;
+            }
+            gap = 0;
+        } else {
+            gap += 1;
+            // A one-pixel gap is dithering inside one button; a wider gap
+            // separates the two.
+            if gap >= 2 {
+                in_run = false;
+            }
+        }
+    }
+    runs
+}
+
+/// Locate the minimap and which of its three zoom states is showing.
+///
+/// The `WORLD` badge (`#DD9911` border / `#FFCC55` fill, 34×10) is present in
+/// every state, so it anchors detection. The fill immediately left of it says
+/// which state: `#99BBCC` is the normal panel (expanded or title-bar-only), while
+/// a light neutral fill is the folded bar.
+pub fn detect_minimap(frame: &Frame) -> Option<Minimap> {
+    let badge_shape = |w: i32, h: i32| (24..=48).contains(&w) && (8..=16).contains(&h);
+    let badges = component_regions(frame, |x, y| is_badge_pixel(frame, x, y), badge_shape);
+    if badges.is_empty() {
+        return None;
+    }
+
+    let bar_shape = |w: i32, h: i32| (100..=900).contains(&w) && (12..=30).contains(&h);
+    let panel_shape = |w: i32, h: i32| (80..=900).contains(&w) && (12..=300).contains(&h);
+
+    // The same orange range occurs in scenery, so try each badge-shaped blob and
+    // keep the first that actually sits inside a minimap body.
+    for badge in &badges {
+        let cx = badge.x + badge.w / 2;
+        let cy = badge.y + badge.h / 2;
+        let inside = |region: &Region| {
+            cx >= region.x
+                && cx < region.x + region.w
+                && cy >= region.y
+                && cy < region.y + region.h
+        };
+
+        if let Some(bar) = colour_box(frame, FOLDED_FILL, 6, bar_shape) {
+            if inside(&bar) {
+                return Some(Minimap {
+                    state: MinimapState::Folded,
+                    bar,
+                    title: None,
+                    badge: *badge,
+                    icon: None,
+                    active_buttons: active_zoom_buttons(frame, bar, *badge),
+                });
+            }
+        }
+
+        // Expanded and title-bar-only share the same 16 px title bar; only the
+        // #99BBCC component's height differs (59 vs 16).
+        if let Some(panel) = colour_box(frame, PANEL_RGB, 6, panel_shape) {
+            if inside(&panel) {
+                let bar = bar_of(&panel);
+                let title = detect_title_text(frame, bar, *badge);
+                let icon = detect_icon(frame, panel, bar);
+                let active_buttons = active_zoom_buttons(frame, bar, *badge);
+                // The icon is drawn only in the expanded state, so its presence is
+                // the strongest discriminator between expanded and title-bar-only.
+                // The 16 px title bar and two active buttons corroborate state 2.
+                let state = if icon.is_some() || panel.h >= 30 {
+                    MinimapState::Expanded
+                } else if active_buttons >= 2 && title.is_some() {
+                    MinimapState::TitleBarOnly
+                } else {
+                    // A short component with no icon and no two-button signature is
+                    // more likely a clipped expanded panel than a title-only one.
+                    MinimapState::Expanded
+                };
+                return Some(Minimap {
+                    state,
+                    bar,
+                    title,
+                    badge: *badge,
+                    icon,
+                    active_buttons,
+                });
+            }
+        }
+    }
+
+    None
+}
+
+fn bar_of(panel: &Region) -> Region {
+    Region {
+        x: panel.x,
+        y: panel.y,
+        w: panel.w,
+        h: panel.h.min(20),
+    }
+}
+
+/// Dark-pixel bounding box inside `region`, with the pixel count.
+fn dark_ink(frame: &Frame, region: Region) -> Option<(Region, usize)> {
+    let w = frame.width as usize;
+    let h = frame.height as usize;
+    let x0 = region.x.max(0) as usize;
+    let y0 = region.y.max(0) as usize;
+    let x1 = (region.x + region.w).max(0).min(w as i32) as usize;
+    let y1 = (region.y + region.h).max(0).min(h as i32) as usize;
+    let mut min_x = usize::MAX;
+    let mut min_y = usize::MAX;
+    let mut max_x = 0usize;
+    let mut max_y = 0usize;
+    let mut count = 0usize;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let index = (y * w + x) * 4;
+            if frame.rgba[index] < 60 && frame.rgba[index + 1] < 60 && frame.rgba[index + 2] < 60 {
+                count += 1;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    Some((
+        Region {
+            x: min_x as i32,
+            y: min_y as i32,
+            w: (max_x - min_x + 1) as i32,
+            h: (max_y - min_y + 1) as i32,
+        },
+        count,
+    ))
+}
+
+/// The `MINI MAP` title text: a short dark run at the title bar's left, before the
+/// zoom buttons. The folded bar's map line is much wider and is therefore not
+/// mistaken for it.
+fn detect_title_text(frame: &Frame, bar: Region, badge: Region) -> Option<Region> {
+    let width = (badge.x - 72).max(bar.x + 2) - bar.x;
+    if width < 20 {
+        return None;
+    }
+    let region = Region {
+        x: bar.x + 2,
+        y: bar.y + 1,
+        w: width,
+        h: bar.h.saturating_sub(2),
+    };
+    let (ink, _) = dark_ink(frame, region)?;
+    if (20..=80).contains(&ink.w) && (4..=14).contains(&ink.h) {
+        Some(ink)
+    } else {
+        None
+    }
+}
+
+/// The map icon in the name band: a dark-framed square under the title bar, left
+/// of the name text. Only the expanded state draws one.
+fn detect_icon(frame: &Frame, panel: Region, bar: Region) -> Option<Region> {
+    let top = bar.y + bar.h;
+    let height = (panel.y + panel.h) - top;
+    if height < 16 {
+        return None;
+    }
+    let region = Region {
+        x: panel.x + 2,
+        y: top,
+        w: 64,
+        h: height,
+    };
+    let (ink, count) = dark_ink(frame, region)?;
+    if (20..=48).contains(&ink.w) && (20..=48).contains(&ink.h) && count >= 150 {
+        Some(ink)
+    } else {
+        None
+    }
+}
+
+/// The folded bar's label crop: dark text on a light fill, cropped to the ink.
+///
+/// The bar is `Street :Map` on one line. The anchored bounds stop short of the
+/// `-`/`+`/`WORLD` controls, then the crop is inverted so the existing matcher
+/// (which expects ink-on-dark) sees the text as ink.
+pub fn folded_label(frame: &Frame, minimap: &Minimap) -> Option<Gray> {
+    if minimap.state != MinimapState::Folded {
+        return None;
+    }
+    let bar = minimap.bar;
+    // Controls sit immediately left of the badge: two 12 px buttons and gaps.
+    // Anchor the text's right edge on the badge rather than the bar width, so a
+    // longer name (wider bar) does not shift the bound.
+    let text_right = minimap.badge.x - 34;
+    let x0 = (bar.x + 2).max(0);
+    let x1 = text_right.min(bar.x + bar.w);
+    let y0 = (bar.y + 1).max(0);
+    let y1 = bar.y + bar.h - 1;
+    if x1 - x0 < 20 || y1 - y0 < 6 {
+        return None;
+    }
+    let region = Region {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
+    };
+    let gray = crop_gray(frame, region)?;
+    // Invert: the folded bar draws black text on a light fill.
+    let inverted = Gray {
+        w: gray.w,
+        h: gray.h,
+        px: gray.px.iter().map(|pixel| 255 - *pixel).collect(),
+    };
+    let (min_x, min_y, max_x, max_y) = ink_bounds(&inverted, 128)?;
+    let trimmed = Region {
+        x: region.x + min_x,
+        y: region.y + min_y,
+        w: max_x - min_x + 1,
+        h: max_y - min_y + 1,
+    };
+    let gray = crop_gray(frame, trimmed)?;
+    Some(Gray {
+        w: gray.w,
+        h: gray.h,
+        px: gray.px.iter().map(|pixel| 255 - *pixel).collect(),
+    })
+}
+
+fn ink_bounds(gray: &Gray, threshold: u8) -> Option<(i32, i32, i32, i32)> {
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = -1i32;
+    let mut max_y = -1i32;
+    for y in 0..gray.h {
+        for x in 0..gray.w {
+            if gray.px[y * gray.w + x] > threshold {
+                min_x = min_x.min(x as i32);
+                min_y = min_y.min(y as i32);
+                max_x = max_x.max(x as i32);
+                max_y = max_y.max(y as i32);
+            }
+        }
+    }
+    if max_x < 0 {
+        None
+    } else {
+        Some((min_x, min_y, max_x, max_y))
+    }
+}
+
 /// The map-label crop on the fixed fingerprint grid.
 ///
 /// Detection wins: it finds the whole label wherever the minimap is, and a longer
@@ -1419,6 +1842,18 @@ pub fn read_map_label(frame: &Frame) -> Option<Gray> {
 /// The minimap label's text lines, cropped from the frame, top to bottom. The
 /// label is the street line followed by the map name.
 pub fn map_label_lines(frame: &Frame) -> Option<Vec<Gray>> {
+    map_label_line_regions(frame).map(|lines| {
+        lines
+            .into_iter()
+            .map(|(_, gray)| gray)
+            .collect::<Vec<Gray>>()
+    })
+}
+
+/// The minimap label's text lines with the region each one occupies. The reader
+/// uses the line crops; the calibration window uses the regions to show and
+/// store the exact boxes the detector selected.
+pub fn map_label_line_regions(frame: &Frame) -> Option<Vec<(Region, Gray)>> {
     let panel = detect_minimap_panel(frame)?;
     let label = detect_map_label(frame, panel)?;
     let gray = crop_gray(frame, label)?;
@@ -1440,7 +1875,7 @@ pub fn map_label_lines(frame: &Frame) -> Option<Vec<Gray>> {
             h: if line_h > 0 { h.min(line_h) } else { h },
         };
         if let Some(line) = crop_gray(frame, region) {
-            out.push(line);
+            out.push((region, line));
         }
     }
 
@@ -1582,6 +2017,68 @@ mod tests {
         draw_rect(&mut b, 14, 3, 18, 17, 230);
 
         (a, b)
+    }
+
+    #[test]
+    #[ignore = "diagnostic: classify the four saved minimap states"]
+    fn probe_minimap_states() {
+        let data = crate::data_dir().expect("data dir");
+        let samples = [
+            ("20261114-194246", MinimapState::Expanded),
+            ("20261114-194533", MinimapState::TitleBarOnly),
+            ("20261114-194948", MinimapState::Folded),
+            ("20261114-193427-folded", MinimapState::Folded),
+        ];
+        for (name, expected) in samples {
+            let path = data.join("map-samples").join(name).join("frame.bmp");
+            if !path.is_file() {
+                println!("{name}: missing");
+                continue;
+            }
+            let bytes = std::fs::read(&path).expect("bmp");
+            let offset = u32::from_le_bytes(bytes[10..14].try_into().unwrap()) as usize;
+            let width = u32::from_le_bytes(bytes[18..22].try_into().unwrap());
+            let height = i32::from_le_bytes(bytes[22..26].try_into().unwrap()) as u32;
+            let bpp = u16::from_le_bytes(bytes[28..30].try_into().unwrap());
+            let row = width as usize * (bpp as usize / 8);
+            let mut rgba = vec![0u8; width as usize * height as usize * 4];
+            for y in 0..height as usize {
+                let source_y = height as usize - 1 - y;
+                let start = offset + source_y * row;
+                for x in 0..width as usize {
+                    let pixel = start + x * (bpp as usize / 8);
+                    let out = (y * width as usize + x) * 4;
+                    rgba[out] = bytes[pixel + 2];
+                    rgba[out + 1] = bytes[pixel + 1];
+                    rgba[out + 2] = bytes[pixel];
+                    rgba[out + 3] = 255;
+                }
+            }
+            let frame = Frame {
+                width,
+                height,
+                rgba,
+            };
+            let minimap = detect_minimap(&frame);
+            println!(
+                "{name}: {minimap:?} expected {expected:?} title={:?} icon={:?} buttons={}",
+                minimap.and_then(|m| m.title),
+                minimap.and_then(|m| m.icon),
+                minimap.map(|m| m.active_buttons).unwrap_or(0)
+            );
+            assert_eq!(
+                minimap.map(|m| m.state),
+                Some(expected),
+                "{name}: wrong state"
+            );
+            if expected == MinimapState::Folded {
+                let label = folded_label(&frame, &minimap.unwrap());
+                println!(
+                    "   folded label: {:?}",
+                    label.as_ref().map(|g| (g.w, g.h))
+                );
+            }
+        }
     }
 
     #[test]

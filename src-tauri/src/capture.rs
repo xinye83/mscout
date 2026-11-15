@@ -604,6 +604,7 @@ mod tests {
             &profile.calibration,
             &crate::ocr::Atlas::from_settings(&profile.atlas),
             &crate::ocr::Atlas::from_settings(&profile.level_atlas),
+            &crate::ocr::Atlas::from_settings(&profile.identity_atlas),
             &profile.maps,
             &profile.streets,
             &profile.identities,

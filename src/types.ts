@@ -6,6 +6,8 @@ export type Sample = {
   map: string;
   state: "gaining" | "idle";
   conf: number;
+  /** True when the minimap is collapsed and no map name is on screen. */
+  mapHidden?: boolean;
 };
 
 export type Rect = { x: number; y: number; w: number; h: number };
@@ -69,6 +71,8 @@ export type Readings = {
   levelText: string;
   name: string | null;
   job: string | null;
+  /** True when the minimap is collapsed; there is no name to read or calibrate. */
+  mapHidden: boolean;
 };
 
 export type LearningInfo = {
@@ -142,17 +146,6 @@ export type UiModeOption = {
   id: string;
   label: string;
   active: boolean;
-};
-
-/** An EXP box the reader rejected, kept so it can be labelled by hand. */
-export type ReviewFrame = {
-  id: string;
-  t: number;
-  reason: string;
-  w: number;
-  h: number;
-  /** One hex byte per pixel, plain luminance. */
-  px: string;
 };
 
 export type RepairSummary = {
