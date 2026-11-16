@@ -93,6 +93,7 @@ The values below are illustrative; each pair's manifest is authoritative.
       "id": "minimap-expanded",
       "kind": "minimap",
       "state": "expanded",    // expanded | titlebar | folded | hidden
+      "holdout": true,        // optional: the one frozen hold-out state (see below)
       "file": "minimap-expanded.png",
       "source": "client",
       "crop": { "x": 14, "y": 12, "w": 230, "h": 260 }
@@ -143,6 +144,10 @@ Field notes:
   `uiMode`. The settings image must not be a flat colour.
 - `exp`/`pct` must satisfy `exp / pct` ≈ the character's required EXP for the
   level, to within the rounding of the displayed 2-dp percentage.
+- **`holdout`** (default `false`) marks the one frozen hold-out state; see
+  [Frozen hold-out](#frozen-hold-out). It is only meaningful on a `minimap`
+  entry, and `exactly_one_frozen_holdout` fails the hermetic tier unless exactly
+  one image in the whole corpus sets it.
 
 ## Multi-state pairs
 
@@ -152,6 +157,36 @@ They may be captured at different times, so the HUD values can drift. Only one
 not re-read per minimap state. The shared `street`/`map` must match the labels
 drawn by the expanded and folded variants (the title-bar state draws no label,
 so it cannot corroborate them).
+
+## Frozen hold-out
+
+One minimap state is the **frozen hold-out**, marked `"holdout": true` in its
+image entry: **`1920x1080@ideal`, `expanded`**, frozen on **2026-11-16**. Exactly
+one state may carry the flag — `exactly_one_frozen_holdout` (hermetic tier) fails
+on zero or on two.
+
+The hold-out is not read differently; the readers run over it like every other
+case and `accuracy_report` (below) publishes its result. What it is *not* is an
+input to tuning. Do not:
+
+- move a box, threshold, atlas, matcher or map table because the hold-out reads
+  wrong, or add glyph variants/fallbacks until it passes;
+- re-crop, re-label or replace the hold-out frame when the reader changes;
+- move the flag to a case that already passes, or drop it because it is
+  inconvenient.
+
+If the hold-out reads wrong, the report prints it as wrong and the entry stays in
+**Known limitations** ([`../../docs/ROADMAP.md`](../../docs/ROADMAP.md)). Work on
+the other cases first; if the hold-out result changes, that is a finding to
+report, not a number to tune away.
+
+**It was frozen retrospectively.** Every frame here was captured and labelled
+during the 0.5 → 0.6 work, and all of them — this one included — were looked at
+while the Filtered EXP, level and identity readers were tuned. The flag therefore
+reserves the case *from now on*; it does not make it historically independent and
+it must not be reported as an unbiased accuracy estimate. The published counts,
+the command that produced them and this caveat are in
+[`../../docs/ACCURACY.md`](../../docs/ACCURACY.md).
 
 ## Capture protocol
 
@@ -236,6 +271,8 @@ Runs `fixture_corpus_is_complete` (every image indexed; required files; every
 crop in bounds and matching its PNG's size; `standalone` crops equal the whole
 image; `settingsDisplay.resolution`/`uiSize` agreeing with
 `clientW`/`clientH`/`uiMode`; `settings-panel.png` not blank),
+`exactly_one_frozen_holdout` (exactly one state carries `holdout`, checked on the
+unfiltered corpus so `MSCOUT_CASE` cannot narrow it away),
 `minimap_state_matches_ground_truth` (`ocr::detect_minimap` names the captured
 state) and `settings_panel_is_evidence_only` (the settings crop is never composed
 into the frame, so no reader can see it). These need the repository only — the
@@ -257,6 +294,24 @@ minimap state from the image entry decides the expected map form: `expanded` and
 `folded` give `"<street>\n<map>"`, `titlebar` reports the map as hidden, `hidden`
 has no widget to read. Focused `exp`/`map-label` entries are covered by their
 targeted tests; the manifest still validates them in the hermetic tier.
+
+The same tier also carries the accuracy report:
+
+- `accuracy_report` scores every case `exact` / `rejected` / `wrong` against its
+  manifest, prints the per-pair counts and names the frozen hold-out. It asserts
+  nothing about the counts, so a known wrong stays a printed wrong instead of
+  becoming a pass. Its measured counts, the command that produced them and the
+  corpus limits are in [`../../docs/ACCURACY.md`](../../docs/ACCURACY.md).
+- The two gate tests above run the hold-out case like any other; nothing skips it
+  because it is the hold-out.
+
+**Map-label prerequisite.** An expanded/folded map name is matched against the
+client table reached through the app's saved MSCW setting
+(`data/settings.json` → `mscwDir`), which `MSCOUT_MSCW_DIR` does **not** set. In a
+fresh worktree with no `data/settings.json`, every expanded/folded case reports
+the map as `unknown` and the gate fails on the map assertion — that is the
+environment, not the manifest; see
+[`../../docs/ACCURACY.md`](../../docs/ACCURACY.md#corpus-limits).
 
 Set `MSCOUT_CASE=<pair>` to restrict either tier to one pair (or
 `MSCOUT_CASE=<pair>/<state>` for one state), and `MSCOUT_STATE=<expanded|titlebar|folded>`
