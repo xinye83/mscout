@@ -985,11 +985,37 @@ mod tests {
         let (stored, height) = seed_exp_atlas(&seed, &game_dir()).expect("exp seed");
         let atlas = crate::ocr::Atlas::from_settings(&stored);
 
+        // The known gap (ROADMAP item 3): this live `8` is not represented in the
+        // atlas, so its correct glyph scores far worse than the digits that are.
+        // The reader no longer guesses between two characters that explain a shape
+        // equally well — the `13.58%` in the same readout is such a tie — so the
+        // readout is refused instead of reported as the plausible
+        // `26,467[13.59%]` it used to produce. Replace this with the exact read once
+        // the Filtered atlas variants land.
+        {
+            let (_, fixture) = crate::regression::fixture_image("1920x1080@filtered", "exp-26487");
+            let frame = crate::regression::fixture_frame("1920x1080@filtered", "exp-26487");
+            let gray = crate::ocr::crop_gray(&frame, fixture.read_region()).expect("exp crop");
+            let error = atlas
+                .recognize_readout(&gray)
+                .expect_err("a known gap must be a rejection, not a wrong read");
+            assert!(error.contains("too close to tell apart"), "{error}");
+            println!("known gap: exp-26487 rejected: {error}");
+        }
+
         let cases = [
-            ("hud-low-percent", "2,056[1.06%]", Some((2056, 1.06))),
-            ("exp-21865", "21,865[11.22%]", Some((21865, 11.22))),
-            ("exp-26487", "26,487[13.58%]", None),
-            ("exp-36818", "36,818[18.90%]", Some((36818, 18.90))),
+            ("hud-low-percent", "2,056[1.06%]", (2056, 1.06)),
+            ("exp-21865", "21,865[11.22%]", (21865, 11.22)),
+            ("exp-36818", "36,818[18.90%]", (36818, 18.90)),
+        ];
+
+        // Every digit the corpus draws, the rejected readout included: this sweep is
+        // about the atlas covering the live digit shapes, not about one value.
+        let drawn = [
+            "2,056[1.06%]",
+            "21,865[11.22%]",
+            "26,487[13.58%]",
+            "36,818[18.90%]",
         ];
 
         let mut digits = BTreeSet::new();
@@ -998,27 +1024,16 @@ mod tests {
             let frame = crate::regression::fixture_frame("1920x1080@filtered", name);
             let gray = crate::ocr::crop_gray(&frame, fixture.read_region()).expect("exp crop");
             let (text, _) = atlas.recognize_readout(&gray).expect("exp read");
+            assert_eq!(text, expected, "{name}");
+            assert_eq!(
+                crate::ocr::parse_exp_text(&text),
+                Some((parsed.0, parsed.1)),
+                "{name}"
+            );
+        }
 
-            if let Some(parsed) = parsed {
-                assert_eq!(text, expected, "{name}");
-                assert_eq!(crate::ocr::parse_exp_text(&text), Some(parsed), "{name}");
-            } else {
-                // Known gap (ROADMAP item 3): this live `8` is not represented
-                // in the atlas. The correct `8` scores ~29 while `6`/`9` score
-                // ~10-12, and a 20-EXP error still fits the percentage rounding.
-                // Lock the current outcome so a change is intentional; replace
-                // this assertion with the exact read once the Filtered atlas
-                // variants land.
-                assert_eq!(text, "26,467[13.59%]", "{name}: known gap changed");
-                assert_eq!(
-                    crate::ocr::parse_exp_text(&text),
-                    Some((26467, 13.59)),
-                    "{name}"
-                );
-                println!("known gap: {name} reads {text:?} (expected {expected})");
-            }
-
-            for ch in expected.chars().filter(|ch| ch.is_ascii_digit()) {
+        for text in drawn {
+            for ch in text.chars().filter(|ch| ch.is_ascii_digit()) {
                 digits.insert(ch);
             }
         }
