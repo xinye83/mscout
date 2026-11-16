@@ -32,6 +32,38 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 | `cargo check --manifest-path src-tauri/Cargo.toml` | Fast Rust compile check |
 | `npx tsc --noEmit` | Frontend typecheck |
 | `node scripts/gen-mock.mjs` | Write mock samples into `data/samples/` |
+| `npm run version:check` | Check every stored version agrees (non-zero on drift) |
+
+## Version bumping
+
+One version is stored in five files. `scripts/bump-version.mjs` reads and writes all of them; do not edit the numbers by hand, because a missed location is exactly the drift the checker exists to catch.
+
+| Location | Field |
+|---|---|
+| `src-tauri/Cargo.toml` | `version` inside `[package]` |
+| `src-tauri/Cargo.lock` | `version` of the `mscout` `[[package]]` entry |
+| `package.json` | top-level `version` |
+| `package-lock.json` | top-level `version` and `packages[""].version` |
+| `src-tauri/tauri.conf.json` | `version` |
+
+```powershell
+# Check only: exits non-zero on drift, zero when every file agrees.
+node scripts/bump-version.mjs --check
+npm run version:check          # same thing
+
+# Check against a specific version (useful in CI on a release branch).
+node scripts/bump-version.mjs --check 0.7.0
+
+# Preview a bump, then apply it.
+node scripts/bump-version.mjs 0.7.0 --dry-run
+node scripts/bump-version.mjs 0.7.0
+```
+
+A write **requires** an explicit version argument: a bare `node scripts/bump-version.mjs` prints the usage and exits `2` without touching anything. `--check` never writes. Moving to a lower version is refused unless `--force` is passed.
+
+The `CHANGELOG.md` section is never promoted implicitly. Pass `--changelog` to a write to turn `## [Unreleased]` into `## [<version>] - <today>` and move the compare link; with `--check`, `--changelog` instead requires that a released section and link already exist for the version.
+
+Edits are textual and in place, and each one is re-read and verified before it is written (JSON files are re-parsed and deep-compared against the original). The script never runs `cargo` or `npm`, so no lockfile is regenerated: after a bump, review `git diff` and run `node scripts/bump-version.mjs --check`. If `cargo metadata` or `npm install` would rewrite the lock entries differently, that is a toolchain problem worth noticing, not something to paper over here.
 
 ## Running the built exe
 
@@ -57,7 +89,7 @@ Release binary is self-contained (frontend embedded). Useful environment variabl
 ```
 src/                 React UI (live panel, history, calibration, chart, rates, EXP table)
 src-tauri/src/       Rust: capture, OCR/matching, engine loop, profiles, window/tray/hotkeys
-scripts/             dev-only mock sample generator
+scripts/             dev-only mock sample generator and the version bump/check script
 data/                runtime data (gitignored): samples, settings, per-resolution profiles
 docs/                setup, presets, spec, roadmap, decisions, data format, dev notes, rendering research
 ```
