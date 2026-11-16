@@ -6,10 +6,11 @@ pub const CELL_H: usize = 16;
 pub const CELL_LEN: usize = CELL_W * CELL_H;
 
 const MATCH_THRESHOLD: f64 = 30.0;
-/// Ordinary text (name/job) is anti-aliased at Default Ratio, so its letters
-/// match a few pixels further than a bitmap readout. The map label and the
-/// readouts keep the tighter threshold.
-const TEXT_MATCH_THRESHOLD: f64 = 45.0;
+/// Ordinary text (name/job) is anti-aliased at Default Ratio and further
+/// softened by the Filter Applied rendering, so its letters match further out
+/// than a bitmap readout. The map label and the readouts keep the tighter
+/// threshold.
+const TEXT_MATCH_THRESHOLD: f64 = 65.0;
 const MIN_GLYPH_PIXELS: usize = 1;
 /// How far a sample may slide within its cell when matching (sub-pixel drift).
 const SHIFT_SEARCH: i32 = 1;
@@ -1060,7 +1061,7 @@ impl Atlas {
             let mut pass = 0;
             for segment in text_segments(gray) {
                 let (ch, best, other) = self.match_segment(&segment);
-                if best == 0.0 || best > 50.0 || other < best + 4.0 {
+                if best == 0.0 || best > 65.0 || other < best + 4.0 {
                     continue;
                 }
                 let before = self.glyphs.len();
@@ -1088,7 +1089,7 @@ impl Atlas {
             let mut pass = 0;
             for segment in segments(gray) {
                 let (ch, best, other) = self.match_segment(&segment);
-                if best == 0.0 || best > 36.0 || other < best + 4.0 {
+                if best == 0.0 || best > 45.0 || other < best + 4.0 {
                     continue;
                 }
                 let before = self.glyphs.len();
@@ -1115,7 +1116,7 @@ impl Atlas {
             let mut pass = 0;
             for segment in bright_segments(gray, floor) {
                 let (ch, best, other) = self.match_segment(&segment);
-                if best == 0.0 || best > 45.0 || other < best + 4.0 {
+                if best == 0.0 || best > 65.0 || other < best + 4.0 {
                     continue;
                 }
                 let before = self.glyphs.len();

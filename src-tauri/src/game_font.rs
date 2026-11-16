@@ -495,6 +495,31 @@ pub fn seed_level_atlas(
     for glyph in glyphs {
         atlas.learn_glyph(glyph.ch, glyph.bitmap, glyph.w, glyph.h);
     }
+    // The Filter Applied rendering can split a two-digit level into different
+    // sizes (10×11 and 11×14 at 1920). Seed every distinct digit-sized bright
+    // shape, not just the dominant one, or the other digit cannot match.
+    let mut sizes: Vec<(u32, u32)> = Vec::new();
+    for segment in &segments {
+        if (3..=24).contains(&segment.w) && (4..=24).contains(&segment.h) {
+            let size = (segment.w, segment.h);
+            if !sizes.contains(&size) {
+                sizes.push(size);
+            }
+        }
+    }
+    if !sizes.contains(&(target_w, target_h)) {
+        sizes.push((target_w, target_h));
+    }
+    for (w, h) in sizes {
+        if (w, h) == (target_w, target_h) {
+            continue;
+        }
+        if let Ok(glyphs) = level_glyphs(mscw_dir, w, h) {
+            for glyph in glyphs {
+                atlas.learn_glyph(glyph.ch, glyph.bitmap, glyph.w, glyph.h);
+            }
+        }
+    }
     // The live level digit can differ by a stroke from the EXP design (the 1920
     // Default `3`); learn its exact shape from the bright ink.
     atlas.learn_bright(gray, crate::ocr::TEXT_FLOOR_PUB);
@@ -849,4 +874,145 @@ mod tests {
         }
     }
 
+    #[test]
+    #[ignore = "diagnostic: explains the 1920 Filtered read"]
+    fn probe_1920_filtered() {
+        let hud_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata/1920x1080@filtered/hud.png");
+        let hud = image::open(&hud_path).expect("hud fixture").to_rgba8();
+        let frame = Frame {
+            width: hud.width(),
+            height: hud.height(),
+            rgba: hud.into_raw(),
+        };
+        let crop = |x, y, w, h| {
+            crate::ocr::crop_gray(&frame, Region { x, y, w, h }).expect("crop")
+        };
+
+        let exp_gray = crop(650, 15, 155, 18);
+        let (exp_stored, exp_height) =
+            seed_exp_atlas(&exp_gray, &game_dir()).expect("exp seed");
+        let exp = crate::ocr::Atlas::from_settings(&exp_stored);
+        println!(
+            "EXP h={exp_height} glyphs={} read={:?}",
+            exp.glyphs.len(),
+            exp.recognize_readout(&exp_gray)
+        );
+        println!(
+            "  shapes {:?}",
+            crate::ocr::segments(&exp_gray)
+                .iter()
+                .map(|s| (s.w, s.h, s.x, s.y))
+                .collect::<Vec<_>>()
+        );
+        for guess in exp.explain(&exp_gray) {
+            println!(
+                "  {}x{} at {},{} -> '{}' d={:.1} known={}",
+                guess.w, guess.h, guess.x, guess.y, guess.ch, guess.distance, guess.known
+            );
+        }
+
+        let level_gray = crop(63, 23, 36, 23);
+        let (level_stored, level_size) =
+            seed_level_atlas(&level_gray, &game_dir()).expect("level seed");
+        let level = crate::ocr::Atlas::from_settings(&level_stored);
+        println!(
+            "LEVEL size={level_size:?} glyphs={} read={:?}",
+            level.glyphs.len(),
+            level.recognize_level(&level_gray)
+        );
+        println!(
+            "  bright {:?}",
+            crate::ocr::bright_segments(&level_gray, 170)
+                .iter()
+                .map(|s| (s.w, s.h, s.x, s.y))
+                .collect::<Vec<_>>()
+        );
+        for guess in level.explain(&level_gray) {
+            println!(
+                "  {}x{} at {},{} -> '{}' d={:.1} known={}",
+                guess.w, guess.h, guess.x, guess.y, guess.ch, guess.distance, guess.known
+            );
+        }
+
+        for (label, region) in [
+            ("job", Region { x: 112, y: 13, w: 70, h: 22 }),
+            ("name", Region { x: 112, y: 33, w: 110, h: 20 }),
+        ] {
+            let gray = crop(region.x, region.y, region.w, region.h);
+            println!(
+                "{label}: shapes {:?}",
+                crate::ocr::text_segments(&gray)
+                    .iter()
+                    .map(|s| (s.w, s.h, s.x, s.y))
+                    .collect::<Vec<_>>()
+            );
+            match crate::font_seed::seed_identity(&gray) {
+                Some((stored, px)) => {
+                    let atlas = crate::ocr::Atlas::from_settings(&stored);
+                    println!(
+                        "  seed {px}px read={:?}",
+                        atlas.recognize_text(&gray, (gray.h as i32 / 3).max(2))
+                    );
+                    for guess in atlas.explain(&gray) {
+                        println!(
+                            "    {}x{} at {},{} -> '{}' d={:.1} known={}",
+                            guess.w,
+                            guess.h,
+                            guess.x,
+                            guess.y,
+                            guess.ch,
+                            guess.distance,
+                            guess.known
+                        );
+                    }
+                }
+                None => println!("  no seed"),
+            }
+        }
+
+        let mm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata/1920x1080@filtered/minimap-expanded.png");
+        let mm = image::open(&mm_path).expect("minimap fixture").to_rgba8();
+        let mm_frame = Frame {
+            width: mm.width(),
+            height: mm.height(),
+            rgba: mm.into_raw(),
+        };
+        let lines = crate::ocr::map_label_lines(&mm_frame);
+        println!(
+            "map lines {:?}",
+            lines
+                .as_ref()
+                .map(|lines| lines.iter().map(|g| (g.w, g.h)).collect::<Vec<_>>())
+        );
+        if let Some(lines) = lines {
+            if let (Some(street), Some(map)) = (lines.first(), lines.last()) {
+                let dir = game_dir();
+                for px in [12u32, 14, 16, 18, 20, 22, 24] {
+                    let Some(index) = crate::font_seed::label_index(&dir, px) else {
+                        continue;
+                    };
+                    println!(
+                        "  px {px}: street {:?}",
+                        crate::font_seed::match_label(street, &index.streets, 8, 10.0)
+                    );
+                    println!(
+                        "  px {px}: map    {:?}",
+                        crate::font_seed::match_label(map, &index.map_names, 14, 10.0)
+                    );
+                    if px == 16 {
+                        for (name, gray) in index
+                            .map_names
+                            .iter()
+                            .filter(|(name, _)| name.contains("Free Market"))
+                        {
+                            println!("    table {name:?} {}x{}", gray.w, gray.h);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
+

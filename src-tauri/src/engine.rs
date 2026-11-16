@@ -853,7 +853,7 @@ fn match_street(
         };
         let max_score = if px >= 14 { 0.95 } else { 0.55 };
         if let Some((street, score)) =
-            crate::font_seed::match_label(line, &index.streets, 8, max_score)
+            crate::font_seed::match_label(line, &index.streets, 14, max_score)
         {
             if best
                 .as_ref()
@@ -1000,7 +1000,7 @@ fn match_map_and_street(
                 };
                 let max_score = if px >= 14 { 0.95 } else { 0.55 };
                 if let Some((pair, score)) =
-                    crate::font_seed::match_folded_label(&label, &index.folded_lines, 8, max_score)
+                    crate::font_seed::match_folded_label(&label, &index.folded_lines, 14, max_score)
                 {
                     if best
                         .as_ref()
@@ -1041,7 +1041,7 @@ fn match_map_name(frame: &Frame) -> Option<String> {
         };
         let max_score = if px >= 14 { 0.95 } else { 0.55 };
         if let Some((name, score)) =
-            crate::font_seed::match_label(&line, &index.map_names, 8, max_score)
+            crate::font_seed::match_label(&line, &index.map_names, 14, max_score)
         {
             if best
                 .as_ref()
@@ -1243,3 +1243,4 @@ mod tests {
         }
     }
 }
+

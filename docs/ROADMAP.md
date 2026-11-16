@@ -72,14 +72,16 @@ Goal: support **at least two client resolutions across all three UI Size modes**
 
 ### Open items in 0.5.0
 
-- **1920×1080 Filtered (current live setting)**: the client corpus reads EXP
-  `127028[72.91%]` (comma dropped), level empty, name `Furoh ood` (expected
-  `Euroblood`), job `P ge` (expected `Page`), and map `unknown`. The filter
-  changes glyph rendering, and the name/job seeding picks different sizes for the
-  two crops (job 14 px, name 19 px). Root cause not yet isolated.
+- **1920×1080 Filtered (current live setting)**: the EXP now reads
+  `127,028[72.91%]` exactly after the comma fix. The per-box probe reads the
+  first level digit (`3`); the client tier still returns no level because the
+  second digit's 11×14 bright shape is merged with the tile edge. The per-box
+  probe reads job `Page` and name `Furoh ood`; the app's single merged identity
+  atlas (job 14 px + name 19 px) reads `Poge` / `Furohjood`, so merging different
+  font sizes is the next name/job root cause. The map stays `unknown`.
 - **1920×1080 Default**: EXP `127,028[72.91%]`, level `35` and name `Euroblood`
-  pass. The job reads `p go` instead of `Page`, and the map is `unknown`: the
-  170×13 map line is now detected, but the client-table match scores above
+  pass. The job reads `pogo` instead of `Page`, and the map is `unknown`: the
+  170×13 map line is detected, but the client-table match scores above
   threshold.
 - **1920×1200**: Ideal preset and no fixture; Default/Filtered have neither.
 - **Map labels**: the index is size-aware (12–24 px) and the line splitter now
@@ -88,6 +90,46 @@ Goal: support **at least two client resolutions across all three UI Size modes**
 - **Not started**: the screenshot import tool and UI Size layout autodetection.
 - **Green**: all six pairs × three minimap states pass the state gate; 1366×768
   in all three UI sizes and 1920×1080 Ideal pass the full client read.
+
+### Root-cause notes — 1920 Filtered (fixture probe)
+
+- **EXP**: every glyph reads at distance 0 except the comma, which the filter
+  renders as a 4×4 shape at distance 40.1. The punctuation templates cover
+  2×2/3×4/4×3 and the adaptive-learn gate is 36, so the comma is dropped and the
+  readout becomes `127028[72.91%]`.
+- **Level**: the filter segments the two level digits at different sizes —
+  10×11 and 11×14. `seed_level_atlas` picks one dominant size (11×14) and seeds
+  only that, so the 10×11 digit never matches and `recognize_level` returns
+  nothing.
+- **Name/job**: the two crops seed at different Arial sizes (job 14 px, name
+  19 px) and merge. The job's only failure is its `a`: 8×10 at distance 62.1,
+  above the 45 text threshold. The name reads `Furoh ood` because the learned
+  atlas stores the E as F and the b as h (both at distance 0 after learning),
+  and the 2×13 `l` is closest to `L` at 79.7, so it is dropped.
+- **Map**: the label yields two lines (110×10 street, 130×10 map). The street
+  matches `Hidden Street` at 16 px (0.81). The table does contain
+  `Free Market <8>`, but it renders 118×12 at 16 px; the live map line is
+  130×10, twelve pixels wider and two shorter. The width filter (8 px) therefore
+  excludes the correct entry, while `Free Market <10>` (127×12) is close enough
+  in width to be tried and scores badly. The 1920 Default `Free Market <8>`
+  line is 170×13 against a 163×14 22 px render (7 px); it fails on score.
+
+**Fixes attempted from this probe**
+
+- The EXP adaptive-learn gate is now 45, so the Filtered 4×4 comma (distance
+  40.1) is learned; the Filtered EXP reads exactly.
+- `seed_level_atlas` seeds every distinct bright digit size (10×11 and 11×14),
+  but the second Filtered digit is still merged with the tile edge and does not
+  match; the probe reads `3`, the client tier still reads no level.
+- The text gate is now 65: the Filtered job `a` (distance 62.1) matches in the
+  per-box probe and the job reads `Page`. The app merges the 14 px job and 19 px
+  name atlases into one, which then misreads both (`Poge` / `Furohjood`); the
+  merge is the next root cause, not the glyph shapes.
+- The map width window is now 14 px, but the Filtered 130×10 line against the
+  118×12 table entry still fails the DTW score. The label's horizontal/vertical
+  scale differs from the GDI render; that is the remaining map cause.
+- 1366×768 in all three UI sizes and 1920×1080 Ideal still pass the full client
+  read; the hermetic suite passes 35 tests.
 
 ## Next
 

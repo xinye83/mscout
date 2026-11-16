@@ -40,9 +40,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   street/map lines; the 1920 Default name match itself remains open.
 - The 1920×1080 Default EXP readout dropped the comma and misread touching
   digits. The reader now learns the live digit shapes, matches the punctuation
-  variants, and splits merged glyphs; it reads `127,028[72.91%]` exactly.
+  variants, and splits merged glyphs; it reads `127,028[72.91%]` exactly. The
+  Filter Applied rendering's 4×4 comma is learned too, so its EXP also reads
+  `127,028[72.91%]`.
 - The 1920×1080 Default level's `3` (a different shape from the EXP design) now
-  reads through a bright-ink learning pass; the level reads `35`.
+  reads through a bright-ink learning pass; the level reads `35`. The Filter
+  Applied level seeds both bright digit sizes (10×11 and 11×14).
 - The 1920×1080 Default name now seeds from both identity boxes with
   anti-aliased Arial and learns the live letters; the name reads `Euroblood`.
   The job and the Default/Filtered map-label size remain open.
