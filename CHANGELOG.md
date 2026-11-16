@@ -29,6 +29,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `MSCOUT_STATE=<expanded|titlebar|folded>` to one minimap state, and a missing
   or clipped fixture fails loudly instead of being skipped.
 
+### Removed
+- The 1920×1200 Ideal preset. It has no saved-frame fixture or verified
+  automatic read, so the pair falls back to calibration; 1366×768 and
+  1920×1080 presets remain.
+
 ### Fixed
 - Minimap state detection now recognises the 1920×1080 Default title-bar-only
   state and every Filter Applied state. The filtered path uses tolerant

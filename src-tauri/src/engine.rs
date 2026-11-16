@@ -1132,7 +1132,7 @@ mod tests {
         let window = window_target::resolve_selector(&selector).expect("game window");
         let frame = crate::capture::client_frame(window.hwnd).expect("frame");
 
-        let key = std::env::var("MSCOUT_PROFILE_KEY").unwrap_or_else(|_| "1920x1200".into());
+        let key = std::env::var("MSCOUT_PROFILE_KEY").unwrap_or_else(|_| "1920x1080".into());
         let (width, height) = key.split_once('x').expect("WxH");
         let ui_mode = std::env::var("MSCOUT_UI_MODE")
             .ok()

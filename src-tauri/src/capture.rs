@@ -410,10 +410,10 @@ mod tests {
             Err(_) => {
                 let profile = crate::profile::load_for_mode(
                     1920,
-                    1200,
+                    1080,
                     crate::settings::UiMode::Default,
                 )
-                .expect("1920x1200 profile");
+                .expect("1920x1080 profile");
                 profile.calibration.exp.expect("EXP box")
             }
         };

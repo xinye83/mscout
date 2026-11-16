@@ -54,7 +54,7 @@ impl Profile {
         }
     }
 
-    /// `1920x1200`, or `1920x1200@ideal` for a non-default UI Size.
+    /// `1920x1080`, or `1920x1080@ideal` for a non-default UI Size.
     pub fn key(&self) -> String {
         format!(
             "{}x{}{}",

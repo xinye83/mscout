@@ -59,8 +59,8 @@ mod tests {
         // Presets ship geometry only. Glyphs are seeded from the installed
         // client's bitmap atlas (or taught) at runtime, so no game-derived art
         // is committed to the repository.
-        let profile = for_size(1920, 1200, UiMode::Ideal).expect("preset for 1920x1200");
-        assert_eq!(profile.key(), "1920x1200@ideal");
+        let profile = for_size(1920, 1080, UiMode::Ideal).expect("preset for 1920x1080");
+        assert_eq!(profile.key(), "1920x1080@ideal");
         assert!(profile.is_calibrated(), "preset must carry usable boxes");
     }
 
@@ -108,8 +108,8 @@ mod tests {
     }
 
     #[test]
-    fn ideal_presets_cover_the_three_supported_resolutions() {
-        for (w, h) in [(1366, 768), (1920, 1080), (1920, 1200)] {
+    fn ideal_presets_cover_the_two_supported_resolutions() {
+        for (w, h) in [(1366, 768), (1920, 1080)] {
             let profile = for_size(w, h, UiMode::Ideal)
                 .unwrap_or_else(|| panic!("Ideal preset for {w}x{h}"));
             assert!(profile.is_calibrated(), "{w}x{h} has no usable boxes");
@@ -122,6 +122,8 @@ mod tests {
                 "{w}x{h} Ideal preset has no name/job boxes"
             );
         }
+        // The 1920x1200 preset was removed; it falls back to calibration.
+        assert!(for_size(1920, 1200, UiMode::Ideal).is_none());
     }
 
     #[test]
@@ -164,9 +166,9 @@ mod tests {
             );
         }
 
-        // 1920x1200 is verified at Ideal only; Default/Filtered must fall back to
-        // a local calibration pass instead of borrowing Ideal geometry.
-        assert!(for_size(1920, 1200, UiMode::Ideal).is_some());
+        // 1920x1200 has no shipped preset; every mode falls back to a local
+        // calibration pass instead of borrowing geometry from another size.
+        assert!(for_size(1920, 1200, UiMode::Ideal).is_none());
         assert!(for_size(1920, 1200, UiMode::Default).is_none());
         assert!(for_size(1920, 1200, UiMode::Filtered).is_none());
 

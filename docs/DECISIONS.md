@@ -126,6 +126,13 @@ Evidence: on the live 1920×1080 Default frame the EXP digits read but punctuati
 
 Consequence: the supported matrix is explicit in [PRESETS.md](PRESETS.md). Adding a Default/Filtered preset requires a live capture, a source/size check for digits and level, an Arial quality/size match, a map index at that label size, and a saved-frame test first.
 
+## D29 — 0.5.0 drops the 1920×1200 preset
+
+The 1920×1200 Ideal preset is removed. The pair has no saved-frame fixture and no
+verified automatic read, so it falls back to calibration like any other unshipped
+size. This supersedes the 1920×1200 part of D25; the 1366×768 and 1920×1080
+presets remain.
+
 ## D26 — The minimap has three states; detect the state before reading the name
 
 The minimap widget zooms through three states: expanded (icon + two-line name
