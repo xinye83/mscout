@@ -70,6 +70,25 @@ Goal: support **at least two client resolutions across all three UI Size modes**
 - [x] **Minimap-state coverage (1366×768 and 1920×1080)**: capture all three minimap states (expanded, title-bar-only, folded) for Default, Filtered and Ideal at both 0.5.0 resolutions. 1366×768 has all three for all modes; 1920×1080 has all three for Ideal (East Rocky Mountain III), Default and Filtered (Hidden Street / Free Market <8>). 1920×1200 Ideal still has no fixture.
 - [ ] **Multi-resolution portability** (layers 1–2): anchor-relative boxes + scale-aware matching, so one calibration serves several resolutions. Blocked on a two-resolution capture diff to learn whether the UI is fixed-size, integer-scaled, or letterboxed.
 
+### Open items in 0.5.0
+
+- **1920×1080 Filtered (current live setting)**: the client corpus reads EXP
+  `127028[72.91%]` (comma dropped), level empty, name `Furoh ood` (expected
+  `Euroblood`), job `P ge` (expected `Page`), and map `unknown`. The filter
+  changes glyph rendering, and the name/job seeding picks different sizes for the
+  two crops (job 14 px, name 19 px). Root cause not yet isolated.
+- **1920×1080 Default**: EXP `127,028[72.91%]`, level `35` and name `Euroblood`
+  pass. The job reads `p go` instead of `Page`, and the map is `unknown`: the
+  170×13 map line is now detected, but the client-table match scores above
+  threshold.
+- **1920×1200**: Ideal preset and no fixture; Default/Filtered have neither.
+- **Map labels**: the index is size-aware (12–24 px) and the line splitter now
+  isolates the street/map rows, but the 1920 Default/Filtered name match still
+  needs the right render/table check.
+- **Not started**: the screenshot import tool and UI Size layout autodetection.
+- **Green**: all six pairs × three minimap states pass the state gate; 1366×768
+  in all three UI sizes and 1920×1080 Ideal pass the full client read.
+
 ## Next
 
 - [ ] Level-up stitching and death-event marking on the chart
@@ -85,12 +104,12 @@ Goal: support **at least two client resolutions across all three UI Size modes**
 
 ## Known gaps / debt
 
-- **1366×768 ships all three UI sizes; 1920×1080/1200 ship Ideal only.** 1366 Default/Filtered share the Ideal geometry and read at confidence 1.0 in the saved-frame corpus. 1920×1080 Default/Filtered have full three-state fixtures but no preset yet, so they fall back to calibration; 1920×1080 Default has a different digit rendering and no Arial match yet. 1920×1200 has only the Ideal preset and no fixture.
+- **1366×768 ships all three UI sizes; 1920×1080 ships all three; 1920×1200 ships Ideal only.** 1366 Default/Filtered share the Ideal geometry and read at confidence 1.0 in the saved-frame corpus. The 1920×1080 Default/Filtered presets ship and have full three-state fixtures; Default reads EXP/level/name, while its job and both pairs' map labels remain open. The Filtered pair is partial. 1920×1200 has only the Ideal preset and no fixture.
 - Calibration boxes and fingerprints are physical-pixel and UI-scale specific. A resolution/UI-size change switches to that pair's profile; a pair with no profile shows uncalibrated until its boxes exist.
 - A transient client height during a resolution change can create an empty profile (e.g. `1920x1081@ideal`). Move such profiles aside and restart if the app selects one instead of the intended size.
 - Coverage reports characters, not sizes. A digit learned from HP/MP (smaller size) does not parse the larger EXP font; relearn from the EXP box when it appears there.
 - The EXP box is sized for the current digit count. A much longer EXP number can clip the ROI until it is redrawn.
-- Map/street matching uses the client's table (347 names in the current build; version-specific); a map missing from it, or a UI size whose label is not 12 px, falls back to taught fingerprints/letters. Name/job auto-read and map/street rendering rely on Windows Arial (system font, not bundled).
+- Map/street matching uses the client's table (347 names in the current build; version-specific); a map missing from it falls back to taught fingerprints/letters. The label index is now built per font size (12–24 px) and the line splitter isolates the street/map rows, but the 1920 Default/Filtered name match still scores above threshold. Name/job auto-read and map/street rendering rely on Windows Arial (system font, not bundled).
 - History window has no brush/zoom panning yet — presets only.
 - `window-error.log` is written to the data dir when history window creation fails; remove once stable.
 - The 1920×1080 Default/Filtered presets ship, but only Default EXP/level/name and the Ideal pair are fully read by the corpus. The Default job and the Default/Filtered map-label size, plus the Filtered EXP comma/level/name/job, remain open; 1920×1200 Default/Filtered still fall back to calibration. The minimap state gate passes all six pairs across all three states.
