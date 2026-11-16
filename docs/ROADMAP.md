@@ -17,7 +17,7 @@ How to read it:
 
 Last updated: 2026-11-16
 
-## Current release — 0.6.0 (implemented, pending release)
+## Current release — 0.6.0 (released 2026-11-16)
 
 Goal: read 1920×1080 **Default** and **Default (Filter Applied)**, keeping
 1366×768 in all three UI sizes and 1920×1080 Ideal as the unchanged reference
@@ -42,9 +42,10 @@ locally with no runtime dependency (see [D31](DECISIONS.md) and
 - [x] Filtered EXP digit sweep across live crops; expected inputs cover `0-9`
   plus punctuation. The sweep records the remaining live `8` case.
 - [x] Overlay shows full long map names (wraps; the window grows to fit).
-- [ ] Release mechanics: set `0.6.0` in `Cargo.toml`, `package.json`,
-  `tauri.conf.json`, and the lockfile; move `CHANGELOG` Unreleased to a dated
-  0.6.0 section; commit, tag, and build.
+- [x] Release metadata: set `0.6.0` in `Cargo.toml`, `package.json`,
+  `tauri.conf.json`, and the lockfiles; move `CHANGELOG` to a dated 0.6.0
+  section; commit and tag.
+- [ ] Build the distributable (`tauri build`) and attach it to the release.
 
 Deferred: UI Size auto-detection (Later); the manual setting is authoritative.
 
@@ -167,7 +168,7 @@ to its single entry under **Next** or **Later**.
 |---|---|---|
 | 0.4.0 | 2026-11-14 | Automatic Ideal HUD reads, calibration, presets, storage, history |
 | 0.5.0 | 2026-11-15 | 1366×768 in all three UI sizes, 1920×1080 Ideal, three minimap states |
-| 0.6.0 | pending | 1920×1080 Default/Filtered, OCR map/identity fallbacks, full 1920×1080 matrix |
+| 0.6.0 | 2026-11-16 | 1920×1080 Default/Filtered, OCR map/identity fallbacks, full 1920×1080 matrix |
 
 Details are in [../CHANGELOG.md](../CHANGELOG.md). Historical probe notes from
 the 0.5→0.6 work are in the git history and [DECISIONS.md](DECISIONS.md); the

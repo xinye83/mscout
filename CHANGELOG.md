@@ -4,7 +4,9 @@ All notable changes to MScout are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the major version is `0`, the minor version is bumped for features and the patch for fixes; anything may still change between `0.x` releases.
 
-## [Unreleased] — 0.6.0 work
+## [Unreleased]
+
+## [0.6.0] - 2026-11-16
 
 ### Added
 - 1920×1080 Default and Default (Filter Applied) presets (boxes only). All six
@@ -269,7 +271,8 @@ First release. Read-only: it observes the screen and never interacts with the ga
 - **Docs.** Setup guide, behavioral spec, roadmap, decision log, data formats, dev notes.
 - **Tests.** Rust unit tests for the EXP table, glyph segmentation and matching, thresholding, settings/profile round-trips and window enumeration, plus `#[ignore]`d diagnostics for live capture.
 
-[Unreleased]: https://github.com/xinye83/mscout/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/xinye83/mscout/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/xinye83/mscout/releases/tag/v0.6.0
 [0.5.0]: https://github.com/xinye83/mscout/releases/tag/v0.5.0
 [0.4.0]: https://github.com/xinye83/mscout/releases/tag/v0.4.0
 [0.3.0]: https://github.com/xinye83/mscout/releases/tag/v0.3.0
