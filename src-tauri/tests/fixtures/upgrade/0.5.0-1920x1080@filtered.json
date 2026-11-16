@@ -1,0 +1,143 @@
+﻿{
+  "clientW": 1920,
+  "clientH": 1080,
+  "uiMode": "default",
+  "calibration": {
+    "clientW": 1920,
+    "clientH": 1080,
+    "exp": {
+      "x": 1531,
+      "y": 1042,
+      "w": 154,
+      "h": 18
+    },
+    "level": {
+      "x": 484,
+      "y": 1052,
+      "w": 31,
+      "h": 12
+    },
+    "street": {
+      "x": 1264,
+      "y": 986,
+      "w": 150,
+      "h": 12
+    },
+    "map": {
+      "x": 1264,
+      "y": 998,
+      "w": 150,
+      "h": 13
+    },
+    "name": {
+      "x": 349,
+      "y": 1040,
+      "w": 80,
+      "h": 18
+    },
+    "job": {
+      "x": 349,
+      "y": 1018,
+      "w": 60,
+      "h": 16
+    }
+  },
+  "atlas": {
+    "format": 2,
+    "source": "game",
+    "cellW": 12,
+    "cellH": 16,
+    "glyphs": [
+      {
+        "ch": "0",
+        "w": 5,
+        "h": 8,
+        "bitmap": "ffffffffffff00ffffffffff00ffffffffff00ffff00ffffffffff00ffffffffff00ffffffffffff"
+      },
+      {
+        "ch": "1",
+        "w": 4,
+        "h": 8,
+        "bitmap": "ffffffffffffffffff00ffffffff00ffffffffffff00ffffffff00ffffffffff"
+      },
+      {
+        "ch": ",",
+        "w": 2,
+        "h": 8,
+        "bitmap": "ffffffffffffffffffffffffffffffff"
+      }
+    ]
+  },
+  "mapAtlas": {
+    "format": 2,
+    "source": "taught",
+    "cellW": 12,
+    "cellH": 16,
+    "glyphs": [
+      {
+        "ch": "V",
+        "w": 6,
+        "h": 8,
+        "bitmap": "ffffffffffffffff00ffffffffffff00ffffff00ffff00ffffff00ffffffffffff00ffffff00ffff00ffffffffffffff"
+      }
+    ]
+  },
+  "levelAtlas": {
+    "format": 2,
+    "source": "game",
+    "cellW": 12,
+    "cellH": 16,
+    "glyphs": [
+      {
+        "ch": "4",
+        "w": 6,
+        "h": 7,
+        "bitmap": "ffffffffffffffffff00ffffff00ffff00ffffff00ffffffffffff00ffffff00ffff00ffffffffffffff"
+      }
+    ]
+  },
+  "identityAtlas": {
+    "format": 2,
+    "source": "font",
+    "cellW": 12,
+    "cellH": 16,
+    "glyphs": [
+      {
+        "ch": "F",
+        "w": 5,
+        "h": 7,
+        "bitmap": "ffffffffffffffff00ffff00ffffffffff00ffffffffff00ffff00ffffffffffffffff"
+      }
+    ]
+  },
+  "maps": [
+    {
+      "label": "Hidden Street\nFree Market <8>",
+      "w": 6,
+      "h": 4,
+      "pixels": "ffffffffffffff00ffff00ffffff00ffffffffffffffffff"
+    }
+  ],
+  "streets": [
+    {
+      "label": "Hidden Street",
+      "w": 6,
+      "h": 3,
+      "pixels": "ffffffffffffff00ffff00ffffffffffffff"
+    }
+  ],
+  "identities": {
+    "name": {
+      "label": "Furoh",
+      "w": 6,
+      "h": 3,
+      "pixels": "ffffffffffffffffff00ffffffffffffffff"
+    },
+    "job": {
+      "label": "Page",
+      "w": 4,
+      "h": 3,
+      "pixels": "ffffffffffff00ffffffffff"
+    }
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "clientW": 1366,
+  "clientH": 768,
+  "calibration": {
+    "clientW": 1366,
+    "clientH": 768,
+    "exp": {
+      "x": 772,
+      "y": 733,
+      "w": 96,
+      "h": 16
+    },
+    "level": {
+      "x": 330,
+      "y": 745,
+      "w": 21,
+      "h": 10
+    },
+    "map": {
+      "x": 1051,
+      "y": 96,
+      "w": 118,
+      "h": 30
+    },
+    "name": {
+      "x": 366,
+      "y": 751,
+      "w": 60,
+      "h": 13
+    },
+    "job": {
+      "x": 366,
+      "y": 737,
+      "w": 34,
+      "h": 12
+    }
+  },
+  "atlas": {
+    "cellW": 12,
+    "cellH": 16,
+    "glyphs": [
+      {
+        "ch": "0",
+        "w": 6,
+        "h": 9,
+        "cell": "ffffffffffffffffffffffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffffffffffffffffffffff"
+      },
+      {
+        "ch": "1",
+        "w": 4,
+        "h": 9,
+        "cell": "ffffffffffffffffffffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffffffffffffffffffffffff"
+      },
+      {
+        "ch": "2",
+        "w": 6,
+        "h": 9,
+        "cell": "ffffffffffffffffffffffffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffff00ffff00ffff00ffff00ffffff00ffff00ffff00ffffffffffff00ffff00ffff00ffffffffffffffffffffffffffff"
+      }
+    ]
+  },
+  "maps": [
+    {
+      "label": "Victoria Road\nKerning City",
+      "w": 8,
+      "h": 4,
+      "pixels": "ffffffffffffffffffff00ffff00ffffffffff00ffff00ffffffffffffffffff"
+    }
+  ],
+  "identities": {
+    "name": {
+      "label": "Furoh",
+      "w": 6,
+      "h": 3,
+      "pixels": "ffffffffffffffffff00ffffffffffffffff"
+    },
+    "job": {
+      "label": "Page",
+      "w": 4,
+      "h": 3,
+      "pixels": "ffffffffffff00ffffffffff"
+    }
+  },
+  "reviewQueue": [
+    {
+      "frame": "2026-11-12T09-41-02",
+      "reason": "exp out of range"
+    }
+  ]
+}

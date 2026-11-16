@@ -425,4 +425,416 @@ mod tests {
         assert!(parse_profile("{}").is_none());
         assert!(parse_profile("not json").is_none());
     }
+
+    // -----------------------------------------------------------------------
+    // Per-release upgrade fixtures.
+    //
+    // The fixtures live in `tests/fixtures/upgrade/`, outside `testdata/`, so
+    // the regression frame walker can never mistake them for image pairs. They
+    // are covered parse-only: nothing here writes to `data/profiles/` or calls
+    // `migrate_legacy`, so a real player's store is never read or touched.
+    // -----------------------------------------------------------------------
+
+    /// The release-shaped profiles kept with the crate.
+    fn upgrade_fixtures() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/upgrade")
+    }
+
+    fn fixture_text(name: &str) -> String {
+        std::fs::read_to_string(upgrade_fixtures().join(name))
+            .unwrap_or_else(|error| panic!("cannot read upgrade fixture {name}: {error}"))
+    }
+
+    /// The profile file name a fixture stands in for: the release prefix only
+    /// records which release wrote it, so everything after the first `-` is the
+    /// name the file has in `data/profiles/`.
+    fn profile_file_name(name: &str) -> &str {
+        name.split_once('-').map(|(_, rest)| rest).unwrap_or(name)
+    }
+
+    /// The UI mode a profile file name encodes: the bare `<W>x<H>` name is the
+    /// default mode, `@filtered` and `@ideal` name the others.
+    fn mode_from_file_name(name: &str) -> UiMode {
+        UiMode::ALL
+            .into_iter()
+            .find(|mode| {
+                !mode.suffix().is_empty() && name.ends_with(&format!("{}.json", mode.suffix()))
+            })
+            .unwrap_or(UiMode::Default)
+    }
+
+    /// Parse a fixture the way `load_for_mode` does once the file has been read:
+    /// `parse_profile` decides whether the file is usable, then the *filename*
+    /// decides the UI mode whatever the JSON says. The disk half of
+    /// `load_for_mode` is deliberately not exercised — it would need a data root.
+    fn load_fixture(name: &str) -> Profile {
+        let mut profile = parse_profile(&fixture_text(name))
+            .unwrap_or_else(|| panic!("upgrade fixture {name} does not parse"));
+        profile.ui_mode = mode_from_file_name(name);
+        profile
+    }
+
+    fn glyphs(atlas: &Atlas) -> Vec<(String, u32, u32, String)> {
+        atlas
+            .glyphs
+            .iter()
+            .map(|glyph| (glyph.ch.clone(), glyph.w, glyph.h, glyph.bitmap.clone()))
+            .collect()
+    }
+
+    /// The upgrade fixtures must stay out of the frame corpus, and the set must
+    /// cover every release the profile format changed in.
+    #[test]
+    fn upgrade_fixtures_stay_out_of_the_frame_corpus() {
+        let dir = upgrade_fixtures();
+        assert!(
+            dir.is_dir(),
+            "upgrade fixture directory is missing: {dir:?}"
+        );
+        // The frame walker only reads `testdata/`. Keeping the upgrade fixtures
+        // outside it is what stops them being read as (broken) image pairs.
+        assert!(
+            !dir.starts_with(crate::regression::fixtures_dir()),
+            "{dir:?} must not live under the frame corpus"
+        );
+
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .expect("list the upgrade fixtures")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".json"))
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "0.1.0-1366x768.json",
+                "0.5.0-1920x1080@filtered.json",
+                "0.6.0-1366x768.json",
+            ]
+        );
+    }
+
+    /// The pre-UI-Size profile: no `uiMode`, no per-readout atlases, no street
+    /// box, legacy 12x16 `cell` glyphs, and a key a later release dropped. It has
+    /// to parse with the new fields defaulted and its data unchanged.
+    #[test]
+    fn pre_ui_size_profile_keeps_its_data_and_defaults() {
+        let name = "0.1.0-1366x768.json";
+        let text = fixture_text(name);
+        assert!(
+            !text.contains("\"uiMode\""),
+            "the pre-UI-Size fixture must not carry a uiMode key"
+        );
+        assert!(
+            text.contains("\"reviewQueue\""),
+            "the fixture should keep a key a later release dropped"
+        );
+
+        let profile = load_fixture(name);
+        assert_eq!(profile.client_w, 1366);
+        assert_eq!(profile.client_h, 768);
+        // An absent `uiMode` deserializes to the default mode, and the bare file
+        // name says the same thing.
+        assert_eq!(profile.ui_mode, UiMode::Default);
+        assert_eq!(profile.key(), "1366x768");
+
+        // Calibration boxes are carried through untouched.
+        assert_eq!(
+            profile.calibration.exp,
+            Some(settings::Region {
+                x: 772,
+                y: 733,
+                w: 96,
+                h: 16,
+            })
+        );
+        assert_eq!(
+            profile.calibration.level,
+            Some(settings::Region {
+                x: 330,
+                y: 745,
+                w: 21,
+                h: 10,
+            })
+        );
+        assert_eq!(
+            profile.calibration.map,
+            Some(settings::Region {
+                x: 1051,
+                y: 96,
+                w: 118,
+                h: 30,
+            })
+        );
+        assert_eq!(
+            profile.calibration.name,
+            Some(settings::Region {
+                x: 366,
+                y: 751,
+                w: 60,
+                h: 13,
+            })
+        );
+        assert_eq!(
+            profile.calibration.job,
+            Some(settings::Region {
+                x: 366,
+                y: 737,
+                w: 34,
+                h: 12,
+            })
+        );
+        // The split street box did not exist in this shape.
+        assert_eq!(profile.calibration.street, None);
+        assert!(profile.is_calibrated());
+
+        // Legacy 12x16 `cell` glyphs still parse; the native fields default.
+        assert_eq!(profile.atlas.format, 0);
+        assert_eq!(profile.atlas.source, "");
+        assert_eq!(profile.atlas.cell_w, 12);
+        assert_eq!(profile.atlas.cell_h, 16);
+        assert_eq!(profile.atlas.glyphs.len(), 3);
+        assert_eq!(profile.atlas.glyphs[0].ch, "0");
+        assert_eq!(profile.atlas.glyphs[0].w, 6);
+        assert_eq!(profile.atlas.glyphs[0].h, 9);
+        assert_eq!(profile.atlas.glyphs[0].bitmap, "");
+        assert_eq!(
+            profile.atlas.glyphs[0].cell.len(),
+            crate::ocr::CELL_W * crate::ocr::CELL_H * 2
+        );
+        assert!(profile.has_glyphs());
+
+        // The per-readout atlases and the taught streets were added later, so
+        // they default to empty instead of failing the file.
+        for atlas in [
+            &profile.map_atlas,
+            &profile.level_atlas,
+            &profile.identity_atlas,
+        ] {
+            assert!(atlas.glyphs.is_empty());
+            assert_eq!(atlas.format, 0);
+            assert_eq!(atlas.source, "");
+        }
+        assert!(profile.streets.is_empty());
+
+        // Taught maps and identities survive in place.
+        assert_eq!(profile.maps.len(), 1);
+        assert_eq!(profile.maps[0].label, "Victoria Road\nKerning City");
+        assert_eq!(profile.maps[0].pixels.len(), 8 * 4 * 2);
+        assert_eq!(
+            profile
+                .identities
+                .name
+                .as_ref()
+                .map(|item| item.label.as_str()),
+            Some("Furoh")
+        );
+        assert_eq!(
+            profile
+                .identities
+                .job
+                .as_ref()
+                .map(|item| item.label.as_str()),
+            Some("Page")
+        );
+
+        let summary = profile.summary();
+        assert_eq!(summary.key, "1366x768");
+        assert!(summary.calibrated);
+        assert_eq!(summary.glyphs, 3);
+        assert_eq!(summary.maps, 1);
+        assert_eq!(summary.glyph_size, "6x9");
+        assert_eq!(summary.name.as_deref(), Some("Furoh"));
+        assert_eq!(summary.job.as_deref(), Some("Page"));
+    }
+
+    /// The 0.5.0 file is one an editor or PowerShell `Set-Content` left with a
+    /// UTF-8 BOM; it must still parse, and its own `uiMode` is stale.
+    #[test]
+    fn bom_prefixed_release_profile_parses() {
+        let name = "0.5.0-1920x1080@filtered.json";
+        let text = fixture_text(name);
+        assert!(
+            text.starts_with('\u{feff}'),
+            "the 0.5.0 fixture must carry a BOM"
+        );
+
+        let mut profile = parse_profile(&text).expect("a BOM-prefixed profile parses");
+        assert_eq!(profile.client_w, 1920);
+        assert_eq!(profile.client_h, 1080);
+        // Stored mode says Default — a copy taken from the Default pair — while
+        // the file name says Filtered. The raw parse reports the stored value;
+        // the load path then overrides it from the file name.
+        assert_eq!(profile.ui_mode, UiMode::Default);
+        profile.ui_mode = mode_from_file_name(name);
+        assert_eq!(profile.ui_mode, UiMode::Filtered);
+        assert_eq!(profile.key(), "1920x1080@filtered");
+
+        // Both minimap label lines and the taught street survive.
+        assert_eq!(
+            profile.calibration.street,
+            Some(settings::Region {
+                x: 1264,
+                y: 986,
+                w: 150,
+                h: 12,
+            })
+        );
+        assert_eq!(
+            profile.calibration.map,
+            Some(settings::Region {
+                x: 1264,
+                y: 998,
+                w: 150,
+                h: 13,
+            })
+        );
+        assert_eq!(profile.maps[0].label, "Hidden Street\nFree Market <8>");
+        assert_eq!(profile.streets[0].label, "Hidden Street");
+        assert_eq!(profile.identity_atlas.source, "font");
+        assert_eq!(profile.level_atlas.glyphs.len(), 1);
+        assert_eq!(profile.map_atlas.source, "taught");
+        // Native bitmaps, one byte per glyph pixel.
+        for glyph in &profile.atlas.glyphs {
+            assert_eq!(glyph.bitmap.len(), (glyph.w * glyph.h * 2) as usize);
+            assert_eq!(glyph.cell, "");
+        }
+    }
+
+    /// The file name decides the UI mode, not the `uiMode` field: the bare name
+    /// is Default, `@filtered` and `@ideal` are the others, and `path_for` writes
+    /// exactly the name each fixture stands in for.
+    #[test]
+    fn file_name_is_authoritative_for_ui_mode() {
+        for (name, expected) in [
+            ("0.1.0-1366x768.json", UiMode::Default),
+            ("0.5.0-1920x1080@filtered.json", UiMode::Filtered),
+            ("0.6.0-1366x768.json", UiMode::Default),
+        ] {
+            assert_eq!(mode_from_file_name(name), expected, "{name}");
+
+            // What the load path keeps: whatever the file stored, the mode the
+            // file name encodes is the one reported.
+            let profile = load_fixture(name);
+            assert_eq!(profile.ui_mode, expected, "{name}");
+            assert_eq!(
+                profile.key(),
+                profile_file_name(name).trim_end_matches(".json"),
+                "{name}"
+            );
+
+            // `path_for` writes exactly the name each fixture stands in for, so
+            // the suffix and the stored mode can never disagree on disk.
+            let saved_name = path_for(profile.client_w, profile.client_h, expected)
+                .expect("a profile path")
+                .file_name()
+                .map(|file| file.to_string_lossy().into_owned())
+                .expect("a profile file name");
+            assert_eq!(saved_name, profile_file_name(name), "{name}");
+        }
+    }
+
+    /// The current shape: every field 0.6.0 writes is present and parsed.
+    #[test]
+    fn current_release_profile_is_the_full_shape() {
+        let name = "0.6.0-1366x768.json";
+        let value: serde_json::Value =
+            serde_json::from_str(&fixture_text(name)).expect("the current fixture is JSON");
+        for key in [
+            "clientW",
+            "clientH",
+            "uiMode",
+            "calibration",
+            "atlas",
+            "mapAtlas",
+            "levelAtlas",
+            "identityAtlas",
+            "maps",
+            "streets",
+            "identities",
+        ] {
+            assert!(value.get(key).is_some(), "current fixture is missing {key}");
+        }
+
+        let profile = load_fixture(name);
+        assert_eq!(profile.ui_mode, UiMode::Default);
+        assert_eq!(profile.key(), "1366x768");
+        assert_eq!(profile.calibration.street.map(|region| region.h), Some(12));
+        assert_eq!(profile.atlas.format, 2);
+        assert_eq!(profile.atlas.source, "game");
+        assert_eq!(glyphs(&profile.atlas).len(), 2);
+        assert_eq!(profile.map_atlas.source, "taught");
+        assert_eq!(profile.level_atlas.source, "game");
+        assert_eq!(profile.identity_atlas.source, "font");
+        assert_eq!(profile.maps.len(), 1);
+        assert_eq!(profile.streets.len(), 1);
+        assert_eq!(profile.streets[0].label, "Victoria Road");
+        for atlas in [
+            &profile.atlas,
+            &profile.map_atlas,
+            &profile.level_atlas,
+            &profile.identity_atlas,
+        ] {
+            assert_eq!(atlas.format, 2);
+            for glyph in &atlas.glyphs {
+                assert_eq!(glyph.bitmap.len(), (glyph.w * glyph.h * 2) as usize);
+            }
+        }
+    }
+
+    /// A save cycle after the upgrade must not rewrite the stored data. The one
+    /// exception is the legacy `cell`, which is read-only and never written back.
+    #[test]
+    fn upgrading_a_profile_does_not_rewrite_its_data() {
+        for name in [
+            "0.1.0-1366x768.json",
+            "0.5.0-1920x1080@filtered.json",
+            "0.6.0-1366x768.json",
+        ] {
+            let profile = load_fixture(name);
+            let saved = serde_json::to_string(&profile).expect("a loaded profile serializes");
+            let reloaded = parse_profile(&saved).unwrap_or_else(|| panic!("{name} reparses"));
+
+            let before = serde_json::to_value(&profile).expect("profile to value");
+            let after = serde_json::to_value(&reloaded).expect("profile to value");
+            for key in [
+                "clientW",
+                "clientH",
+                "uiMode",
+                "calibration",
+                "maps",
+                "streets",
+                "identities",
+            ] {
+                assert_eq!(before[key], after[key], "{name}: {key} changed on a save");
+            }
+            assert_eq!(glyphs(&reloaded.atlas), glyphs(&profile.atlas), "{name}");
+            assert_eq!(
+                glyphs(&reloaded.map_atlas),
+                glyphs(&profile.map_atlas),
+                "{name}"
+            );
+            assert_eq!(
+                glyphs(&reloaded.level_atlas),
+                glyphs(&profile.level_atlas),
+                "{name}"
+            );
+            assert_eq!(
+                glyphs(&reloaded.identity_atlas),
+                glyphs(&profile.identity_atlas),
+                "{name}"
+            );
+            assert_eq!(reloaded.key(), profile.key(), "{name}");
+            assert_eq!(
+                reloaded.summary().glyphs,
+                profile.summary().glyphs,
+                "{name}"
+            );
+            assert!(
+                !saved.contains("\"cell\""),
+                "{name}: the read-only legacy cell must not be written back"
+            );
+        }
+    }
 }
