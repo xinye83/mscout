@@ -186,3 +186,11 @@ state, name/job, level, EXP text/value/percentage, street/map, expected boxes).
 This is a narrow exception to D24: the corpus is test data only, is not used by the
 running app, and stays small. It does not permit shipping runtime glyph atlases,
 map-name lists, fonts, or other client assets.
+
+## D30 — 0.5.0 supports 1366×768 in all three UI sizes and 1920×1080 Ideal only
+
+The 1920×1080 Default and Filtered presets are removed for 0.5.0. The 1366×768
+three modes and 1920×1080 Ideal are the supported matrix; the 1920 Default and
+Filtered fixtures remain for a later pass. Resolution stays automatic from the
+captured client size; the UI Size stays the manual in-app setting (no layout
+autodetection in 0.5.0).

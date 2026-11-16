@@ -150,21 +150,17 @@ mod tests {
             );
         }
 
-        // 1920x1080 ships all three UI modes. Default and Filtered share their
-        // geometry; the saved-frame corpus reads EXP, level and name.
-        for mode in UiMode::ALL {
-            let profile = for_size(1920, 1080, mode)
-                .unwrap_or_else(|| panic!("1920x1080 preset for {mode:?}"));
-            assert!(
-                profile.is_calibrated(),
-                "1920x1080 {mode:?} has no usable boxes"
-            );
-            assert!(profile.calibration.level.is_some());
-            assert!(
-                profile.calibration.name.is_some() && profile.calibration.job.is_some(),
-                "1920x1080 {mode:?} has no name/job boxes"
-            );
-        }
+        // 1920x1080 ships Ideal only. Default/Filtered are deferred past 0.5.0;
+        // those pairs fall back to calibration instead of borrowing Ideal boxes.
+        let profile = for_size(1920, 1080, UiMode::Ideal).expect("1920x1080 Ideal preset");
+        assert!(profile.is_calibrated(), "1920x1080 Ideal has no usable boxes");
+        assert!(profile.calibration.level.is_some());
+        assert!(
+            profile.calibration.name.is_some() && profile.calibration.job.is_some(),
+            "1920x1080 Ideal has no name/job boxes"
+        );
+        assert!(for_size(1920, 1080, UiMode::Default).is_none());
+        assert!(for_size(1920, 1080, UiMode::Filtered).is_none());
 
         // 1920x1200 has no shipped preset; every mode falls back to a local
         // calibration pass instead of borrowing geometry from another size.

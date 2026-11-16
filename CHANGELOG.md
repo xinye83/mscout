@@ -7,10 +7,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Added
-- 1920×1080 UI Size detection: the engine reads the orange level-tile cluster
-  and picks Ideal vs the shared Default/Filtered layout, with the manual setting
-  as the fallback. A live Filtered capture with the app set to Ideal detected
-  Default and read the map.
 - Three-state minimap detection anchored on the `WORLD` badge: expanded,
   title-bar-only, and folded.
 - Folded-bar map reading: the single `Street :Map` line is matched against the
@@ -34,6 +30,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   or clipped fixture fails loudly instead of being skipped.
 
 ### Removed
+- The 1920×1080 Default and Filtered presets. Those pairs are deferred past
+  0.5.0; 1366×768 and 1920×1080 Ideal presets remain.
 - The 1920×1200 Ideal preset. It has no saved-frame fixture or verified
   automatic read, so the pair falls back to calibration; 1366×768 and
   1920×1080 presets remain.

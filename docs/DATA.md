@@ -48,13 +48,12 @@ Calibration is scoped to the game's **client size and UI Size**. Each pair gets 
 ```
 data/profiles/1366x768@ideal.json
 data/profiles/1920x1080@ideal.json
-data/profiles/1920x1080@filtered.json
 ```
 
 A profile for another UI Size uses the `@filtered` suffix or the bare name for
-Default Ratio. 1366×768 and 1920×1080 ship presets in all three UI sizes;
-1920×1200 ships none. A pair with no preset is created locally when the
-player calibrates it.
+Default Ratio. 1366×768 ships presets in all three UI sizes; 1920×1080 ships
+Ideal only; 1920×1200 ships none. A pair with no preset is created locally when
+the player calibrates it.
 
 Each profile holds the calibration boxes, the EXP and level glyph atlases, the Arial-seeded name/job atlas, taught map/street fingerprints and the character name/job fingerprints. The engine activates the profile matching the live frame size and UI Size on every tick, so changing either switches calibration sets instead of invalidating everything.
 
@@ -167,13 +166,13 @@ Sets never write across sizes: writing calibration, digits or labels routes thro
 
 The game's Graphics → UI Size option (Default Ratio, Default Ratio (Filter Applied), Ideal Ratio) rescales the whole HUD and the font, so a set is keyed by **client size plus UI Size**, not by size alone. The default mode keeps the bare `1920x1080` name; the others take a suffix — `1920x1080@filtered`, `1920x1080@ideal`.
 
-It is detected for 1920×1080 from the orange level-tile cluster (Ideal vs the shared Default/Filtered layout) and falls back to the Calibration window's choice when the tiles are not visible. 1366×768 has one layout, so its choice is stored as `uiMode` in `settings.json` and used directly. Switching it re-keys the engine to that mode's set; with no set for the pair the overlay reports uncalibrated and offers calibration, exactly as for an unknown client size.
+It is picked in the Calibration window rather than detected: guessing wrong reads nothing at all. The choice is stored as `uiMode` in `settings.json`. Switching it re-keys the engine to that mode's set; with no set for the pair the overlay reports uncalibrated and offers calibration, exactly as for an unknown client size.
 
 The modes differ by more than rendering. **Default Ratio (Filter Applied)** keeps the HUD where Default Ratio puts it but changes how the glyphs are drawn; **Ideal Ratio** moves the HUD *and* draws a smaller font, so its boxes were measured separately (the 1920×1080 EXP box is `1023,1050,90×11` against Default's `1048,1036,155×18`). Ideal Ratio also draws a bright one-pixel rule across the status bar above the readout, which merges every glyph into one shape under an adaptive threshold — `segments` falls back to a high fixed threshold when a crop collapses to a single shape, since these readouts are near-white text.
 
-1366×768 and 1920×1080 ship all three UI sizes, verified by the saved-frame corpus
-(the modes share HUD geometry per size). 1920×1200 ships no preset and falls back
-to calibration. See [PRESETS.md](PRESETS.md).
+1366×768 ships all three UI sizes, verified by the saved-frame corpus. 1920×1080
+ships Ideal only; 1920×1200 ships no preset. The 1920×1080 Default/Filtered work
+is deferred past 0.5.0. See [PRESETS.md](PRESETS.md).
 
 ### Presets
 

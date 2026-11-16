@@ -9,7 +9,6 @@ committed. See [SHIPPING.md](SHIPPING.md) for that boundary.
 | Client size | UI Size | EXP | Level | Name | Job |
 |---|---|---|---|---|---|
 | 1366×768 | Default, Ideal, Filtered | `747,733 88×16` | `330,745 21×10` | `366,751 60×13` | `366,737 34×12` |
-| 1920×1080 | Default, Filtered | `1048,1036 155×18` | `461,1044 36×23` | `510,1054 110×20` | `510,1034 70×22` |
 | 1920×1080 | Ideal | `1023,1050 90×11` | `598,1050 41×26` | `645,1064 55×9` | `645,1050 27×11` |
 
 Every box is physical pixels relative to the game client. The map/street box is
@@ -24,18 +23,14 @@ geometry, and the three fixture directories `1366x768`, `1366x768@filtered` and
 `1366x768@ideal` under `src-tauri/testdata/` read every minimap state at
 confidence 1.0 with the shipped boxes.
 
-**1920×1080 ships all three UI sizes.** Default and Filtered share the Default
-geometry; their presets ship and the three fixture directories hold all three
-minimap states. The Ideal pair reads every state in the corpus. On Default the
-corpus reads EXP exactly (including punctuation), the level (`35`) and the
-name (`Euroblood`); the job and the map-label size are still open. The Filtered
-pair reads EXP exactly and job `Page`; the name is `Furoh ood`, and its level and
-map remain open. **1920×1200 ships no preset and falls back to calibration.**
+**1920×1080 ships Ideal only.** The Default and Filtered presets are deferred
+past 0.5.0; their fixtures remain, but the supported matrix is 1366×768 in all
+three UI sizes plus 1920×1080 Ideal. The Ideal pair reads every state in the
+corpus. **1920×1200 ships no preset and falls back to calibration.**
 
 All of these presets are covered by
 `preset::tests::verified_modes_ship_presets_and_the_rest_fall_back`; the
-1920×1080 Ideal and (partially) Default/Filtered pairs are read by the saved-frame
-corpus.
+1920×1080 Ideal and the 1366×768 pairs are read by the saved-frame corpus.
 
 ## Reset and overrides
 
@@ -45,15 +40,12 @@ corpus.
 - Presets are looked up in `data/presets/`, then `src-tauri/presets/`, then
   `<exe>/presets/`. See [DATA.md](DATA.md#presets).
 
-## Partial: 1920 Default/Filtered
+## Deferred past 0.5.0: 1920 Default/Filtered
 
-The 1920×1080 Default/Filtered presets ship, but their client-tier read is not
-fully verified. On the live 1920×1080 Default frame the corpus reads EXP exactly
-(`127,028[72.91%]`), the level (`35`) and the name (`Euroblood`); the job (`Page`)
-and the map-label size are still open. Default Ratio (Filter Applied) keeps
-Default's HUD positions but changes how glyphs are drawn: the corpus reads EXP
-exactly and job `Page`; the name (`Furoh ood`), level and map are still open.
-The 1920×1200 pairs have no preset and still fall back to calibration.
+The 1920×1080 Default and Filtered presets are not shipped in 0.5.0. Their
+fixtures and read work are deferred to a later pass; the supported matrix is
+1366×768 in all three UI sizes and 1920×1080 Ideal. The 1920×1200 pairs have no
+preset and still fall back to calibration.
 
 The geometry is not the problem — the boxes above come from the live frames, and
 the minimap state detector handles every pair and state. What remains is

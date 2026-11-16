@@ -10,7 +10,7 @@ stays in `data/`.
 | Item | Why it is safe to ship | Notes |
 |---|---|---|
 | Rust/React executable, UI, icons | our code and art | — |
-| Preset calibration boxes (`src-tauri/presets/*.json`) | measured **geometry** only | Every preset has `expGlyphs = levelGlyphs = mapGlyphs = 0`, no maps/identities. Shipped pairs: **1366×768 and 1920×1080 at Default, Ideal and Filtered**. 1920×1200 has no preset and falls back to calibration. See [PRESETS.md](PRESETS.md). |
+| Preset calibration boxes (`src-tauri/presets/*.json`) | measured **geometry** only | Every preset has `expGlyphs = levelGlyphs = mapGlyphs = 0`, no maps/identities. Shipped pairs: **1366×768 at Default, Ideal and Filtered; 1920×1080 at Ideal only**. 1920×1200 has no preset and falls back to calibration. See [PRESETS.md](PRESETS.md). |
 | EXP table | game **numbers**, not art | `exp_table.rs` / `expTable.ts`; 1–49 confirmed, 50–89 estimated and labelled, 90–100 anchored. |
 | Detection constants and rate math | our logic | minimap panel colour/proportions, ROI rules, rate windows. |
 | Docs, tray/overlay assets | ours | — |
@@ -86,9 +86,9 @@ contain redistributable-restricted content.
   `mapAtlas`; no maps or identities.
   `preset::tests::shipped_presets_contain_no_game_art` fails the build if a
   preset ever gains glyph/map/identity content.
-- Verified presets ship for 1366×768 and 1920×1080 in all three UI sizes.
-  1920×1200 has no preset; a missing pair reports uncalibrated instead of
-  applying a stale preset.
+- Verified presets ship for 1366×768 in all three UI sizes and for 1920×1080
+  Ideal only. 1920×1200 has no preset; a missing pair reports uncalibrated
+  instead of applying a stale preset.
 - `map_names.rs` reads `String_000.wz` at runtime; `game_font.rs` reads
   `_Canvas_000.wz`; `font_seed` renders Windows Arial; no font or map list is
   bundled.

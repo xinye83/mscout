@@ -394,66 +394,6 @@ fn seed_identity_from_frame(
     merged.map(|atlas| (atlas.to_settings(), px))
 }
 
-/// Identify the 1920x1080 UI layout from the orange level-tile cluster. The
-/// Default and Filter Applied modes share the Default geometry; Ideal moves the
-/// status bar readouts to a different position. 1366x768 has one layout for all
-/// three modes, and every other size keeps the manual setting.
-pub(crate) fn detect_ui_mode(frame: &Frame) -> Option<settings::UiMode> {
-    match (frame.width, frame.height) {
-        (1366, 768) => Some(settings::ui_mode()),
-        (1920, 1080) => {
-            let default_tiles = orange_count(
-                frame,
-                Region {
-                    x: 461,
-                    y: 1044,
-                    w: 36,
-                    h: 23,
-                },
-            );
-            let ideal_tiles = orange_count(
-                frame,
-                Region {
-                    x: 598,
-                    y: 1050,
-                    w: 41,
-                    h: 26,
-                },
-            );
-            if default_tiles >= 20 && default_tiles > ideal_tiles {
-                Some(settings::UiMode::Default)
-            } else if ideal_tiles >= 20 && ideal_tiles > default_tiles {
-                Some(settings::UiMode::Ideal)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-fn orange_count(frame: &Frame, region: Region) -> usize {
-    let w = frame.width as usize;
-    let h = frame.height as usize;
-    let x0 = region.x.max(0) as usize;
-    let y0 = region.y.max(0) as usize;
-    let x1 = (region.x + region.w).max(0).min(w as i32) as usize;
-    let y1 = (region.y + region.h).max(0).min(h as i32) as usize;
-    let mut count = 0usize;
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let index = (y * w + x) * 4;
-            let r = frame.rgba[index] as i32;
-            let g = frame.rgba[index + 1] as i32;
-            let b = frame.rgba[index + 2] as i32;
-            if r >= 190 && (130..=235).contains(&g) && b <= 130 {
-                count += 1;
-            }
-        }
-    }
-    count
-}
-
 fn tick(
     engine: &mut EngineState,
     status: &TargetStatus,
@@ -500,10 +440,8 @@ fn tick(
     };
 
     // The profile is chosen by the live client size, so a resolution change
-    // switches calibration sets instead of invalidating everything. The UI
-    // layout is detected from the frame; the manual setting is the fallback.
-    let detected = detect_ui_mode(&frame).unwrap_or_else(settings::ui_mode);
-    let mut profile = profile::activate_mode(frame.width, frame.height, detected)
+    // switches calibration sets instead of invalidating everything.
+    let mut profile = profile::activate(frame.width, frame.height)
         .map_err(|error| TickError::Lost(format!("profile failed: {error}")))?;
 
     if !profile.is_calibrated() {
@@ -574,7 +512,7 @@ fn tick(
     // Switch the active profile, so calibration and teach commands target the
     // size that is actually on screen.
     if profile::active_key().as_deref() != Some(profile.key().as_str()) {
-        profile::activate_mode(frame.width, frame.height, detected)
+        profile::activate(frame.width, frame.height)
             .map_err(|error| TickError::Lost(format!("profile failed: {error}")))?;
     }
 

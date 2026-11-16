@@ -209,16 +209,7 @@ pub fn active_key() -> Option<String> {
 /// Make the profile for this client size and UI Size active, creating an empty
 /// one when the pair has never been seen. Returns the profile now active.
 pub fn activate(client_w: u32, client_h: u32) -> Result<Profile, String> {
-    activate_mode(client_w, client_h, settings::ui_mode())
-}
-
-/// Activate the profile for an explicit UI Size. The engine passes the layout it
-/// detected from the frame; the manual setting remains the fallback.
-pub fn activate_mode(
-    client_w: u32,
-    client_h: u32,
-    ui_mode: crate::settings::UiMode,
-) -> Result<Profile, String> {
+    let ui_mode = settings::ui_mode();
     let key = format!("{client_w}x{client_h}{}", ui_mode.suffix());
     let mut active = lock(&ACTIVE);
     if let Some(current) = active.as_ref() {
