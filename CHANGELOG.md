@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Added
+- 1920×1080 UI Size detection: the engine reads the orange level-tile cluster
+  and picks Ideal vs the shared Default/Filtered layout, with the manual setting
+  as the fallback. A live Filtered capture with the app set to Ideal detected
+  Default and read the map.
 - Three-state minimap detection anchored on the `WORLD` badge: expanded,
   title-bar-only, and folded.
 - Folded-bar map reading: the single `Street :Map` line is matched against the

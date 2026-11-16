@@ -887,6 +887,36 @@ fn reads_follow_the_manifest_minimap_state() {
     }
     }
 
+    #[test]
+    fn detects_the_1920_ui_layout() {
+        let cases = load_cases_in(&fixtures_dir());
+        for (pair, expected) in [
+            ("1920x1080", UiMode::Default),
+            ("1920x1080@filtered", UiMode::Default),
+            ("1920x1080@ideal", UiMode::Ideal),
+        ] {
+            let key = format!("{pair}/expanded");
+            let case = cases
+                .iter()
+                .find(|case| case.key == key)
+                .expect("expanded case");
+            assert_eq!(
+                crate::engine::detect_ui_mode(&compose_frame(case)),
+                Some(expected),
+                "{pair}"
+            );
+        }
+        let case = cases
+            .iter()
+            .find(|case| case.key == "1366x768@ideal/expanded")
+            .expect("1366 case");
+        assert_eq!(
+            crate::engine::detect_ui_mode(&compose_frame(case)),
+            Some(crate::settings::ui_mode()),
+            "1366 falls back to the manual UI Size"
+        );
+    }
+
     /// Live confirmation: capture the running client and read it with the
     /// preset for the app's current UI Size. The game must be at that size.
     #[test]
@@ -899,9 +929,10 @@ fn reads_follow_the_manifest_minimap_state() {
         let window = crate::window_target::resolve_selector(&selector)
             .expect("the MapleStory window is running");
         let frame = crate::capture::client_frame(window.hwnd).expect("capture the client");
-        let mode = crate::settings::ui_mode();
+        let app_mode = crate::settings::ui_mode();
+        let mode = crate::engine::detect_ui_mode(&frame).unwrap_or(app_mode);
         println!(
-            "live frame {}x{}; app uiMode={mode:?}",
+            "live frame {}x{}; app uiMode={app_mode:?}; detected={mode:?}",
             frame.width, frame.height
         );
         assert_eq!(

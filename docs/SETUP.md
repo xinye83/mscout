@@ -153,6 +153,6 @@ Equivalent for **portable** use: copy the release exe plus its `data/` folder an
 The helper never touches the game process: no memory reading, no injection, no input. It reads pixels via the OS compositor. That imposes two rules on the game:
 
 - Run **windowed or borderless**. Exclusive fullscreen cannot be captured or overlaid.
-- Run at a **client size and UI Size you have calibrated**. Changing either switches profiles; a pair never calibrated needs one calibration pass. Presets ship for 1366×768 and 1920×1080 in all three UI sizes; 1920×1200 falls back to calibration.
+- Run at a **client size and UI Size you have calibrated**. Changing either switches profiles; a pair never calibrated needs one calibration pass. The 1920×1080 UI Size is detected from the frame; 1366×768 and other sizes use the manual UI Size setting. Presets ship for 1366×768 and 1920×1080 in all three UI sizes; 1920×1200 falls back to calibration.
 
 See [SPEC.md §1](SPEC.md) for the full constraint list and the reasoning behind it.
