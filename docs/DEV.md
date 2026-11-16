@@ -73,26 +73,15 @@ MSCW folder defaults to the Steam example path; override it with
 
 | Diagnostic | Needs | Writes |
 |---|---|---|
-| `game_font::probe_glyph_sets` | MSCW install | — (lists node names, raw/ink sizes) |
-| `game_font::probe_level_source` | MSCW install, `data/live-frame-1080.bmp` | — |
-| `game_font::probe_exp_shapes` | captured frames | — |
-| `game_font::reseed_reads_all_captured_frames` | MSCW install, captured frames | — (prints EXP/level reads; Ideal frames must read) |
-| `game_font::probe_1080_default_level` | `data/live-frame-1080-default.bmp` | — (diagnoses the Default level source gap) |
-| `font_seed::reads_ideal_identity` | Ideal captured frames | — (verifies the three name/job boxes) |
-| `font_seed::reads_1080_default_identity` | `data/live-frame-1080-default.bmp` | — (Default Arial gap) |
+| `game_font::probe_game_atlas` | MSCW install | — (lists glyph sets) |
+| `game_font::seed_live_level` | live game | — (seeds/prints the level read) |
 | `game_font::seed_live_profile` | live game | profile when `MSCOUT_SAVE_SEED=1` |
-| `engine::explains_live_level_box` | live game, saved profile | — (prints adaptive vs bright level reads) |
-| `font_seed::reads_live_text` | `data/debug-frame.bmp`, profile | — (prints Arial name/job/map reads) |
-| `font_seed::match_saved_names` | client `String_000.wz`, map samples | — (matches saved label lines against the client table) |
-| `engine::reads_saved_map_frames` | map samples + profile | — (proof: reads level/EXP/name/job/map/street from saved frames) |
-| `game_font::probe_string_map_names` | client `String_000.wz` | — (lists exact mapName/streetName matches) |
-| `game_font::probe_map_img_values` | client `String_000.wz` | — (prints map ID name/street values) |
-| `font_seed::probe_label_styles` | `data/debug-frame.bmp` | — (scores Arial Regular/Bold label variants) |
-| `font_seed::probe_label_thresholds` | `data/debug-frame.bmp` | — (label segmentation vs threshold) |
-| `engine::live_settings_read` | live game, a saved profile | — |
+| `game_font::probe_1920_filtered` | Filtered fixture + MSCW | — (EXP/level/name/job/map probe) |
+| `map_names::probe_string_jobs` | MSCW install | — (scans String/Etc/UI for job tables) |
+| `regression::reads_every_fixture_from_empty_atlases` | MSCW install + Arial | — (full client tier) |
+| `regression::reads_follow_the_manifest_minimap_state` | MSCW install + Arial | — (per-state client tier) |
+| `regression::reads_live_1920` | live game + MSCW | — (full live read) |
+| `regression::probe_live_minimap` | live game | — (live minimap state/labels) |
 | `capture::dumps_exp_crop` | live game, `MSCOUT_CROP`, `MSCOUT_FRAME` | `data/<MSCOUT_FRAME>` |
-| `capture::snapshot_map_sample` | live game | `data/map-samples/<timestamp>/` (full frame, label/line crops, thresholds, meta, profile) |
-| `engine::record_live_labels` | live game | the active profile's map/name/job |
-| `ocr::dumps_live_segments` | live game | — |
 
 Run one with `cargo test --manifest-path src-tauri/Cargo.toml --lib <name> -- --ignored --nocapture`. Set `MSCOUT_SHOW_CROP=1` to print the thresholded crop. The front end has no test runner yet; `npx tsc --noEmit` is the gate there.

@@ -56,7 +56,7 @@ Last updated: 2026-11-15
 - [x] No carried map: a state with no name on screen reports `unknown`
 - [x] Calibration audit: preset geometry is not drawn as a box, Street/Map is detection-only, panel headers share one status vocabulary, and the legacy `Fixes waiting` review queue is removed
 
-## 0.5.0 — target
+## 0.5.0 — released 2026-11-15
 
 Goal: support **at least two client resolutions across all three UI Size modes**
 (Default Ratio, Ideal Ratio and Filtered).

@@ -4,7 +4,7 @@ A local, read-only companion overlay for **MapleStory Classic World**. It watche
 
 Target is Classic World specifically — not original MapleStory, not a pre-Big Bang private server. Formulas, EXP tables, map lists and level cap all come from Classic World data (cap 100, four jobs, 2nd job ceiling).
 
-**Implementation status (2026-11, v0.3.0):** WGC capture, calibration, HUD-atlas digit seeding, bitmap matching, map/name/job fingerprints and JSONL storage are implemented; the overlay renders real samples. Remaining work is listed in [docs/ROADMAP.md](ROADMAP.md), rationale in [docs/DECISIONS.md](DECISIONS.md).
+**Implementation status (2026-11-15, v0.5.0):** WGC capture, calibration, HUD-atlas digit seeding, bitmap matching, map/name/job text and JSONL storage are implemented. 0.5.0 ships 1366×768 in all three UI sizes and 1920×1080 Ideal; 1920×1080 Default/Filtered are deferred. Remaining work is listed in [docs/ROADMAP.md](ROADMAP.md), rationale in [docs/DECISIONS.md](DECISIONS.md).
 
 ---
 
@@ -68,8 +68,8 @@ Compliance note: per Nexon's rules, botting is using a macro, third-party progra
 
 In:
 - Auto-read of the supported HUD: EXP, level, map/street, character name and job
-  (automatic paths verified at Ideal Ratio; Default/Filtered fall back to
-  calibration for now)
+  (1366×768 in all three UI sizes and 1920×1080 Ideal; 1920×1080
+  Default/Filtered are deferred and fall back to calibration)
 - Local sample storage
 - Live panel: current map, level, EXP %, 1-minute rate, 5-minute average, ETA, last-30-minute chart
 - ETA to next level on a 30-minute rate
@@ -95,7 +95,7 @@ Regions of interest (ROIs), stored as physical pixels relative to the game windo
 
 Calibration flow: show a frozen preview frame, player drags a box for each ROI, live parse feedback appears immediately ("Lv 17 · 10,105 EXP · 91.53% · Henesys"). The digit atlases are not typed in: the player points the app at the MSCW install and the client's own bitmap atlas is read at the rendered size. Typing the readout remains the fallback when the install cannot be found.
 
-Calibration is scoped to the **client size and UI Size**: each pair keeps its own profile (`data/profiles/<W>x<H>[@mode].json`), and the engine activates the profile matching the live window. Re-calibration is required for a pair that has none, or after a patch that moves the status bar; a resolution change switches profiles instead of invalidating them. The app must detect this situation (no profile, parse failure) rather than keep plotting. Calibration boxes ship as presets for the supported Ideal sizes; other pairs fall back to calibration. The digit atlases are seeded from the installed client, not shipped. See [PRESETS.md](PRESETS.md).
+Calibration is scoped to the **client size and UI Size**: each pair keeps its own profile (`data/profiles/<W>x<H>[@mode].json`), and the engine activates the profile matching the live window. Re-calibration is required for a pair that has none, or after a patch that moves the status bar; a resolution change switches profiles instead of invalidating them. The app must detect this situation (no profile, parse failure) rather than keep plotting. Calibration boxes ship as presets for 1366×768 in all three UI sizes and 1920×1080 Ideal; other pairs fall back to calibration. The digit atlases are seeded from the installed client, not shipped. See [PRESETS.md](PRESETS.md).
 
 ### 3.3 Cadence
 - One frame per second, cropped to the ROIs only.
@@ -107,7 +107,7 @@ Calibration is scoped to the **client size and UI Size**: each pair keeps its ow
 ## 4. Parsing
 
 ### 4.1 EXP
-- **Digits use bitmap matching, not general OCR.** The client draws them from baked HUD atlases, not a font. The atlas is seeded from `Data/UI/_Canvas/_Canvas_000.wz` at the rendered glyph height (5×7 at Ideal; Default sizes vary by pair and are not all supported yet), so no per-character teaching is needed. Typing the readout remains a fallback if the install is unavailable.
+- **Digits use bitmap matching, not general OCR.** The client draws them from baked HUD atlases, not a font. The atlas is seeded from `Data/UI/_Canvas/_Canvas_000.wz` at the rendered glyph height (5×7 at 1366 and 1920 Ideal; 1366 Default/Filtered render at their own sizes and are supported; the 1920 Default/Filtered pairs are deferred), so no per-character teaching is needed. Typing the readout remains a fallback if the install is unavailable.
 - Parse yields: level, absolute EXP within level, and percentage.
 - **Cross-check**: `percentage ≈ exp / exp_required(lv)`. If the two disagree by more than ~1 percentage point, the sample is treated as evidence against the level read (not the EXP read), and the level is reported unrecognised.
 - Level is read from its own box with its own atlas; the level digit is the EXP glyph widened to the rendered size. It is never derived from EXP and the percentage.

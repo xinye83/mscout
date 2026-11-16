@@ -38,8 +38,8 @@ taught map/street fingerprints and taught letter sets, and reports the map as
 
 | Asset | Used for | Why not shipped |
 |---|---|---|
-| **Arial Regular 12 px** (1-bit GDI) | character name / job (all 1366×768 UI sizes; Ideal at 1920×1080/1200) | Proprietary system font; loaded from Windows at runtime, never bundled. 1920 Default/Filtered are not auto-supported. |
-| **Arial Bold 12 px** (anti-aliased GDI) | map / street label rendering for the Ideal name-table match | Same. |
+| **Arial Regular 12 px** (1-bit GDI) | character name / job (1366×768 UI sizes; 1920×1080 Ideal) | Proprietary system font; loaded from Windows at runtime, never bundled. 1920×1080 Default/Filtered and 1920×1200 have no preset and are not auto-supported. |
+| **Arial Bold 12 px** (anti-aliased GDI) | map / street label rendering for the name-table match (rendered at 12–24 px) | Same. |
 | WGC / hotkey / shell APIs | capture, hotkeys, folder picker | OS. |
 
 If Arial is unavailable, font seeding fails gracefully to the taught
@@ -112,7 +112,6 @@ contain redistributable-restricted content.
    override. No data is copied.
 4. **Keep the EXP table shipped** (numbers only; the client does not expose it
    cleanly).
-5. **For a UI Size whose label is not 12 px**, build a size-specific rendered
-   index at runtime; do not ship a static rendered set.
+5. **Map labels are matched at the measured size**: the reader builds the name index at 12–24 px at runtime rather than shipping a static rendered set.
 6. **Preset updates** are geometry only; drop-in overrides stay in
    `data/presets/`.

@@ -189,17 +189,16 @@ reader matches whole rendered names instead of OCR. See
    let a 2×7 `[` "match" a `1` by shifting its ink out of the box; the live
    round-trip read `74,521142.78%1` until this was fixed. It now reads
    `74,521[42.78%]` at distance 0 on 1366 Ideal, 1920 Ideal and 1920×1200 Default.
-   1920×1080 Default is a different rendering and is not an auto-supported target
-   in 0.4.0.
+   0.5.0 ships 1366×768 in all three UI sizes and 1920×1080 Ideal; the
+   1920 Default/Filtered pairs are deferred.
 4. **The level reader tries bright ink first.** On a pale tile the adaptive
    threshold marks the whole tile as ink; with a stale tile-sized glyph in the
    atlas, the adaptive read looked successful and returned `55` for a real `35`.
    `recognize_level` only trusts near-white text, where the 7×7 digits segment
    cleanly, and falls back to the adaptive path only if that finds nothing.
 5. **Key atlases by glyph size, not resolution.** 5×7 covers 1366 and 1920
-   Ideal; 8×11 covers 1920×1200 Default. Default sizes are not uniformly
-   supported: 1920×1080 Default uses a different rendering and needs its own
-   source check.
+   Ideal; the 1366 Default/Filtered pairs render at their own sizes and are
+   supported. The 1920 Default/Filtered pairs are deferred.
 6. **Seeding is implemented.** The calibration window asks for the MSCW folder
    (`mscwDir` in `settings.json`, via a native folder picker). On freeze or
    “Load digits” the app reads `EXPBar/number`, scales it to the live glyph
@@ -272,9 +271,8 @@ The public map list at `meowdb.com/msclassic/maps/all` lists 453 maps including
 Ossyria/El Nath and instanced/upcoming content; the client's own table is the
 authoritative live set and matches both samples exactly.
 
-Limit: the name index is rendered at 12 px, which matches the Ideal labels. A UI
-Size that draws the label at another pixel size needs its own rendered index (see
-the roadmap's multi-resolution item).
+The name index is built at 12–24 px and the matcher tries each size, so the
+supported 1366×768 and 1920×1080 Ideal labels are covered.
 
 ---
 
@@ -347,8 +345,8 @@ $env:MSCOUT_FRAME='live-frame.bmp'
 cargo test --manifest-path src-tauri/Cargo.toml --lib capture::tests::dumps_exp_crop -- --ignored --nocapture
 ```
 
-The shipped presets in `src-tauri/presets/` hold boxes for the supported Ideal
-client sizes; see [PRESETS.md](PRESETS.md).
+The shipped presets in `src-tauri/presets/` hold boxes for 1366×768 in all three
+UI sizes and 1920×1080 Ideal; see [PRESETS.md](PRESETS.md).
 
 ---
 

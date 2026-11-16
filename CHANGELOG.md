@@ -4,7 +4,7 @@ All notable changes to MScout are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the major version is `0`, the minor version is bumped for features and the patch for fixes; anything may still change between `0.x` releases.
 
-## [Unreleased]
+## [0.5.0] - 2026-11-15
 
 ### Added
 - Three-state minimap detection anchored on the `WORLD` badge: expanded,
@@ -14,20 +14,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Shipped 1366×768 presets for Default Ratio and Default Ratio (Filter Applied).
   The three 1366×768 UI sizes share verified HUD geometry, and the saved-frame
   corpus reads every mode and all three minimap states at confidence 1.0.
-- Shipped 1920×1080 Default and Filtered presets with measured HUD boxes and all
-  three minimap states. Default now reads EXP, level and name from the corpus;
-  the job, the Filtered pass and the map-label size remain tracked in the roadmap.
-- The tracked screenshot corpus now covers 1366×768 in Default, Filtered and
-  Ideal, and 1920×1080 in Ideal, Default and Filtered, each with expanded,
-  title-bar-only and folded minimap states. Maps include Parched Land, East
-  Rocky Mountain III, and Hidden Street / Free Market <8>.
+- The tracked screenshot corpus covers 1366×768 in Default, Filtered and Ideal,
+  and 1920×1080 in Ideal, Default and Filtered, each with expanded,
+  title-bar-only and folded minimap states. The 1920 Default/Filtered fixtures
+  are tracked for a later pass; their presets are not shipped in 0.5.0. Maps
+  include Parched Land, East Rocky Mountain III, and Hidden Street / Free
+  Market <8>.
 - Fixture-driven regression suite (`src-tauri/src/regression.rs`): the tracked
   corpus is replayed through the real minimap detector and `read_frame`.
   Hermetic tests check corpus integrity, minimap state and the settings-evidence
   invariant; an `--ignored` tier seeds EXP/level/identity from each frame and
   asserts the full read. `MSCOUT_CASE=<pair>` narrows a run to one pair and
-  `MSCOUT_STATE=<expanded|titlebar|folded>` to one minimap state, and a missing
-  or clipped fixture fails loudly instead of being skipped.
+  `MSCOUT_STATE=<expanded|titlebar|folded>` to one minimap state. A fixture
+  with no shipped preset is skipped as unsupported; a missing or clipped fixture
+  for a supported pair fails loudly.
 
 ### Removed
 - The 1920×1080 Default and Filtered presets. Those pairs are deferred past
@@ -44,25 +44,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   state and every Filter Applied state. The filtered path uses tolerant
   badge/chrome colours with solidity checks, and the Default title bar (white
   rather than `#99BBCC`) falls back to the `MINI MAP` text plus the dark map body.
-- The map-label matcher now builds its name/street index per font size and tries
+- The map-label matcher builds its name/street index per font size and tries
   12–24 px, and the label line splitter isolates white text rows from the panel
-  fill, icon and border. Larger Default Ratio labels are detected as separate
-  street/map lines; the 1920 Default name match itself remains open.
-- The 1920×1080 Default EXP readout dropped the comma and misread touching
-  digits. The reader now learns the live digit shapes, matches the punctuation
-  variants, and splits merged glyphs; it reads `127,028[72.91%]` exactly. The
-  Filter Applied rendering's 4×4 comma is learned too, so its EXP also reads
-  `127,028[72.91%]`.
-- The 1920×1080 Default level's `3` (a different shape from the EXP design) now
-  reads through a bright-ink learning pass; the level reads `35`. The Filter
-  Applied level seeds both bright digit sizes (10×11 and 11×14).
-- Job and name now use per-line Arial atlases. The Filter Applied rendering
-  seeds the job at 14 px and the name at 19 px; merging them read `Poge` /
-  `Furohjood`. Each line is now seeded and read on its own, so the job reads
-  `Page` and the name `Furoh ood`. 1366×768 and 1920×1080 Ideal are unchanged.
-- The 1920×1080 Default name now seeds from both identity boxes with
-  anti-aliased Arial and learns the live letters; the name reads `Euroblood`.
-  The job and the Default/Filtered map-label size remain open.
+  fill, icon and border.
+- Reader improvements for the deferred 1920 Default/Filtered pairs — EXP
+  punctuation and merged digits, the level digit shapes, and per-line identity
+  atlases — are in place, but those presets are not shipped in 0.5.0.
 - Map names ending in a roman numeral (`Thicket Around the Beach III`) could read
   as `unknown`; the matcher now breaks near-ties by rendered width and picks the
   correct numeral.
@@ -199,7 +186,8 @@ First release. Read-only: it observes the screen and never interacts with the ga
 - **Docs.** Setup guide, behavioral spec, roadmap, decision log, data formats, dev notes.
 - **Tests.** Rust unit tests for the EXP table, glyph segmentation and matching, thresholding, settings/profile round-trips and window enumeration, plus `#[ignore]`d diagnostics for live capture.
 
-[Unreleased]: https://github.com/xinye83/mscout/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/xinye83/mscout/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/xinye83/mscout/releases/tag/v0.5.0
 [0.4.0]: https://github.com/xinye83/mscout/releases/tag/v0.4.0
 [0.3.0]: https://github.com/xinye83/mscout/releases/tag/v0.3.0
 [0.2.0]: https://github.com/xinye83/mscout/releases/tag/v0.2.0

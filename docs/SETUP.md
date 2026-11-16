@@ -142,7 +142,7 @@ Equivalent for **portable** use: copy the release exe plus its `data/` folder an
 | `link.exe not found` | Visual Studio Build Tools / C++ workload missing |
 | Blank window | WebView2 runtime missing |
 | Overlay shows `not calibrated for WxH` | that client size/UI Size has no profile yet — run calibration |
-| Overlay shows `unknown` map | the map is missing from the client table, or the UI Size's label size does not match the Ideal Arial Bold 12 index — teach a correction |
+| Overlay shows `unknown` map | the map is missing from the client table, or the label line could not be matched — teach a correction |
 | Build fails with `EBUSY` on a DLL | a previous instance is still running; quit it from the tray first |
 | Capture fails on fullscreen | the game must run windowed or borderless; exclusive fullscreen cannot be captured without hooking, which is out of scope |
 

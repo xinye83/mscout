@@ -103,14 +103,14 @@ Sharing a profile between machines is safe when they run the game at the same cl
 
 ### Reading the name and job
 
-The name and job are **Arial** (12 px, 1-bit GDI) and are seeded automatically from
+The name and job are **Arial** (12 px at the supported pairs, 1-bit GDI) and are seeded automatically from
 the Windows face when their boxes are drawn — no teaching. The atlas stores
 `source: "font"`; the one ambiguity at this size (`l` and `I` are the same 1 px
 bar) is resolved by treating a mid-word bar in a mixed-case word as `l`. The
 taught fingerprints remain as the exact fallback, and **Teach name/job** corrects
 a misread.
 
-The minimap label is **Arial Bold 12 px** with a 1 px shadow. Its text is the
+The minimap label is **Arial Bold** at the rendered size with a 1 px shadow. Its text is the
 client's own `mapName`/`streetName` table, so it is matched as a whole line rather
 than segmented; see below.
 
@@ -132,7 +132,7 @@ The minimap has three zoom states, and the reader handles each:
 
 | State | What is on screen | Map name |
 |---|---|---|
-| Expanded | title bar + icon/name band | two-line label, Arial Bold 12 white |
+| Expanded | title bar + icon/name band | two-line label, white Arial Bold at the rendered size |
 | Title-bar only | title bar + map graphic, no icon/name | **not drawn — reported `unknown`** |
 | Folded | one bar with `Street :Map` inside | matched against the client table |
 

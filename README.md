@@ -40,8 +40,9 @@ Tray menu offers the same actions plus Quit.
 
 ## Calibrating
 
-Calibration is a one-time pass per client size and UI Size. The full flow,
-preset support and troubleshooting are in
+Calibration is a one-time pass per client size and UI Size. Presets ship for
+1366×768 in all three UI sizes and 1920×1080 Ideal; the full flow, preset
+support and troubleshooting are in
 [docs/SETUP.md §3](docs/SETUP.md#calibrate) and
 [docs/PRESETS.md](docs/PRESETS.md). The overlay reports when a pair needs
 calibration; it never opens the calibration window by itself.

@@ -13,8 +13,9 @@ profiles.
 ## Purpose
 
 - Give the detection code (minimap state, HUD level/job/name/EXP, map + street
-  labels, UI Size selection) an offline, deterministic oracle, so a change that
-  breaks a read fails a test instead of silently mis-reporting in the overlay.
+  labels, UI Size ground truth) an offline, deterministic oracle, so a change
+  that breaks a read fails a test instead of silently mis-reporting in the
+  overlay.
 - Pin the exact pixels a reader is expected to consume for each covered
   `WxH@mode` pair, at the same crop rects the live pipeline uses.
 - Record what the client itself says about the frame — the open Graphics
@@ -46,7 +47,10 @@ The PNGs are **lossless crops of real client frames**, written with no
 resampling, no palette reduction and no lossy encoding. For a pair with several
 states, the shared `settings.png` is a crop of the state captured with the panel
 open; it is pair-level evidence, not a claim about each state's pixels. Only
-tests read this directory; the running application never opens it.
+tests read this directory; the running application never opens it. The
+client-tier tests skip a pair with no shipped preset; the 1920 Default/Filtered
+fixtures are tracked for a later pass, and the minimap state gate still covers
+every pair.
 
 ## Multi-state pairs
 
