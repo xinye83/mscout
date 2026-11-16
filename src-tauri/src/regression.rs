@@ -975,3 +975,22 @@ fn reads_follow_the_manifest_minimap_state() {
         println!("live EXP height {exp_height}px, level size {level_size:?}");
         println!("live readings {readings:?}");
     }
+
+    #[test]
+    #[ignore = "live: prints the minimap detection on the running client"]
+    fn probe_live_minimap() {
+        let selector = crate::settings::WindowSelector {
+            title: "MapleStory".into(),
+            process: "MapleStory.exe".into(),
+        };
+        let window = crate::window_target::resolve_selector(&selector).expect("game window");
+        let frame = crate::capture::client_frame(window.hwnd).expect("capture");
+        println!("frame {}x{}", frame.width, frame.height);
+        println!("minimap: {:?}", ocr::detect_minimap(&frame));
+        if let Some(lines) = ocr::map_label_lines(&frame) {
+            println!(
+                "labels: {:?}",
+                lines.iter().map(|line| (line.w, line.h)).collect::<Vec<_>>()
+            );
+        }
+    }

@@ -1983,6 +1983,35 @@ pub fn detect_minimap(frame: &Frame) -> Option<Minimap> {
             });
         }
 
+        // The name band can sit below the title bar, outside the badge's
+        // component match. Reuse the panel detector the label reader uses: a
+        // solid #99BBCC band near the badge is the expanded state, not the
+        // title-bar-only fallback.
+        if let Some(panel) = detect_minimap_panel(frame) {
+            let near = inside(&panel)
+                || (cx >= panel.x
+                    && cx < panel.x + panel.w
+                    && panel.y >= badge.y - 2
+                    && panel.y <= badge.y + badge.h + 40);
+            let lines = map_label_lines(frame)
+                .map(|lines| lines.len())
+                .unwrap_or(0);
+            if lines >= 2 || (near && panel.h >= 25) {
+                let bar = bar_of(&panel);
+                let title = detect_title_text(frame, bar, *badge);
+                let icon = detect_icon(frame, panel, bar);
+                let active_buttons = active_zoom_buttons(frame, bar, *badge);
+                return Some(Minimap {
+                    state: MinimapState::Expanded,
+                    bar,
+                    title,
+                    badge: *badge,
+                    icon,
+                    active_buttons,
+                });
+            }
+        }
+
         // Default title-bar-only: the title bar is white, not #99BBCC, and there is
         // no name band. The MINI MAP text plus the dark map body identify it.
         if let Some(minimap) = titlebar_fallback(frame, *badge) {

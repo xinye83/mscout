@@ -37,6 +37,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   1920×1080 presets remain.
 
 ### Fixed
+- Expanded minimap detection when the name band sits below the badge: the
+  detector now uses the panel's two label lines before falling back to the
+  title-bar-only state.
 - Minimap state detection now recognises the 1920×1080 Default title-bar-only
   state and every Filter Applied state. The filtered path uses tolerant
   badge/chrome colours with solidity checks, and the Default title bar (white
