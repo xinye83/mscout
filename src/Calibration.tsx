@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   Calibration,
+  FieldProvenance,
   GlyphGuess,
   LabelCrop,
   LearningInfo,
@@ -45,6 +46,28 @@ const DRAW_LABEL: Record<Readout, string> = {
 /// A box the reader can actually use (matches `Region::is_usable` on the backend).
 function usable(region: Region | null): region is Region {
   return region !== null && region.w > 1 && region.h > 1;
+}
+
+/// Plain-English names for the reader stages the backend reports. An id this build
+/// does not know is shown as it arrived, so a newer backend still displays.
+const SOURCE_LABEL: Record<string, string> = {
+  atlas: "digit atlas",
+  font: "Arial text",
+  fingerprint: "taught fingerprint",
+  ocr: "OCR text",
+  table: "stored table",
+  dtw: "DTW match",
+  literal: "OCR text, no table match",
+  hidden: "minimap collapsed",
+  none: "not read",
+  unknown: "not recognised",
+};
+
+/// "digit atlas · game": the stage that read the field, then where its data came
+/// from (`game`, `taught`, a font seed).
+function sourceText(entry: FieldProvenance): string {
+  const stage = SOURCE_LABEL[entry.source] ?? entry.source;
+  return entry.engine ? `${stage} · ${entry.engine}` : stage;
 }
 
 function hexBytes(hex: string): Uint8Array {
@@ -1224,6 +1247,25 @@ export default function Calibration() {
     }
   };
 
+  /// Where this field's value came from. Absent from an older backend, which is why
+  /// the readout falls back to the bare value.
+  const provenanceFor = (key: Readout): FieldProvenance | null => {
+    const provenance = probe?.provenance;
+    if (!provenance) return null;
+    switch (key) {
+      case "exp":
+        return provenance.exp;
+      case "level":
+        return provenance.level;
+      case "map":
+        return provenance.map;
+      case "identity":
+        return provenance.identity;
+      default:
+        return null;
+    }
+  };
+
   const liveMode = uiModes.find((option) => option.active)?.id ?? "default";
   const liveModeLabel = uiModes.find((option) => option.active)?.label ?? "—";
   const liveSize = client ? `${client.w}x${client.h}` : null;
@@ -1296,7 +1338,7 @@ export default function Calibration() {
           <button
             className="ghost"
             disabled={!preview}
-            title="Save a local JSON diagnostic with raw reads, glyph candidates and map crops"
+            title="Save a local JSON diagnostic with raw reads, glyph candidates, map crops and where each field came from"
             onClick={() => void saveDiagnostic()}
           >
             Save diagnostic
@@ -1407,6 +1449,7 @@ export default function Calibration() {
         <div className="cal-readouts">
           {READOUTS.map((readout) => {
             const key = readout.key;
+            const provenance = provenanceFor(key);
             return (
               <section
                 key={key}
@@ -1459,6 +1502,16 @@ export default function Calibration() {
                     <p className="readout-read muted small">
                       Read: {readValue(key) ?? "—"}
                     </p>
+                    {provenance && (
+                      <p className="readout-source muted small">
+                        Source: {sourceText(provenance)}
+                      </p>
+                    )}
+                    {provenance?.reason && (
+                      <p className="readout-reason warn small">
+                        Why: {provenance.reason}
+                      </p>
+                    )}
                     {probeError && (
                       <p className="warn small">Rejected: {probeError}</p>
                     )}
@@ -1784,6 +1837,9 @@ export default function Calibration() {
         {probe && (
           <span className="muted small probe">
             read ok · conf {probe.conf.toFixed(2)}
+            {probe.provenance
+              ? ` · ${probe.provenance.durationMs.toFixed(1)} ms`
+              : ""}
           </span>
         )}
       </footer>

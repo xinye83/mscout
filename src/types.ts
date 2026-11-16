@@ -60,6 +60,41 @@ export type CaptureStatus = {
   reason: string | null;
 };
 
+/** The reader stage that produced one field of a reading. */
+export type ReadSource =
+  | "atlas"
+  | "font"
+  | "fingerprint"
+  | "ocr"
+  | "table"
+  | "dtw"
+  | "literal"
+  | "hidden"
+  | "unknown"
+  | "none";
+
+/** Where one field of a reading came from, and why it is empty when it is. */
+export type FieldProvenance = {
+  source: ReadSource;
+  /**
+   * Where that stage's data came from: "game" or "taught" for a digit atlas,
+   * "font" or "taught" for the identity atlas, empty otherwise.
+   */
+  engine: string;
+  /** The reader's own reason for an empty field. */
+  reason?: string | null;
+};
+
+/** Where a reading came from, plus how long the read took. */
+export type ReadProvenance = {
+  exp: FieldProvenance;
+  level: FieldProvenance;
+  map: FieldProvenance;
+  identity: FieldProvenance;
+  /** Wall-clock duration of the read, in milliseconds. */
+  durationMs: number;
+};
+
 export type Readings = {
   lv: number;
   exp: number;
@@ -73,6 +108,8 @@ export type Readings = {
   job: string | null;
   /** True when the minimap is collapsed; there is no name to read or calibrate. */
   mapHidden: boolean;
+  /** Absent from an older backend, so every read must tolerate it. */
+  provenance?: ReadProvenance;
 };
 
 export type LearningInfo = {

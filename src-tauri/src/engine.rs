@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::capture::Frame;
@@ -94,7 +94,148 @@ pub struct Sample {
     pub map_hidden: bool,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq)]
+/// The reader stage that produced one field of a reading.
+///
+/// The ids are part of the diagnostic format (`atlas`, `font`, `fingerprint`,
+/// `ocr`, `table`, `dtw`, `literal`, `hidden`, `unknown`, `none`), so a support file
+/// written by this build reads in an older one and vice versa.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReadSource {
+    /// The digit glyph atlas: the EXP readout and the level box.
+    Atlas,
+    /// The Arial letter atlas seeded from the font: the name and job lines.
+    Font,
+    /// A taught pixel fingerprint: a name, a job, a street, or a taught map label.
+    Fingerprint,
+    /// Windows OCR read the text on screen.
+    Ocr,
+    /// A stored table answered: the client's map-name table, or a taught map
+    /// fingerprint held as a table of stored label pixels.
+    Table,
+    /// A distance match against rendered names — the whole-line or folded DTW.
+    Dtw,
+    /// On-screen OCR text kept as it was read because no table entry matched it.
+    Literal,
+    /// Nothing to read: the minimap is collapsed to its title bar.
+    Hidden,
+    /// The reader could not resolve this field.
+    #[default]
+    Unknown,
+    /// The field was never read, because a check rejected it (or the frame) first.
+    None,
+}
+
+/// Where one field's value came from, and why it is empty when it is.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldProvenance {
+    /// The reader stage that produced the value.
+    #[serde(default)]
+    pub source: ReadSource,
+    /// Where that stage's data came from: `game` or `taught` for a digit atlas,
+    /// `font` or `taught` for the identity atlas. Empty for a preset, a legacy set,
+    /// or a stage with no stored data. It never changes a read decision; the engine
+    /// stamps it from the atlases it loaded.
+    #[serde(default)]
+    pub engine: String,
+    /// Why the field is empty. A rejection here — the level did not cross-check
+    /// against the EXP table, the map line matched nothing — is what a saved
+    /// diagnostic is read for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl FieldProvenance {
+    /// A field that was read by `source`.
+    fn read(source: ReadSource) -> Self {
+        Self {
+            source,
+            engine: String::new(),
+            reason: None,
+        }
+    }
+
+    /// A field with no value, plus the reader's own reason.
+    fn unread(source: ReadSource, reason: impl Into<String>) -> Self {
+        Self {
+            source,
+            engine: String::new(),
+            reason: Some(reason.into()),
+        }
+    }
+
+    /// A field a check rejected, so nothing was read from it.
+    pub(crate) fn rejected(reason: impl Into<String>) -> Self {
+        Self::unread(ReadSource::None, reason)
+    }
+}
+
+/// Where a reading came from: one entry per field, plus how long the read took.
+///
+/// It is serialised with `Readings` and repeated in the calibration diagnostic, so
+/// a rejected or a surprising frame explains itself without the game.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadProvenance {
+    #[serde(default)]
+    pub exp: FieldProvenance,
+    #[serde(default)]
+    pub level: FieldProvenance,
+    #[serde(default)]
+    pub map: FieldProvenance,
+    #[serde(default)]
+    pub identity: FieldProvenance,
+    /// Wall-clock duration of the read, in milliseconds.
+    #[serde(default)]
+    pub duration_ms: f64,
+}
+
+impl ReadProvenance {
+    /// Record where the stored atlases came from. `read_frame` sees only the glyph
+    /// sets, not the `game` / `taught` marker stored beside them, so the caller that
+    /// loaded them stamps it here.
+    pub fn stamp_engines(&mut self, exp: &str, level: &str, identity: &str) {
+        self.exp.engine = exp.to_string();
+        self.level.engine = level.to_string();
+        self.identity.engine = identity.to_string();
+    }
+}
+
+/// A read that produced no sample. The provenance gathered before the failure is
+/// kept: a rejected frame is exactly the one a diagnostic has to explain.
+#[derive(Clone, Debug)]
+pub struct RejectedRead {
+    pub reason: String,
+    pub provenance: ReadProvenance,
+}
+
+impl RejectedRead {
+    fn new(
+        reason: impl Into<String>,
+        mut provenance: ReadProvenance,
+        started: std::time::Instant,
+    ) -> Self {
+        provenance.duration_ms = started.elapsed().as_secs_f64() * 1000.0;
+        Self {
+            reason: reason.into(),
+            provenance,
+        }
+    }
+}
+
+/// A rejection of the EXP read, carrying the reason on the EXP provenance entry.
+fn reject_exp(
+    provenance: ReadProvenance,
+    reason: &str,
+    started: std::time::Instant,
+) -> RejectedRead {
+    let mut provenance = provenance;
+    provenance.exp = FieldProvenance::rejected(reason);
+    RejectedRead::new(reason, provenance, started)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Readings {
     pub lv: u32,
@@ -110,6 +251,10 @@ pub struct Readings {
     /// True when the minimap is collapsed to its title bar. There is no map name
     /// to read and nothing to calibrate; the overlay shows a distinct state.
     pub map_hidden: bool,
+    /// Where each field came from and why an empty one is empty. Defaulted so a
+    /// reading written by an older build still parses.
+    #[serde(default)]
+    pub provenance: ReadProvenance,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -574,7 +719,7 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
     let atlas = Atlas::from_settings(&profile.atlas);
     let level_atlas = Atlas::from_settings(&profile.level_atlas);
     let identity_atlas = Atlas::from_settings(&profile.identity_atlas);
-    let readings = read_frame(
+    let mut readings = read_frame_detailed(
         &frame,
         &calibration,
         &atlas,
@@ -584,7 +729,12 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
         &profile.streets,
         &profile.identities,
     )
-    .map_err(TickError::Parse)?;
+    .map_err(|rejected| TickError::Parse(rejected.reason))?;
+    readings.provenance.stamp_engines(
+        &profile.atlas.source,
+        &profile.level_atlas.source,
+        &profile.identity_atlas.source,
+    );
 
     // A character does not lose levels, so a level below the last accepted one is a
     // misread however self-consistent it looks. This is what let a truncated number
@@ -654,15 +804,60 @@ pub(crate) fn read_frame(
     streets: &[Template],
     identities: &Identities,
 ) -> Result<Readings, String> {
-    let exp_region = calibration
-        .exp
-        .filter(Region::is_usable)
-        .ok_or("the EXP box is not set")?;
+    read_frame_detailed(
+        frame,
+        calibration,
+        atlas,
+        level_atlas,
+        identity_atlas,
+        maps,
+        streets,
+        identities,
+    )
+    .map_err(|rejected| rejected.reason)
+}
 
-    let exp_gray = ocr::crop_gray(frame, exp_region).ok_or("the EXP box is outside the window")?;
-    let (exp_text, exp_conf) = atlas.recognize_readout(&exp_gray)?;
-    let (exp, pct) = ocr::parse_exp_text(&exp_text)
-        .ok_or_else(|| format!("could not parse EXP from '{exp_text}'"))?;
+/// Read one frame, keeping the reason and the partial provenance when it is
+/// rejected. Diagnostics need the second half: a frame that produced no sample is
+/// the one worth explaining.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn read_frame_detailed(
+    frame: &Frame,
+    calibration: &Calibration,
+    atlas: &Atlas,
+    level_atlas: &Atlas,
+    identity_atlas: &Atlas,
+    maps: &[Template],
+    streets: &[Template],
+    identities: &Identities,
+) -> Result<Readings, Box<RejectedRead>> {
+    let started = std::time::Instant::now();
+    let mut provenance = ReadProvenance::default();
+
+    let Some(exp_region) = calibration.exp.filter(Region::is_usable) else {
+        return Err(Box::new(reject_exp(
+            provenance,
+            "the EXP box is not set",
+            started,
+        )));
+    };
+
+    let Some(exp_gray) = ocr::crop_gray(frame, exp_region) else {
+        return Err(Box::new(reject_exp(
+            provenance,
+            "the EXP box is outside the window",
+            started,
+        )));
+    };
+    let (exp_text, exp_conf) = match atlas.recognize_readout(&exp_gray) {
+        Ok(read) => read,
+        Err(reason) => return Err(Box::new(reject_exp(provenance, &reason, started))),
+    };
+    let Some((exp, pct)) = ocr::parse_exp_text(&exp_text) else {
+        let reason = format!("could not parse EXP from '{exp_text}'");
+        return Err(Box::new(reject_exp(provenance, &reason, started)));
+    };
+    provenance.exp = FieldProvenance::read(ReadSource::Atlas);
 
     // The level is read from its own box and never derived. A derived level is only
     // as right as the EXP table and, when it is wrong, puts a plausible-looking but
@@ -670,7 +865,12 @@ pub(crate) fn read_frame(
     // was about. An unreadable level comes back as 0 and is reported as unrecognised.
     // The level has its own atlas: the digits are drawn at a different size from the
     // EXP readout, and sharing one atlas let the two readers compete for characters.
-    let (lv, level_text, level_conf) = level_reading(frame, calibration, level_atlas)?;
+    let level = level_reading(frame, calibration, level_atlas);
+    provenance.level = match &level.reason {
+        Some(reason) => FieldProvenance::rejected(reason),
+        None => FieldProvenance::read(ReadSource::Atlas),
+    };
+    let (lv, level_text, level_conf) = (level.lv, level.text, level.confidence);
 
     // The percentage check exists to catch a bad EXP read, but EXP and its
     // percentage come from one read of one box, so they cannot disagree with each
@@ -680,7 +880,9 @@ pub(crate) fn read_frame(
     // `23.33` can read as `23.83`); a large gap invalidates both the EXP and the
     // level while map/name/job are kept.
     if lv > 0 && exp_table::required(lv).is_none() {
-        return Err(format!("level {lv} is outside the EXP table"));
+        let reason = format!("level {lv} is outside the EXP table");
+        provenance.level = FieldProvenance::rejected(&reason);
+        return Err(Box::new(RejectedRead::new(reason, provenance, started)));
     }
     let (lv, level_text, exp, pct, exp_text, verified) = match check_exp_level(exp, pct, lv) {
         LevelCheck::Agrees => (lv, level_text, exp, pct, exp_text, true),
@@ -697,6 +899,9 @@ pub(crate) fn read_frame(
                 "read_frame: level {lv} does not fit {pct:.2}% for {} EXP — reporting EXP and level as unrecognised",
                 exp
             ));
+            let reason = format!("level {lv} does not fit {pct:.2}% for {exp} EXP");
+            provenance.exp = FieldProvenance::rejected(&reason);
+            provenance.level = FieldProvenance::rejected(&reason);
             (0, String::new(), 0, 0.0, String::new(), false)
         }
     };
@@ -708,8 +913,13 @@ pub(crate) fn read_frame(
     // The minimap has three zoom states. Detection runs once and both the map and
     // street readers consume it, instead of each re-running panel detection.
     let minimap = ocr::detect_minimap(frame);
-    let (map_name, street, map_hidden) =
-        match_map_and_street(frame, calibration, maps, streets, minimap);
+    let MapRead {
+        name: map_name,
+        street,
+        hidden: map_hidden,
+        source: map_source,
+    } = match_map_and_street(frame, calibration, maps, streets, minimap);
+    provenance.map = map_provenance(map_source);
     let map = match street {
         Some(street) if map_name != "unknown" => format!("{street}\n{map_name}"),
         _ => map_name,
@@ -745,7 +955,9 @@ pub(crate) fn read_frame(
         identities.job.as_ref(),
         IdentityKind::Job,
     );
+    provenance.identity = identity_provenance(&name, &job, calibration, identity_atlas);
 
+    provenance.duration_ms = started.elapsed().as_secs_f64() * 1000.0;
     Ok(Readings {
         lv,
         exp,
@@ -761,9 +973,10 @@ pub(crate) fn read_frame(
         },
         exp_text,
         level_text,
-        name,
-        job,
+        name: name.text,
+        job: job.text,
         map_hidden,
+        provenance,
     })
 }
 
@@ -771,9 +984,9 @@ pub(crate) fn read_frame(
 /// EXP and the percentage: the derivation leans on the EXP table, and when it is
 /// wrong it reports a level that looks reasonable and is not.
 ///
-/// An unreadable level yields 0, which every caller treats as "not recognised" —
-/// the same way an unrecognised name is reported. Failing the whole frame instead
-/// would hide a perfectly good EXP reading behind a missing box.
+/// An unreadable level yields 0 with a reason, which every caller treats as "not
+/// recognised" — the same way an unrecognised name is reported. Failing the whole
+/// frame instead would hide a perfectly good EXP reading behind a missing box.
 /// Write a diagnostic to data/debug.log, but only when it differs from the last
 /// one. The level is read every tick, so logging unconditionally would bury the
 /// log under thousands of identical lines.
@@ -794,20 +1007,32 @@ fn log_once(message: &str) {
     crate::calibration::log(message);
 }
 
-fn level_reading(
-    frame: &Frame,
-    calibration: &Calibration,
-    atlas: &Atlas,
-) -> Result<(u32, String, f64), String> {
-    let unknown = Ok((0u32, String::new(), 0.0));
+/// One level read: the digits, their confidence, and why they are missing when
+/// they are.
+struct LevelRead {
+    lv: u32,
+    text: String,
+    confidence: f64,
+    /// Why the level is 0, when it is: no box, no glyphs, or a read that did not
+    /// parse. `None` when a level was read.
+    reason: Option<String>,
+}
+
+fn level_reading(frame: &Frame, calibration: &Calibration, atlas: &Atlas) -> LevelRead {
+    let unknown = |reason: &str| LevelRead {
+        lv: 0,
+        text: String::new(),
+        confidence: 0.0,
+        reason: Some(reason.to_string()),
+    };
 
     let Some(region) = calibration.level.filter(Region::is_usable) else {
         log_once("level_reading: no level box set");
-        return unknown;
+        return unknown("no level box is set");
     };
     if atlas.glyphs.is_empty() {
         log_once("level_reading: no level glyphs learned yet");
-        return unknown;
+        return unknown("no level glyphs learned yet");
     }
 
     // Read both extractions: plain luma for Ideal, the white key for the
@@ -816,8 +1041,8 @@ fn level_reading(
     // changed by the weaker extraction.
     let normal = ocr::crop_gray(frame, region);
     let keyed = ocr::crop_white_key(frame, region);
-    type LevelRead<'a> = (&'a str, Result<(String, f64), String>);
-    let mut readings: Vec<LevelRead> = Vec::new();
+    type LevelAttempt<'a> = (&'a str, Result<(String, f64), String>);
+    let mut readings: Vec<LevelAttempt> = Vec::new();
     if let Some(gray) = &normal {
         readings.push(("luma", atlas.recognize_level(gray)));
     }
@@ -847,19 +1072,78 @@ fn level_reading(
     }
 
     match best {
-        Some(best) => Ok(best),
+        Some((lv, text, confidence)) => LevelRead {
+            lv,
+            text,
+            confidence,
+            reason: None,
+        },
         None => {
             if errors.is_empty() {
                 errors.push("the box is outside the window".into());
             }
             let (w, h) = normal.as_ref().map_or((0, 0), |gray| (gray.w, gray.h));
+            let reason = errors.join("; ");
             log_once(&format!(
-                "level_reading: box {region:?} crop {w}x{h} failed: {}",
-                errors.join("; ")
+                "level_reading: box {region:?} crop {w}x{h} failed: {reason}"
             ));
-            unknown
+            unknown(&reason)
         }
     }
+}
+
+/// One identity line: the text the reader settled on, and the stage that produced
+/// it. The two lines are reported as one provenance entry, because the calibration
+/// window shows them as one readout.
+struct IdentityRead {
+    text: Option<String>,
+    source: ReadSource,
+}
+
+/// The map's provenance entry: the stage that named the map, or why nothing did.
+fn map_provenance(source: ReadSource) -> FieldProvenance {
+    match source {
+        ReadSource::Hidden => FieldProvenance::unread(
+            ReadSource::Hidden,
+            "the minimap is collapsed — there is no map name on screen",
+        ),
+        ReadSource::Unknown => FieldProvenance::unread(
+            ReadSource::Unknown,
+            "no minimap label text and no matching map name",
+        ),
+        source => FieldProvenance::read(source),
+    }
+}
+
+/// Which stage answered for the name/job readout, and why neither line read when
+/// they did not.
+fn identity_provenance(
+    name: &IdentityRead,
+    job: &IdentityRead,
+    calibration: &Calibration,
+    atlas: &Atlas,
+) -> FieldProvenance {
+    let source = match (name.source, job.source) {
+        (ReadSource::Font, _) | (_, ReadSource::Font) => ReadSource::Font,
+        (ReadSource::Fingerprint, _) | (_, ReadSource::Fingerprint) => ReadSource::Fingerprint,
+        _ => ReadSource::None,
+    };
+    if source != ReadSource::None {
+        return FieldProvenance::read(source);
+    }
+    let has_box = calibration
+        .name
+        .or(calibration.job)
+        .filter(Region::is_usable)
+        .is_some();
+    let reason = if !has_box {
+        "no name/job box is set"
+    } else if atlas.glyphs.is_empty() {
+        "no name/job letters or fingerprint to read with"
+    } else {
+        "the name and job lines did not read"
+    };
+    FieldProvenance::rejected(reason)
 }
 
 /// Read one identity line as text, falling back to its taught fingerprint.
@@ -981,8 +1265,19 @@ fn read_identity(
     atlas: &Atlas,
     template: Option<&Template>,
     kind: IdentityKind,
-) -> Option<String> {
-    let region = region.filter(Region::is_usable)?;
+) -> IdentityRead {
+    let read = |text: String, source: ReadSource| IdentityRead {
+        text: Some(text),
+        source,
+    };
+    let unread = IdentityRead {
+        text: None,
+        source: ReadSource::None,
+    };
+
+    let Some(region) = region.filter(Region::is_usable) else {
+        return unread;
+    };
 
     let mut glyph_text = String::new();
     let mut guesses = Vec::new();
@@ -1016,7 +1311,7 @@ fn read_identity(
     if total > 0 && known == total && mean <= 30.0 {
         let text = finish_identity(&glyph_text, kind);
         if !text.is_empty() {
-            return Some(text);
+            return read(text, ReadSource::Font);
         }
     }
 
@@ -1024,18 +1319,21 @@ fn read_identity(
     if let Some(text) = choose_identity_text(&glyph_text, &guesses, known_ratio, confidence, &ocr) {
         let text = finish_identity(&text, kind);
         if !text.is_empty() {
-            return Some(text);
+            return read(text, ReadSource::Font);
         }
     }
 
     if !glyph_text.is_empty() && confidence >= 0.55 && known_ratio >= 0.5 {
         let text = finish_identity(&glyph_text, kind);
         if !text.is_empty() {
-            return Some(text);
+            return read(text, ReadSource::Font);
         }
     }
 
-    template.and_then(|template| match_template(frame, region, template))
+    match template.and_then(|template| match_template(frame, region, template)) {
+        Some(text) => read(text, ReadSource::Fingerprint),
+        None => unread,
+    }
 }
 
 fn match_template(frame: &Frame, region: Region, template: &Template) -> Option<String> {
@@ -1147,38 +1445,48 @@ fn template_gray(template: &Template) -> Option<ocr::Gray> {
     }
 }
 
-fn match_map(frame: &Frame, calibration: &Calibration, templates: &[Template]) -> String {
+fn match_map(
+    frame: &Frame,
+    calibration: &Calibration,
+    templates: &[Template],
+) -> (String, ReadSource) {
     // A taught fingerprint is an exact picture of that map, so it wins. The letter
     // atlas comes from a very small label (4-6 px glyphs in the Ideal Ratio HUD) and
     // can be learned misaligned — every shape then matches at distance 0 with the
     // wrong character, which no consistency check can catch.
     if let Some(name) = match_map_fingerprint(frame, calibration, templates) {
-        return name;
+        return (name, ReadSource::Table);
     }
 
     // OCR is the better text source for the Roman-numeral siblings and for maps
     // the client table does not contain. An exact table match from OCR outranks
     // the whole-line DTW, which can read a single trailing `I` as `III`.
     let label_ocr = match_label_ocr(frame);
-    if let Some((_, Some(name), true)) = label_ocr.as_ref() {
-        log_once(&format!("map text from OCR (exact): {name:?}"));
-        return name.clone();
+    if let Some(label) = label_ocr.as_ref() {
+        if label.exact {
+            if let Some(name) = label.map.as_ref() {
+                log_once(&format!("map text from OCR (exact): {name:?}"));
+                return (name.clone(), ReadSource::Ocr);
+            }
+        }
     }
 
     // Nothing taught matched: the client's own map table has the exact name. The
     // label is Arial Bold 12, so a width filter plus a shape-sequence DTW against
     // the rendered names identifies it without segmenting the line.
     if let Some(name) = match_map_name(frame) {
-        return name;
+        return (name, ReadSource::Dtw);
     }
 
     // A map that is not in the client table still has its name on screen. OCR is
     // the better text source than the tiny map glyph atlas, which can be learned
     // misaligned and confidently return the wrong letters. `match_label_ocr`
     // snaps known names to the table and otherwise returns the literal line.
-    if let Some((_, Some(name), _)) = label_ocr {
-        log_once(&format!("map text from OCR: {name:?}"));
-        return name;
+    if let Some(label) = label_ocr {
+        if let Some(name) = label.map {
+            log_once(&format!("map text from OCR: {name:?}"));
+            return (name, label.map_source);
+        }
     }
 
     // No OCR (or no label): fall back to the learned glyph text. A near miss
@@ -1200,20 +1508,21 @@ fn match_map(frame: &Frame, calibration: &Calibration, templates: &[Template]) -
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
 
             return match best {
-                Some((label, similarity)) if similarity >= MAP_SIMILARITY => label,
-                _ => text,
+                Some((label, similarity)) if similarity >= MAP_SIMILARITY => {
+                    (label, ReadSource::Dtw)
+                }
+                _ => (text, ReadSource::Literal),
             };
         }
     }
 
-    "unknown".into()
+    ("unknown".into(), ReadSource::Unknown)
 }
 
 /// Last expanded-label result, keyed by the label's pixels and the client name
 /// table. The label only changes on a map transition, so a stationary frame
 /// skips the table/DTW/OCR work entirely.
-static MAP_CACHE: std::sync::Mutex<Option<(u64, String, Option<String>)>> =
-    std::sync::Mutex::new(None);
+static MAP_CACHE: std::sync::Mutex<Option<(u64, MapRead)>> = std::sync::Mutex::new(None);
 
 fn map_label_hash(frame: &Frame) -> Option<u64> {
     use std::hash::{Hash, Hasher};
@@ -1238,6 +1547,27 @@ fn folded_label_hash(label: &ocr::Gray) -> u64 {
     hasher.finish()
 }
 
+/// The minimap state's answer: the map name, the street line when the label has
+/// one, whether the minimap has no text at all, and which stage named the map.
+#[derive(Clone, Debug)]
+struct MapRead {
+    name: String,
+    street: Option<String>,
+    hidden: bool,
+    source: ReadSource,
+}
+
+impl MapRead {
+    fn unknown(source: ReadSource) -> Self {
+        Self {
+            name: "unknown".into(),
+            street: None,
+            hidden: false,
+            source,
+        }
+    }
+}
+
 /// Resolve the map and street for the minimap state on this frame.
 ///
 /// Expanded reads the two-line label; folded reads the single `Street :Map` bar;
@@ -1249,34 +1579,45 @@ fn match_map_and_street(
     maps: &[Template],
     streets: &[Template],
     minimap: Option<ocr::Minimap>,
-) -> (String, Option<String>, bool) {
+) -> MapRead {
     match minimap.as_ref().map(|minimap| minimap.state) {
-        Some(ocr::MinimapState::TitleBarOnly) => ("unknown".into(), None, true),
+        Some(ocr::MinimapState::TitleBarOnly) => MapRead {
+            name: "unknown".into(),
+            street: None,
+            hidden: true,
+            source: ReadSource::Hidden,
+        },
         Some(ocr::MinimapState::Folded) => {
             let Some(minimap) = minimap.as_ref() else {
-                return ("unknown".into(), None, false);
+                return MapRead::unknown(ReadSource::Unknown);
             };
             let Some(label) = ocr::folded_label(frame, minimap) else {
                 log_once("folded minimap: no label crop");
-                return ("unknown".into(), None, false);
+                return MapRead::unknown(ReadSource::Unknown);
             };
             let cache_key = folded_label_hash(&label);
             if let Ok(guard) = MAP_CACHE.lock() {
-                if let Some((cached_key, cached_map, cached_street)) = guard.as_ref() {
+                if let Some((cached_key, cached)) = guard.as_ref() {
                     if *cached_key == cache_key {
-                        return (cached_map.clone(), cached_street.clone(), false);
+                        return cached.clone();
                     }
                 }
             }
             if let Some((street, name)) = match_folded_ocr(&label) {
                 log_once(&format!("folded minimap OCR: {street:?} / {name:?}"));
+                let read = MapRead {
+                    name,
+                    street: Some(street),
+                    hidden: false,
+                    source: ReadSource::Ocr,
+                };
                 if let Ok(mut guard) = MAP_CACHE.lock() {
-                    *guard = Some((cache_key, name.clone(), Some(street.clone())));
+                    *guard = Some((cache_key, read.clone()));
                 }
-                return (name, Some(street), false);
+                return read;
             }
             let Some(dir) = settings::mscw_dir() else {
-                return ("unknown".into(), None, false);
+                return MapRead::unknown(ReadSource::Unknown);
             };
             let mut best: Option<((String, String), f64)> = None;
             for px in LABEL_SIZES {
@@ -1298,14 +1639,20 @@ fn match_map_and_street(
                     log_once(&format!(
                         "folded minimap: {street:?} / {name:?} (score {score:.3})"
                     ));
+                    let read = MapRead {
+                        name,
+                        street: Some(street),
+                        hidden: false,
+                        source: ReadSource::Dtw,
+                    };
                     if let Ok(mut guard) = MAP_CACHE.lock() {
-                        *guard = Some((cache_key, name.clone(), Some(street.clone())));
+                        *guard = Some((cache_key, read.clone()));
                     }
-                    (name, Some(street), false)
+                    read
                 }
                 None => {
                     log_once("folded minimap: label did not match the client table");
-                    ("unknown".into(), None, false)
+                    MapRead::unknown(ReadSource::Unknown)
                 }
             }
         }
@@ -1318,30 +1665,39 @@ fn match_map_and_street(
             let cache_key = cacheable.then(|| map_label_hash(frame)).flatten();
             if let Some(key) = cache_key {
                 if let Ok(guard) = MAP_CACHE.lock() {
-                    if let Some((cached_key, cached_map, cached_street)) = guard.as_ref() {
+                    if let Some((cached_key, cached)) = guard.as_ref() {
                         if *cached_key == key {
-                            return (cached_map.clone(), cached_street.clone(), false);
+                            return cached.clone();
                         }
                     }
                 }
             }
 
-            let mut map_name = match_map(frame, calibration, maps);
+            let (mut map_name, mut source) = match_map(frame, calibration, maps);
             let mut street = match_street(frame, calibration.street, streets);
             if map_name == "unknown" || street.is_none() {
-                if let Some((ocr_street, ocr_map, _)) = match_label_ocr(frame) {
-                    map_name = ocr_map.unwrap_or(map_name);
-                    street = ocr_street.or(street);
+                if let Some(label) = match_label_ocr(frame) {
+                    if let Some(name) = label.map {
+                        map_name = name;
+                        source = label.map_source;
+                    }
+                    street = label.street.or(street);
                 }
             }
+            let read = MapRead {
+                name: map_name,
+                street,
+                hidden: false,
+                source,
+            };
             if let Some(key) = cache_key {
-                if map_name != "unknown" || street.is_some() {
+                if read.name != "unknown" || read.street.is_some() {
                     if let Ok(mut guard) = MAP_CACHE.lock() {
-                        *guard = Some((key, map_name.clone(), street.clone()));
+                        *guard = Some((key, read.clone()));
                     }
                 }
             }
-            (map_name, street, false)
+            read
         }
     }
 }
@@ -1501,11 +1857,22 @@ fn clean_label_line(text: &str) -> String {
         .to_string()
 }
 
+/// One OCR read of the minimap label: the street and map name the resolver
+/// settled on, and where the map name came from.
+struct LabelRead {
+    street: Option<String>,
+    map: Option<String>,
+    map_source: ReadSource,
+    /// True when OCR read the full table name exactly, which no later stage may
+    /// override.
+    exact: bool,
+}
+
 /// OCR fallback for the expanded minimap label. The text reader supplies the
 /// street and the base map name; the client table narrows the candidates and
 /// the trailing `<N>` is chosen from the suffix pixels, because Windows OCR
 /// drops the bracketed token.
-fn match_label_ocr(frame: &Frame) -> Option<(Option<String>, Option<String>, bool)> {
+fn match_label_ocr(frame: &Frame) -> Option<LabelRead> {
     let dir = settings::mscw_dir()?;
     let dir = std::path::Path::new(&dir);
     let entries = crate::map_names::load(dir).ok()?;
@@ -1561,14 +1928,15 @@ fn match_label_ocr(frame: &Frame) -> Option<(Option<String>, Option<String>, boo
 /// Resolve one OCR label against the client table. Known names snap to the table
 /// (exact, suffix, then fuzzy); a name the table does not contain is returned as
 /// the literal on-screen text. That last case is why a map added after the
-/// client's string table can still be named.
+/// client's string table can still be named — and it is reported as the `literal`
+/// source, apart from a table match.
 fn resolve_label_text(
     dir: &std::path::Path,
     entries: &[crate::map_names::MapEntry],
     street_text: Option<&str>,
     map_text: &str,
     live: Option<&ocr::Gray>,
-) -> (Option<String>, Option<String>, bool) {
+) -> LabelRead {
     let mut street: Option<(String, f64)> = None;
     if let Some(street_text) = street_text {
         for entry in entries {
@@ -1586,7 +1954,12 @@ fn resolve_label_text(
     let ocr_map = normalize_label(map_text);
     let literal = clean_label_line(map_text);
     if ocr_map.is_empty() || literal.is_empty() {
-        return (street, None, false);
+        return LabelRead {
+            street,
+            map: None,
+            map_source: ReadSource::Unknown,
+            exact: false,
+        };
     }
 
     let mut candidates: Vec<&crate::map_names::MapEntry> = entries
@@ -1603,7 +1976,12 @@ fn resolve_label_text(
 
     if candidates.is_empty() {
         log_once(&format!("map label OCR literal: {literal:?}"));
-        return (street, Some(literal), false);
+        return LabelRead {
+            street,
+            map: Some(literal),
+            map_source: ReadSource::Literal,
+            exact: false,
+        };
     }
 
     // OCR can read the full name exactly (the roman-numeral maps are the obvious
@@ -1614,10 +1992,20 @@ fn resolve_label_text(
         .filter(|entry| normalize_label(&entry.name) == ocr_map)
         .collect();
     if exact.len() == 1 {
-        return (street, Some(exact[0].name.clone()), true);
+        return LabelRead {
+            street,
+            map: Some(exact[0].name.clone()),
+            map_source: ReadSource::Ocr,
+            exact: true,
+        };
     }
     if candidates.len() == 1 {
-        return (street, Some(candidates[0].name.clone()), false);
+        return LabelRead {
+            street,
+            map: Some(candidates[0].name.clone()),
+            map_source: ReadSource::Ocr,
+            exact: false,
+        };
     }
 
     // `<N>` instances are told apart by their suffix.
@@ -1657,7 +2045,12 @@ fn resolve_label_text(
                     log_once(&format!(
                         "map label OCR: {best_name:?} (suffix score {best_score:.2})"
                     ));
-                    return (street, Some(best_name.clone()), false);
+                    return LabelRead {
+                        street,
+                        map: Some(best_name.clone()),
+                        map_source: ReadSource::Ocr,
+                        exact: false,
+                    };
                 }
             }
         }
@@ -1678,12 +2071,22 @@ fn resolve_label_text(
                 "map label OCR fuzzy: {:?} (score {best:.2})",
                 entry.name
             ));
-            return (street, Some(entry.name.clone()), false);
+            return LabelRead {
+                street,
+                map: Some(entry.name.clone()),
+                map_source: ReadSource::Ocr,
+                exact: false,
+            };
         }
     }
 
     log_once(&format!("map label OCR literal: {literal:?}"));
-    (street, Some(literal), false)
+    LabelRead {
+        street,
+        map: Some(literal),
+        map_source: ReadSource::Literal,
+        exact: false,
+    }
 }
 
 /// OCR fallback for the folded `Street :Map` bar. The line is matched to the
@@ -1855,6 +2258,213 @@ pub fn get_profile() -> Profile {
 mod tests {
     use super::*;
 
+    fn blank_frame() -> Frame {
+        Frame {
+            width: 0,
+            height: 0,
+            rgba: Vec::new(),
+        }
+    }
+
+    fn empty_atlas() -> Atlas {
+        Atlas { glyphs: Vec::new() }
+    }
+
+    #[test]
+    fn read_sources_serialize_to_their_documented_ids() {
+        // The ids are the diagnostic format. A change here is a format change, so
+        // the set is pinned deliberately.
+        for (source, id) in [
+            (ReadSource::Atlas, "atlas"),
+            (ReadSource::Font, "font"),
+            (ReadSource::Fingerprint, "fingerprint"),
+            (ReadSource::Ocr, "ocr"),
+            (ReadSource::Table, "table"),
+            (ReadSource::Dtw, "dtw"),
+            (ReadSource::Literal, "literal"),
+            (ReadSource::Hidden, "hidden"),
+            (ReadSource::Unknown, "unknown"),
+            (ReadSource::None, "none"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(source).expect("serialize a source"),
+                serde_json::Value::String(id.into()),
+                "{source:?} must serialise as {id:?}"
+            );
+            // A support file from this build has to read back in the same build.
+            assert_eq!(
+                serde_json::from_value::<ReadSource>(serde_json::Value::String(id.into()))
+                    .expect("deserialize a source"),
+                source
+            );
+        }
+    }
+
+    #[test]
+    fn readings_provenance_defaults_when_a_reading_has_none() {
+        // A row written before provenance existed still parses, and reports "not
+        // known" rather than inventing a source.
+        let legacy = serde_json::json!({
+            "lv": 36,
+            "exp": 6818,
+            "pct": 18.90,
+            "expectedPct": 18.90,
+            "map": "Kerning City",
+            "conf": 0.98,
+            "expText": "6,818[18.90%]",
+            "levelText": "36",
+            "name": "Hero",
+            "job": "Page",
+            "mapHidden": false
+        });
+        let readings: Readings = serde_json::from_value(legacy).expect("a legacy reading");
+        assert_eq!(readings.provenance, ReadProvenance::default());
+        assert_eq!(readings.provenance.exp.source, ReadSource::Unknown);
+        assert_eq!(readings.provenance.map.source, ReadSource::Unknown);
+        assert_eq!(readings.provenance.map.reason, None);
+        assert_eq!(readings.provenance.duration_ms, 0.0);
+
+        // And the current shape round-trips through the same wire format.
+        let value = serde_json::to_value(&readings).expect("serialize a reading");
+        assert_eq!(value["provenance"]["exp"]["source"], "unknown");
+        assert_eq!(value["provenance"]["exp"]["engine"], "");
+        assert_eq!(value["provenance"]["durationMs"], 0.0);
+        // An empty reason is left out instead of serialising as null.
+        assert!(value["provenance"]["exp"].get("reason").is_none());
+    }
+
+    #[test]
+    fn provenance_engines_are_stamped_from_the_stored_atlases() {
+        let mut provenance = ReadProvenance::default();
+        provenance.stamp_engines("game", "taught", "font");
+        assert_eq!(provenance.exp.engine, "game");
+        assert_eq!(provenance.level.engine, "taught");
+        assert_eq!(provenance.identity.engine, "font");
+        // The map has no stored atlas of its own; the client table is read live.
+        assert_eq!(provenance.map.engine, "");
+    }
+
+    #[test]
+    fn map_provenance_carries_the_source_and_the_reason() {
+        let hidden = map_provenance(ReadSource::Hidden);
+        assert_eq!(hidden.source, ReadSource::Hidden);
+        assert!(hidden.reason.is_some());
+
+        let unknown = map_provenance(ReadSource::Unknown);
+        assert_eq!(unknown.source, ReadSource::Unknown);
+        assert!(unknown.reason.is_some());
+
+        // A named map is not a rejection, so it carries no reason.
+        for source in [
+            ReadSource::Ocr,
+            ReadSource::Table,
+            ReadSource::Dtw,
+            ReadSource::Literal,
+        ] {
+            let entry = map_provenance(source);
+            assert_eq!(entry.source, source);
+            assert_eq!(entry.reason, None);
+        }
+    }
+
+    #[test]
+    fn a_collapsed_minimap_reports_the_hidden_source() {
+        let minimap = ocr::Minimap {
+            state: ocr::MinimapState::TitleBarOnly,
+            bar: Region {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            badge: Region {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+        };
+        let read = match_map_and_street(
+            &blank_frame(),
+            &Calibration::default(),
+            &[],
+            &[],
+            Some(minimap),
+        );
+        assert_eq!(read.name, "unknown");
+        assert!(read.hidden);
+        assert_eq!(read.source, ReadSource::Hidden);
+    }
+
+    #[test]
+    fn an_unreadable_level_reports_its_reason() {
+        // No level box: the level is unrecognised, and the reason says why instead
+        // of leaving a bare 0 in the readout.
+        let read = level_reading(&blank_frame(), &Calibration::default(), &empty_atlas());
+        assert_eq!(read.lv, 0);
+        assert_eq!(read.reason.as_deref(), Some("no level box is set"));
+
+        // A level box with no glyphs learned is a different reason.
+        let calibration = Calibration {
+            level: Some(Region {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 20,
+            }),
+            ..Calibration::default()
+        };
+        let read = level_reading(&blank_frame(), &calibration, &empty_atlas());
+        assert_eq!(read.lv, 0);
+        assert_eq!(
+            read.reason.as_deref(),
+            Some("no level glyphs learned yet"),
+            "a box with no atlas must not blame the box"
+        );
+    }
+
+    #[test]
+    fn a_rejected_frame_still_explains_which_field_failed() {
+        let rejected = read_frame_detailed(
+            &blank_frame(),
+            &Calibration::default(),
+            &empty_atlas(),
+            &empty_atlas(),
+            &empty_atlas(),
+            &[],
+            &[],
+            &Identities::default(),
+        )
+        .expect_err("an empty calibration cannot read");
+
+        assert_eq!(rejected.reason, "the EXP box is not set");
+        assert_eq!(rejected.provenance.exp.source, ReadSource::None);
+        assert_eq!(
+            rejected.provenance.exp.reason.as_deref(),
+            Some("the EXP box is not set")
+        );
+        // The fields the read never reached stay unknown rather than claimed.
+        assert_eq!(rejected.provenance.level.source, ReadSource::Unknown);
+        assert_eq!(rejected.provenance.map.source, ReadSource::Unknown);
+        assert_eq!(rejected.provenance.identity.source, ReadSource::Unknown);
+        assert!(rejected.provenance.duration_ms >= 0.0);
+
+        // The plain reader keeps its old contract: the reason as a string.
+        assert_eq!(
+            read_frame(
+                &blank_frame(),
+                &Calibration::default(),
+                &empty_atlas(),
+                &empty_atlas(),
+                &empty_atlas(),
+                &[],
+                &[],
+                &Identities::default(),
+            ),
+            Err("the EXP box is not set".to_string())
+        );
+    }
+
     #[test]
     fn unknown_map_label_falls_back_to_the_ocr_text() {
         let entries = vec![
@@ -1871,16 +2481,18 @@ mod tests {
                 street: "Warning Street".into(),
             },
         ];
-        let (street, map, exact) = resolve_label_text(
+        let read = resolve_label_text(
             std::path::Path::new("."),
             &entries,
             Some("Warning Street"),
             "Where the Balrogs Live",
             None,
         );
-        assert_eq!(street.as_deref(), Some("Warning Street"));
-        assert_eq!(map.as_deref(), Some("Where the Balrogs Live"));
-        assert!(!exact);
+        assert_eq!(read.street.as_deref(), Some("Warning Street"));
+        assert_eq!(read.map.as_deref(), Some("Where the Balrogs Live"));
+        assert!(!read.exact);
+        // Kept as the on-screen text: no table entry matched it.
+        assert_eq!(read.map_source, ReadSource::Literal);
     }
 
     #[test]
@@ -1888,16 +2500,17 @@ mod tests {
     fn reads_live_tree_that_grew_one() {
         let frame = crate::regression::fixture_frame("1920x1080@filtered", "map-tree-1");
 
-        let (street, map, exact) = match_label_ocr(&frame).expect("map label");
-        assert_eq!(street.as_deref(), Some("Victoria Road"));
-        assert_eq!(map.as_deref(), Some("The Tree That Grew I"));
-        assert!(exact);
+        let read = match_label_ocr(&frame).expect("map label");
+        assert_eq!(read.street.as_deref(), Some("Victoria Road"));
+        assert_eq!(read.map.as_deref(), Some("The Tree That Grew I"));
+        assert!(read.exact);
+        assert_eq!(read.map_source, ReadSource::Ocr);
 
         // The whole-line DTW used to pick the `III` sibling; an exact OCR match
         // must win before it runs.
         assert_eq!(
             match_map(&frame, &Calibration::default(), &[]),
-            "The Tree That Grew I"
+            ("The Tree That Grew I".into(), ReadSource::Ocr)
         );
     }
 
@@ -1908,16 +2521,17 @@ mod tests {
             return;
         };
         let entries = crate::map_names::load(std::path::Path::new(&dir)).expect("map table");
-        let (street, map, exact) = resolve_label_text(
+        let read = resolve_label_text(
             std::path::Path::new(&dir),
             &entries,
             Some("Warning Street"),
             "Where the Balrogs Live",
             None,
         );
-        assert_eq!(street.as_deref(), Some("Warning Street"));
-        assert_eq!(map.as_deref(), Some("Where the Balrogs Live"));
-        assert!(!exact);
+        assert_eq!(read.street.as_deref(), Some("Warning Street"));
+        assert_eq!(read.map.as_deref(), Some("Where the Balrogs Live"));
+        assert!(!read.exact);
+        assert_eq!(read.map_source, ReadSource::Literal);
     }
 
     #[test]
@@ -1926,30 +2540,32 @@ mod tests {
             name: "Deep Valley I".into(),
             street: "Warning Street".into(),
         }];
-        let (street, map, exact) = resolve_label_text(
+        let read = resolve_label_text(
             std::path::Path::new("."),
             &entries,
             Some("Warning Street"),
             "Deep Vallev I",
             None,
         );
-        assert_eq!(street.as_deref(), Some("Warning Street"));
-        assert_eq!(map.as_deref(), Some("Deep Valley I"));
-        assert!(!exact);
+        assert_eq!(read.street.as_deref(), Some("Warning Street"));
+        assert_eq!(read.map.as_deref(), Some("Deep Valley I"));
+        assert!(!read.exact);
+        assert_eq!(read.map_source, ReadSource::Ocr);
     }
 
     #[test]
     fn one_line_map_label_has_no_street() {
-        let (street, map, exact) = resolve_label_text(
+        let read = resolve_label_text(
             std::path::Path::new("."),
             &[],
             None,
             "Where the Balrogs Live",
             None,
         );
-        assert!(street.is_none());
-        assert_eq!(map.as_deref(), Some("Where the Balrogs Live"));
-        assert!(!exact);
+        assert!(read.street.is_none());
+        assert_eq!(read.map.as_deref(), Some("Where the Balrogs Live"));
+        assert!(!read.exact);
+        assert_eq!(read.map_source, ReadSource::Literal);
     }
 
     #[test]
@@ -2054,9 +2670,10 @@ mod tests {
     #[ignore = "requires MSCW: Deep Valley minimap label"]
     fn reads_deep_valley_label() {
         let frame = crate::regression::fixture_frame("1920x1080@filtered", "map-deep-valley");
-        let (street, map, _) = match_label_ocr(&frame).expect("map label");
-        assert_eq!(street.as_deref(), Some("Warning Street"));
-        assert_eq!(map.as_deref(), Some("Deep Valley I"));
+        let read = match_label_ocr(&frame).expect("map label");
+        assert_eq!(read.street.as_deref(), Some("Warning Street"));
+        assert_eq!(read.map.as_deref(), Some("Deep Valley I"));
+        assert_eq!(read.map_source, ReadSource::Ocr);
     }
 
     #[test]
