@@ -72,13 +72,12 @@ Goal: support **at least two client resolutions across all three UI Size modes**
 
 ### Open items in 0.5.0
 
-- **1920×1080 Filtered (current live setting)**: the EXP now reads
-  `127,028[72.91%]` exactly after the comma fix. The per-box probe reads the
-  first level digit (`3`); the client tier still returns no level because the
-  second digit's 11×14 bright shape is merged with the tile edge. The per-box
-  probe reads job `Page` and name `Furoh ood`; the app's single merged identity
-  atlas (job 14 px + name 19 px) reads `Poge` / `Furohjood`, so merging different
-  font sizes is the next name/job root cause. The map stays `unknown`.
+- **1920×1080 Filtered (current live setting)**: the EXP reads
+  `127,028[72.91%]` exactly. The job now reads `Page` and the name `Furoh ood`
+  after seeding each line from its own crop (the 14 px job and 19 px name
+  atlases are no longer merged). The level still returns no value because the
+  second digit's 11×14 bright shape is merged with the tile edge. The name's
+  E/b/l are still distorted by the filter, and the map stays `unknown`.
 - **1920×1080 Default**: EXP `127,028[72.91%]`, level `35` and name `Euroblood`
   pass. The job reads `pogo` instead of `Page`, and the map is `unknown`: the
   170×13 map line is detected, but the client-table match scores above
@@ -122,9 +121,10 @@ Goal: support **at least two client resolutions across all three UI Size modes**
   but the second Filtered digit is still merged with the tile edge and does not
   match; the probe reads `3`, the client tier still reads no level.
 - The text gate is now 65: the Filtered job `a` (distance 62.1) matches in the
-  per-box probe and the job reads `Page`. The app merges the 14 px job and 19 px
-  name atlases into one, which then misreads both (`Poge` / `Furohjood`); the
-  merge is the next root cause, not the glyph shapes.
+  per-box probe and the job reads `Page`. The engine now seeds and reads the job
+  and name with **per-line** atlases, so the merged-atlas `Poge` / `Furohjood`
+  is gone: Filtered reads job `Page` and name `Furoh ood`. The profile identity
+  atlas is only a fallback for a line that cannot be seeded.
 - The map width window is now 14 px, but the Filtered 130×10 line against the
   118×12 table entry still fails the DTW score. The label's horizontal/vertical
   scale differs from the GDI render; that is the remaining map cause.

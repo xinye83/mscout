@@ -46,6 +46,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - The 1920×1080 Default level's `3` (a different shape from the EXP design) now
   reads through a bright-ink learning pass; the level reads `35`. The Filter
   Applied level seeds both bright digit sizes (10×11 and 11×14).
+- Job and name now use per-line Arial atlases. The Filter Applied rendering
+  seeds the job at 14 px and the name at 19 px; merging them read `Poge` /
+  `Furohjood`. Each line is now seeded and read on its own, so the job reads
+  `Page` and the name `Furoh ood`. 1366×768 and 1920×1080 Ideal are unchanged.
 - The 1920×1080 Default name now seeds from both identity boxes with
   anti-aliased Arial and learns the live letters; the name reads `Euroblood`.
   The job and the Default/Filtered map-label size remain open.

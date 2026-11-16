@@ -888,10 +888,10 @@ fn reads_follow_the_manifest_minimap_state() {
     }
 
     /// Live confirmation: capture the running client and read it with the
-    /// 1920x1080 Ideal preset. The game must be at that size and UI Size.
+    /// preset for the app's current UI Size. The game must be at that size.
     #[test]
-    #[ignore = "live: reads the running 1920x1080 Ideal client"]
-    fn reads_live_1920_ideal() {
+    #[ignore = "live: reads the running 1920x1080 client"]
+    fn reads_live_1920() {
         let selector = crate::settings::WindowSelector {
             title: "MapleStory".into(),
             process: "MapleStory.exe".into(),
@@ -899,11 +899,10 @@ fn reads_follow_the_manifest_minimap_state() {
         let window = crate::window_target::resolve_selector(&selector)
             .expect("the MapleStory window is running");
         let frame = crate::capture::client_frame(window.hwnd).expect("capture the client");
+        let mode = crate::settings::ui_mode();
         println!(
-            "live frame {}x{}; app uiMode={:?}",
-            frame.width,
-            frame.height,
-            crate::settings::ui_mode()
+            "live frame {}x{}; app uiMode={mode:?}",
+            frame.width, frame.height
         );
         assert_eq!(
             (frame.width, frame.height),
@@ -911,8 +910,8 @@ fn reads_follow_the_manifest_minimap_state() {
             "the game client is not 1920x1080"
         );
 
-        let preset = crate::preset::for_size(1920, 1080, UiMode::Ideal)
-            .expect("the 1920x1080 Ideal preset");
+        let preset = crate::preset::for_size(1920, 1080, mode)
+            .unwrap_or_else(|| panic!("no 1920x1080 preset for the live UI mode {mode:?}"));
         let mscw = mscw_dir();
 
         let exp_region = preset

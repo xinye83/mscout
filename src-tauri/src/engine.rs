@@ -667,18 +667,22 @@ pub(crate) fn read_frame(
         _ => map_name,
     };
 
-    // The caller passes the atlas from the profile it just loaded/seeded, so the
-    // read never depends on a separate active-profile cache being in sync.
+    // Job and name can draw at different Arial sizes (the Filter Applied
+    // rendering seeds the job at 14 px and the name at 19 px). Seed each line
+    // from its own crop and read it with that atlas; only fall back to the
+    // profile's shared atlas when a line cannot be seeded.
+    let name_atlas = seed_line_identity(frame, calibration.name);
+    let job_atlas = seed_line_identity(frame, calibration.job);
     let name = read_identity(
         frame,
         calibration.name,
-        identity_atlas,
+        name_atlas.as_ref().unwrap_or(identity_atlas),
         identities.name.as_ref(),
     );
     let job = read_identity(
         frame,
         calibration.job,
-        identity_atlas,
+        job_atlas.as_ref().unwrap_or(identity_atlas),
         identities.job.as_ref(),
     );
 
@@ -774,6 +778,13 @@ fn level_reading(
 /// The text path is what removes the one-time teach. It is only trusted when the
 /// line is non-empty and reasonably confident; a poor read is left to the exact
 /// fingerprint rather than displayed as a wrong name.
+fn seed_line_identity(frame: &Frame, region: Option<Region>) -> Option<Atlas> {
+    let region = region.filter(Region::is_usable)?;
+    let gray = ocr::crop_gray(frame, region)?;
+    let (stored, _) = crate::font_seed::seed_identity(&gray)?;
+    Some(Atlas::from_settings(&stored))
+}
+
 fn read_identity(
     frame: &Frame,
     region: Option<Region>,
