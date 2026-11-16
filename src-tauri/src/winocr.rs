@@ -150,8 +150,7 @@ mod tests {
             "1920x1080@ideal",
             "1920x1080@filtered",
         ] {
-            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("testdata/{pair}/minimap-folded.png"));
+            let path = crate::regression::fixture_image(pair, "minimap-folded").0;
             let Ok(image) = image::open(&path) else {
                 continue;
             };
@@ -183,8 +182,7 @@ mod tests {
     #[ignore = "diagnostic: Windows OCR on the Default/Filtered map label lines"]
     fn probe_map_label_ocr() {
         for pair in ["1920x1080", "1920x1080@filtered"] {
-            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("testdata/{pair}/minimap-expanded.png"));
+            let path = crate::regression::fixture_image(pair, "minimap-expanded").0;
             let image = image::open(&path).expect("minimap fixture").to_rgba8();
             let frame = crate::capture::Frame {
                 width: image.width(),
@@ -222,8 +220,7 @@ mod tests {
     #[test]
     #[ignore = "diagnostic: grid-search the Default job OCR crop"]
     fn probe_default_job_crops() {
-        let path =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/1920x1080/hud.png");
+        let path = crate::regression::fixture_image("1920x1080", "hud-main").0;
         let hud = image::open(&path).expect("hud fixture").to_rgba8();
         let frame = crate::capture::Frame {
             width: hud.width(),
@@ -256,8 +253,7 @@ mod tests {
     #[test]
     #[ignore = "diagnostic: Windows OCR on the Filtered name/job fixture"]
     fn reads_the_filtered_identity_fixture() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("testdata/1920x1080@filtered/hud.png");
+        let path = crate::regression::fixture_image("1920x1080@filtered", "hud-main").0;
         let hud = image::open(&path).expect("hud fixture").to_rgba8();
         let frame = crate::capture::Frame {
             width: hud.width(),

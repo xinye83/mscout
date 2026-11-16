@@ -1,4 +1,5 @@
 {
+  "version": 2,
   "clientW": 1920,
   "clientH": 1080,
   "uiMode": "filtered",
@@ -10,17 +11,21 @@
   "pct": 72.91,
   "street": "Hidden Street",
   "map": "Free Market <8>",
-  "crops": {
-    "hud": { "x": 398, "y": 1021, "w": 810, "h": 59 },
-    "settings": { "x": 685, "y": 145, "w": 550, "h": 755 }
-  },
   "settingsDisplay": {
     "resolution": "1920 x 1080",
     "uiSize": "Default Ratio (Filter Applied)"
   },
-  "minimaps": [
-    { "state": "expanded", "file": "minimap-expanded.png", "crop": { "x": 14, "y": 12, "w": 230, "h": 260 } },
-    { "state": "titlebar", "file": "minimap-titlebar.png", "crop": { "x": 14, "y": 12, "w": 230, "h": 260 } },
-    { "state": "folded", "file": "minimap-folded.png", "crop": { "x": 16, "y": 6, "w": 385, "h": 40 } }
+  "images": [
+    { "id": "hud-main", "kind": "hud", "file": "hud-main.png", "source": "client", "crop": { "x": 398, "y": 1021, "w": 810, "h": 59 } },
+    { "id": "settings-panel", "kind": "settings", "file": "settings-panel.png", "source": "client", "crop": { "x": 685, "y": 145, "w": 550, "h": 755 } },
+    { "id": "minimap-expanded", "kind": "minimap", "state": "expanded", "file": "minimap-expanded.png", "source": "client", "crop": { "x": 14, "y": 12, "w": 230, "h": 260 } },
+    { "id": "minimap-titlebar", "kind": "minimap", "state": "titlebar", "file": "minimap-titlebar.png", "source": "client", "crop": { "x": 14, "y": 12, "w": 230, "h": 260 } },
+    { "id": "minimap-folded", "kind": "minimap", "state": "folded", "file": "minimap-folded.png", "source": "client", "crop": { "x": 16, "y": 6, "w": 385, "h": 40 } },
+    { "id": "hud-low-percent", "kind": "exp", "file": "hud-low-percent.png", "source": "standalone", "crop": { "x": 0, "y": 0, "w": 810, "h": 59 }, "readCrop": { "x": 650, "y": 15, "w": 155, "h": 18 }, "expText": "2,056[1.06%]", "exp": 2056, "pct": 1.06 },
+    { "id": "exp-21865", "kind": "exp", "file": "exp-21865.png", "source": "standalone", "crop": { "x": 0, "y": 0, "w": 155, "h": 18 }, "expText": "21,865[11.22%]", "exp": 21865, "pct": 11.22 },
+    { "id": "exp-26487", "kind": "exp", "file": "exp-26487.png", "source": "standalone", "crop": { "x": 0, "y": 0, "w": 155, "h": 18 }, "expText": "26,487[13.58%]", "exp": 26487, "pct": 13.58 },
+    { "id": "exp-36818", "kind": "exp", "file": "exp-36818.png", "source": "standalone", "crop": { "x": 0, "y": 0, "w": 155, "h": 18 }, "expText": "36,818[18.90%]", "exp": 36818, "pct": 18.90 },
+    { "id": "map-tree-1", "kind": "map-label", "file": "minimap-tree-1.png", "source": "standalone", "crop": { "x": 0, "y": 0, "w": 260, "h": 290 }, "street": "Victoria Road", "map": "The Tree That Grew I" },
+    { "id": "map-deep-valley", "kind": "map-label", "file": "minimap-deep-valley.png", "source": "standalone", "crop": { "x": 0, "y": 0, "w": 330, "h": 310 }, "street": "Warning Street", "map": "Deep Valley I" }
   ]
 }

@@ -6,6 +6,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- Calibration **Save diagnostic** writes a local JSON snapshot with the probe
+  result, rejection reason, raw readout text, glyph candidates and map-line
+  crops under `data/diagnostics/`; rejected probes now show their reason in the
+  readout panel.
+
+### Changed
+- The testdata corpus is now image-indexed (`meta.json` version 2). Every PNG in
+  a `WxH@mode` directory has an entry with its kind, source, crop and ground
+  truth; `hud.png`/`settings.png` are now `hud-main.png`/`settings-panel.png`,
+  focused EXP and map-label fixtures are indexed alongside the frame images, and
+  the regression walker fails on any unindexed PNG. Targeted tests resolve
+  fixtures by manifest id.
+
+### Fixed
+- The map-table DTW fallback now resolves Roman-numeral siblings by counting the
+  trailing `I` bars before comparing widths. This fixes `The Tree That Grew I`
+  being read as `... III` when exact OCR is unavailable or fuzzy.
+- A folded minimap is no longer hidden when a larger scenery-colored blob passes
+  the weak titlebar fallback first. Folded and expanded bodies are checked across
+  every candidate badge before the titlebar-only fallback is accepted.
+
 ## [0.6.0] - 2026-11-16
 
 ### Added

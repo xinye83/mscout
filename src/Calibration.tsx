@@ -425,6 +425,7 @@ export default function Calibration() {
   const [probe, setProbe] = useState<Readings | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [probeError, setProbeError] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [activeProfile, setActiveProfile] = useState<ProfileSummary | null>(null);
   const [uiModes, setUiModes] = useState<UiModeOption[]>([]);
@@ -443,8 +444,12 @@ export default function Calibration() {
   const probeNow = useCallback(async (serial: number) => {
     if (!serial) return;
     const readings = await invoke<Readings>("parse_probe", { serial }).catch(
-      () => null,
+      (cause) => {
+        setProbeError(String(cause));
+        return null;
+      },
     );
+    if (readings) setProbeError(null);
     setProbe(readings);
   }, []);
 
@@ -598,6 +603,20 @@ export default function Calibration() {
     },
     [persist, preview, refreshProfiles, regions],
   );
+
+  const saveDiagnostic = useCallback(async () => {
+    if (!preview) return;
+    setError(null);
+    setMessage(null);
+    try {
+      const path = await invoke<string>("save_diagnostic", {
+        serial: preview.serial,
+      });
+      setMessage(`Diagnostic saved: ${path}`);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }, [preview, setError, setMessage]);
 
   const freeze = useCallback(async () => {
     setError(null);
@@ -1275,6 +1294,14 @@ export default function Calibration() {
             Freeze frame
           </button>
           <button
+            className="ghost"
+            disabled={!preview}
+            title="Save a local JSON diagnostic with raw reads, glyph candidates and map crops"
+            onClick={() => void saveDiagnostic()}
+          >
+            Save diagnostic
+          </button>
+          <button
             className={`ghost ${drawer === "profiles" ? "on" : ""}`}
             onClick={() => setDrawer(drawer === "profiles" ? null : "profiles")}
           >
@@ -1432,6 +1459,9 @@ export default function Calibration() {
                     <p className="readout-read muted small">
                       Read: {readValue(key) ?? "—"}
                     </p>
+                    {probeError && (
+                      <p className="warn small">Rejected: {probeError}</p>
+                    )}
                     {key === "exp" && (
                       <>
                         <p className="muted small">{expNote}</p>

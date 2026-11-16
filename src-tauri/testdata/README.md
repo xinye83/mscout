@@ -1,8 +1,9 @@
 # Test fixtures — labelled client-frame corpus (D28)
 
 This directory holds the **tracked regression-test corpus** for MScout's capture
-readers: lossless crops taken from real, saved Classic World client frames, each
-paired with a `meta.json` ground-truth manifest.
+readers: lossless crops taken from real, saved Classic World client frames. Every
+`WxH@mode` directory is self-contained: one `meta.json` indexes every PNG in the
+directory with its crop and ground truth. There are no loose focused fixtures.
 
 Scope is deliberately small and curated — the narrow "test data only" exception
 to the shipping boundary described in
@@ -25,205 +26,203 @@ profiles.
 
 ## Directory layout
 
-One directory per saved frame, named by the client size and UI Size:
-`<clientW>x<clientH><UiMode::suffix()>` — the same convention as the preset
-files, with the suffix `""` for Default, `@ideal` for Ideal and `@filtered` for
-Filtered, so Default takes the **bare** name. A pair directory contains:
+One directory per `WxH@mode`, named `<clientW>x<clientH><UiMode::suffix()>` — the
+same convention as the preset files, with the suffix `""` for Default, `@ideal`
+for Ideal and `@filtered` for Filtered, so Default takes the **bare** name. A
+pair directory contains:
 
-- `meta.json` — the ground-truth manifest for the pair (schema below).
-- `hud.png` — the bottom status-bar strip.
-- `minimap.png` — one minimap-state capture, described by `minimapState` and
-  `crops.minimap`; **or** one `minimap-<state>.png` per state, each listed in
-  the manifest's `minimaps` array with its own `file` and `crop`.
-- `settings.png` — the Graphics settings panel, evidence only (see below).
+- `meta.json` — the manifest that indexes every image and carries the shared
+  frame ground truth (schema below).
+- `hud-main.png` — the bottom status-bar strip used to compose frame cases.
+- `settings-panel.png` — the Graphics settings panel, evidence only.
+- `minimap-<state>.png` — one image per minimap state; every image is listed as
+  a `minimap` entry with its own `state` and crop.
+- Optional focused images, all indexed as `exp` or `map-label` entries:
+  `hud-low-percent.png`, `exp-<value>.png`, `minimap-tree-1.png`,
+  `minimap-deep-valley.png`.
 
-A pair with several minimap states keeps one manifest, one `hud.png` and one
-`settings.png`; the shared fields are recorded once and only the minimap image
-and its crop vary by state. The manifest — not this README — is the record of
-which pairs exist and where each crop sits, so adding a pair is a directory
-plus a manifest, never an edit here.
+No PNG may sit in a pair directory without an image entry. The manifest — not
+this README — is the record of which pairs exist, which files they contain and
+where each crop sits. Adding a pair or a focused fixture is a manifest edit plus
+the PNG.
 
 The PNGs are **lossless crops of real client frames**, written with no
-resampling, no palette reduction and no lossy encoding. For a pair with several
-states, the shared `settings.png` is a crop of the state captured with the panel
-open; it is pair-level evidence, not a claim about each state's pixels. Only
-tests read this directory; the running application never opens it. Client-tier
-tests require a shipped preset for the pair; every 1366×768 and 1920×1080 UI
-Size now has one. 1920×1200 has no fixture or preset.
+resampling, no palette reduction and no lossy encoding. The shared
+`settings-panel.png` is pair-level evidence; it is not a claim about each state's
+pixels. Only tests read this directory; the running application never opens it.
+Client-tier tests require a shipped preset for the pair; every 1366×768 and
+1920×1080 UI Size now has one. 1920×1200 has no fixture or preset.
 
-Additional focused fixtures sit alongside the manifest corpus:
-`minimap-deep-valley.png` and `minimap-tree-1.png` pin map-label regressions,
-`hud-low-percent.png` pins the low-percent EXP punctuation, and the `exp-*.png`
-crops pin the Filtered EXP readout and frame-check cases. They are consumed by
-targeted client-tier tests, not by the manifest walk.
-
-## Multi-state pairs
-
-All minimap variants for one `WxH@mode` must come from the **same in-game map**.
-They may be captured at different times, so the HUD values can drift. Only one
-`hud.png` is stored, and the manifest's HUD fields describe that image; they are
-not re-read per minimap state. The shared `street`/`map` must match the labels
-drawn by the expanded and folded variants (the title-bar state draws no label,
-so it cannot corroborate them).
-
-## `meta.json` schema
+## `meta.json` schema (version 2)
 
 The values below are illustrative; each pair's manifest is authoritative.
+`version` must be `2`.
 
 ```jsonc
 {
+  "version": 2,
   "clientW": 1920,          // client width in physical pixels
   "clientH": 1080,          // client height in physical pixels
-  "uiMode": "ideal",        // "default" | "ideal" | "filtered" (see ../../docs/PRESETS.md)
-  "minimapState": "expanded", // "expanded" | "titlebar" | "folded" | "hidden"
+  "uiMode": "filtered",     // "default" | "ideal" | "filtered"
 
   "name": "Euroblood",      // HUD character name, exact case
   "job": "Page",            // HUD job, exact case
   "level": 35,              // HUD level, integer
 
-  "expText": "102,718[58.96%]", // EXP readout exactly as drawn, label excluded
-  "exp": 102718,            // numeric EXP parsed from expText
-  "pct": 58.96,             // numeric percent parsed from expText
+  "expText": "127,028[72.91%]", // HUD EXP readout exactly as drawn, label excluded
+  "exp": 127028,            // numeric EXP parsed from expText
+  "pct": 72.91,             // numeric percent parsed from expText
 
-  "street": "Victoria Road",                     // minimap street line
-  "map": "Thicket Around the Beach III",         // minimap map-name line
-
-  "crops": {
-    "minimap":  { "x":   19, "y":   19, "w": 226, "h": 183 },
-    "hud":      { "x":  560, "y": 1036, "w": 574, "h":  44 },
-    "settings": { "x":  763, "y":  283, "w": 395, "h": 515 }
-  },
+  "street": "Hidden Street",                    // minimap street line
+  "map": "Free Market <8>",                     // minimap map-name line
 
   "settingsDisplay": {
     "resolution": "1920 x 1080", // Resolution control, as displayed (spaces around 'x')
-    "uiSize": "Ideal Ratio"      // UI Size control, as displayed
-  }
-}
-```
-
-A pair with several minimap states keeps the shared fields once and replaces
-`minimapState` + `crops.minimap` with a `minimaps` array:
-
-```jsonc
-{
-  // ...the same shared fields (clientW, clientH, uiMode, name, job, level,
-  // expText, exp, pct, street, map, settingsDisplay)...
-  "crops": {
-    "hud":      { "x": 250, "y": 720, "w": 690, "h":  48 },
-    "settings": { "x": 350, "y":  50, "w": 430, "h": 620 }
+    "uiSize": "Default Ratio (Filter Applied)" // UI Size control, as displayed
   },
-  "minimaps": [
-    { "state": "expanded", "file": "minimap-expanded.png", "crop": { "x": 8, "y": 8, "w": 160, "h": 200 } },
-    { "state": "titlebar", "file": "minimap-titlebar.png", "crop": { "x": 8, "y": 8, "w": 160, "h": 200 } },
-    { "state": "folded",   "file": "minimap-folded.png",   "crop": { "x": 8, "y": 6, "w": 260, "h":  36 } }
+
+  "images": [
+    {
+      "id": "hud-main",       // stable lookup id used by tests
+      "kind": "hud",          // hud | settings | minimap | exp | map-label
+      "file": "hud-main.png",
+      "source": "client",     // client | standalone
+      "crop": { "x": 398, "y": 1021, "w": 810, "h": 59 }
+    },
+    {
+      "id": "minimap-expanded",
+      "kind": "minimap",
+      "state": "expanded",    // expanded | titlebar | folded | hidden
+      "file": "minimap-expanded.png",
+      "source": "client",
+      "crop": { "x": 14, "y": 12, "w": 230, "h": 260 }
+    },
+    {
+      "id": "hud-low-percent",
+      "kind": "exp",
+      "file": "hud-low-percent.png",
+      "source": "standalone",
+      "crop": { "x": 0, "y": 0, "w": 810, "h": 59 },
+      "readCrop": { "x": 650, "y": 15, "w": 155, "h": 18 },
+      "expText": "2,056[1.06%]",
+      "exp": 2056,
+      "pct": 1.06
+    },
+    {
+      "id": "map-tree-1",
+      "kind": "map-label",
+      "file": "minimap-tree-1.png",
+      "source": "standalone",
+      "crop": { "x": 0, "y": 0, "w": 260, "h": 290 },
+      "street": "Victoria Road",
+      "map": "The Tree That Grew I"
+    }
   ]
 }
 ```
 
-A manifest has either `minimapState` + `crops.minimap` (one case) or
-`minimaps` (several), never both.
-
 Field notes:
 
-- **`crops` are in client coordinates** — the same space as
-  `../presets/*.json` boxes and the ROIs stored in a profile (physical client
-  pixels, origin = top-left of the game client). They are *not* screen
-  coordinates and *not* window coordinates; see
-  [`../../docs/DECISIONS.md`](../../docs/DECISIONS.md) D13 for why the client
-  origin is the only valid frame of reference.
-- Each `crops` entry is the rect the corresponding PNG was cut from, so
-  `crops.<id>.w/h` equal that PNG's pixel dimensions by construction. In a
-  multi-state manifest, `minimaps[].crop` is the rect for that state's `file`,
-  while `crops.hud` and `crops.settings` are shared by all states. Every crop
-  covers the whole point of interest plus a buffer; a frame, badge or glyph cut
-  off at an edge means the fixture is wrong, not that the crop is tight.
-- `minimap` is the widget plus a 4 px margin; `hud` runs from the status-bar left
-  border to one pixel before the CASH SHOP widget. Both are intentionally a
-  little larger than the field being read, so a reader cannot depend on a
-  pixel-perfect origin.
-- `settings` is the whole Graphics panel grown by a small margin. The panel is
-  drawn at the UI Size's own scale, so its bounds are per pair rather than a
-  global constant; the manifest records the rect actually used.
-- `expText` is the readout **without** the `EXP` label (no period is drawn
-  between the label and the value). The thousands separator is stored as a
-  comma and the percentage's decimal as a period; the two glyphs are
-  pixel-identical at this size, so the convention is the only way to record it.
+- Every PNG in the directory must have exactly one image entry; ids and files
+  must be unique. The hermetic test fails on an unindexed PNG, a missing file, a
+  duplicate id/file, or a crop whose size disagrees with the PNG.
+- **`source: "client"`** images are pasted into a composed `clientW` x `clientH`
+  frame at their `crop`. The crop is in client coordinates — the same space as
+  `../presets/*.json` boxes and profile ROIs (physical client pixels, origin =
+  top-left of the game client). It is *not* screen or window coordinates; see
+  [`../../docs/DECISIONS.md`](../../docs/DECISIONS.md) D13.
+- **`source: "standalone"`** images are complete fixtures in their own right.
+  Their `crop` must be the whole image (`0,0,w,h`); `readCrop`, when present and
+  used by an `exp` entry, names the region the reader consumes. `expText`,
+  `exp` and `pct` are required for an `exp` entry. `map-label` entries require
+  `street` and `map`.
+- A pair has exactly one `hud` image, exactly one `settings` image, and at least
+  one `minimap` image. The shared top-level HUD/EXP/street/map fields describe
+  the `hud-main.png` frame; minimap images use their own `state`.
+- `settingsDisplay.resolution`/`uiSize` must agree with `clientW`/`clientH` and
+  `uiMode`. The settings image must not be a flat colour.
 - `exp`/`pct` must satisfy `exp / pct` ≈ the character's required EXP for the
   level, to within the rounding of the displayed 2-dp percentage.
+
+## Multi-state pairs
+
+All minimap variants for one `WxH@mode` must come from the **same in-game map**.
+They may be captured at different times, so the HUD values can drift. Only one
+`hud-main.png` is stored, and the shared HUD fields describe that image; they are
+not re-read per minimap state. The shared `street`/`map` must match the labels
+drawn by the expanded and folded variants (the title-bar state draws no label,
+so it cannot corroborate them).
 
 ## Capture protocol
 
 1. **One directory per `WxH@mode`.** Name it `<clientW>x<clientH><suffix>`, using
    the same suffix as the preset files: bare for Default, `@ideal` for Ideal,
    `@filtered` for Filtered. Never mix two resolutions or two UI Sizes in one
-   directory.
-   A pair with several minimap states shares one `meta.json`, `hud.png` and
-   `settings.png`, and adds one `<state>` minimap PNG per state, listed in the
-   manifest's `minimaps` array.
+   directory. Add one `minimap` image entry per state to the same manifest.
 2. **Keep the Graphics settings panel open for the pair's evidence capture.**
    At least one capture per pair has `OPTIONS > Graphics` open over the centre
    of the client. It is harmless to detection (it overlaps neither the minimap
    nor the bottom HUD strip) and it makes the frame self-describing:
-   `settings.png` shows the Resolution and UI Size the client is actually using,
-   so `clientW`, `clientH` and `uiMode` in `meta.json` can be audited from the
-   frame itself. The other minimap-state captures may have it closed; the pair
-   root keeps the one `settings.png`.
+   `settings-panel.png` shows the Resolution and UI Size the client is actually
+   using. The other state captures may have it closed.
 3. **Capture the client area only.** The frame must start at the client origin
    (no window chrome, no desktop). Verify `clientW`/`clientH` against the
    panel's Resolution label.
-4. **Crop in client coordinates** using the rects in `crops`, with no resampling
-   and no scaling, and save as PNG (lossless). A crop that has been resized,
-   re-encoded as JPEG, or colour-reduced is not a valid fixture — the readers
-   threshold and match on exact pixels. Include the **entire** point of interest
-   plus a buffer of a few pixels beyond its frame, badge or text; never crop
-   flush to the content. A clipped border, badge or glyph is a fixture bug, not
-   a tight crop.
+4. **Crop in client coordinates** using the rects in the image entries, with no
+   resampling and no scaling, and save as PNG (lossless). A crop that has been
+   resized, re-encoded as JPEG, or colour-reduced is not a valid fixture — the
+   readers threshold and match on exact pixels. Include the **entire** point of
+   interest plus a buffer of a few pixels beyond its frame, badge or text; never
+   crop flush to the content. A clipped border, badge or glyph is a fixture bug,
+   not a tight crop.
 5. **Write `meta.json` by reading the frame, not from memory.** Level, name,
    job, EXP readout, street and map must come from the pixels in the saved
    frame. Re-capturing a frame for an existing directory means re-reading every
    field: EXP and level change as the character plays, and a stale manifest is
    worse than no manifest.
-6. **Keep the source frame out of the fixture directory.** Fixtures are the
+6. **Index every PNG.** A focused EXP crop is an `exp` entry with its ground
+   truth; a standalone map label is a `map-label` entry. Unindexed files fail
+   the hermetic tier.
+7. **Keep the source frame out of the fixture directory.** Fixtures are the
    small labelled crops; a full source frame is kept outside this directory and
    outside version control.
-7. **Keep one map per pair.** Capture the expanded, title-bar and folded states
+8. **Keep one map per pair.** Capture the expanded, title-bar and folded states
    on the same in-game map. The HUD may change between them; keep one HUD crop
    and record its values. The shared `street`/`map` must agree with both the
    expanded and folded labels.
 
-## `settings.png` is evidence only
+## `settings-panel.png` is evidence only
 
-`settings.png` exists so the manifest's resolution and UI Size claims are
+`settings-panel.png` exists so the manifest's resolution and UI Size claims are
 auditable, and so a reviewer can see the client's own labels next to the HUD
 geometry. **Nothing in the application reads it** — detection does not locate,
 parse or depend on the settings panel, and no reader, preset, profile or
 calibration path touches this file. Treat it as documentation with pixels: if
-detection behaviour ever changes, `settings.png` must not be part of the reason.
-
-When one pair has several state cases, the panel is captured once (in the state
-with the panel open) and shared at the pair root; it is not re-cropped per
-state. Each case's `crops.settings` still names that shared PNG's rect.
+detection behaviour ever changes, `settings-panel.png` must not be part of the
+reason.
 
 The same applies to `settingsDisplay` in `meta.json`: it is a recorded
 observation, not an input.
 
 ## Using the fixtures in tests
 
-Fixtures are consumed **only by tests**. Load a PNG, run the reader under test
-against it, and assert against `meta.json`. Tests must not write into this
-directory, and must not require the original BMP: the crops plus the manifest
-are the complete input. A full source frame, if kept, is only a convenience for
-re-cropping or for measuring a new rect, not a test dependency.
+Fixtures are consumed **only by tests**. Resolve an image by its manifest id
+(`crate::regression::fixture_image(pair, id)` or `fixture_frame`), not by a
+hardcoded filename. Load the PNG, run the reader under test against it, and
+assert against the manifest. Tests must not write into this directory, and must
+not require the original BMP: the crops plus the manifest are the complete
+input. A full source frame, if kept, is only a convenience for re-cropping or
+for measuring a new rect, not a test dependency.
 
 ## Regression suite
 
 [`src/regression.rs`](../src/regression.rs) is the committed gate: it walks every
-immediate subdirectory below this file, parses its `meta.json`, rebuilds the
-frame from the minimap PNG + `hud.png` and runs the real readers over it. New
-fixture directories are picked up automatically, so neither the suite nor this
-README needs editing when the corpus grows. It never skips a case — a directory
-with no manifest, a missing image, a crop outside the client, or a manifest that
-disagrees with its pixels fails the run with the case name in the message.
+immediate subdirectory below this file, parses its `meta.json`, validates every
+indexed image, composes a frame from `hud-main.png` + one minimap image and runs
+the real readers over it. New pair directories are picked up automatically. It
+never skips a case — a directory with no manifest, a missing image, a crop
+outside the client, an unindexed PNG, or a manifest that disagrees with its
+pixels fails the run with the case name in the message.
 
 Both tiers run from this directory's parent (`src-tauri`).
 
@@ -233,9 +232,10 @@ Both tiers run from this directory's parent (`src-tauri`).
 cargo test --lib
 ```
 
-Runs `fixture_corpus_is_complete` (corpus present; required files; every crop in
-bounds and matching its PNG's size; `settingsDisplay.resolution`/`uiSize`
-agreeing with `clientW`/`clientH`/`uiMode`; `settings.png` not blank),
+Runs `fixture_corpus_is_complete` (every image indexed; required files; every
+crop in bounds and matching its PNG's size; `standalone` crops equal the whole
+image; `settingsDisplay.resolution`/`uiSize` agreeing with
+`clientW`/`clientH`/`uiMode`; `settings-panel.png` not blank),
 `minimap_state_matches_ground_truth` (`ocr::detect_minimap` names the captured
 state) and `settings_panel_is_evidence_only` (the settings crop is never composed
 into the frame, so no reader can see it). These need the repository only — the
@@ -248,19 +248,20 @@ cargo test --lib regression -- --ignored --nocapture
 ```
 
 Runs `reads_every_fixture_from_empty_atlases` and
-`reads_follow_the_manifest_minimap_state`: for each case the preset for its
+`reads_follow_the_manifest_minimap_state`: for each frame case the preset for its
 `WxH@mode` must exist, the EXP/level/name atlases are seeded from the frame
 itself (no saved profile is read or written), and `engine::read_frame` must
 reproduce `expText`/`exp`/`pct`/`level`/`name`/`job`/`street`+`map` exactly. The
 readings are printed, so a failure shows what the reader actually saw. The
-minimap state from `meta.json` decides the expected map form: `expanded` and
+minimap state from the image entry decides the expected map form: `expanded` and
 `folded` give `"<street>\n<map>"`, `titlebar` reports the map as hidden, `hidden`
-has no widget to read.
+has no widget to read. Focused `exp`/`map-label` entries are covered by their
+targeted tests; the manifest still validates them in the hermetic tier.
 
-Set `MSCOUT_CASE=<pair>` to restrict either tier to one fixture (or all state
-cases of a pair), and `MSCOUT_STATE=<expanded|titlebar|folded>` to restrict it
-further to one minimap state. That is how a pair with a preset is checked while
-other pairs are still uncalibrated; for example
+Set `MSCOUT_CASE=<pair>` to restrict either tier to one pair (or
+`MSCOUT_CASE=<pair>/<state>` for one state), and `MSCOUT_STATE=<expanded|titlebar|folded>`
+to restrict further. That is how a pair with a preset is checked while other
+pairs are still uncalibrated; for example
 `MSCOUT_CASE=1366x768@ideal cargo test --lib regression -- --ignored`.
 
 Add `--offline` to either command to prove the build needs no network. The MSCW

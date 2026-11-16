@@ -1,11 +1,12 @@
 //! Fixture-driven regression gate for the capture readers.
 //!
-//! Every immediate subdirectory of `src-tauri/testdata/` that carries a
-//! `meta.json` is one saved client frame: lossless PNG crops of the regions a
-//! reader consumes, plus the ground truth that reader must reproduce. The suite
-//! replays the real code — `ocr::detect_minimap` and, on the client-dependent
-//! tier, `engine::read_frame` over atlases seeded from the frame itself — and
-//! asserts the manifest for every case.
+//! Every immediate subdirectory of `src-tauri/testdata/` is one `WxH@mode`
+//! corpus. Its `meta.json` indexes every PNG with a crop and ground truth; frame
+//! cases are composed from the shared HUD plus one minimap image, while focused
+//! EXP/map-label images are validated but read directly by targeted tests. The
+//! suite replays the real code — `ocr::detect_minimap` and, on the
+//! client-dependent tier, `engine::read_frame` over atlases seeded from the
+//! frame itself — and asserts the manifest for every case.
 //!
 //! Two tiers:
 //!
@@ -36,13 +37,13 @@ pub(crate) fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata")
 }
 
-/// A crop rectangle in client coordinates, as written in `meta.json`.
+/// A crop rectangle in the coordinate space named by its image entry.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-struct Rect {
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
+pub(crate) struct Rect {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) w: i32,
+    pub(crate) h: i32,
 }
 
 impl Rect {
@@ -56,48 +57,70 @@ impl Rect {
             && self.x as i64 + self.w as i64 <= client_w as i64
             && self.y as i64 + self.h as i64 <= client_h as i64
     }
-}
 
-/// The shared crops. A single-case manifest also carries `minimap`; a
-/// multi-state manifest lists each minimap under `minimaps` instead.
-#[derive(Clone, Copy, Debug, Deserialize)]
-struct Crops {
-    #[serde(default)]
-    minimap: Option<Rect>,
-    hud: Rect,
-    settings: Rect,
-}
-
-/// One minimap-state variant inside a pair's single `meta.json`.
-#[derive(Clone, Debug, Deserialize)]
-struct MinimapCase {
-    state: String,
-    file: String,
-    crop: Rect,
+    pub(crate) fn region(self) -> Region {
+        Region {
+            x: self.x,
+            y: self.y,
+            w: self.w,
+            h: self.h,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SettingsDisplay {
+pub(crate) struct SettingsDisplay {
     /// Resolution control as the client draws it, `"1920 x 1080"`.
     resolution: String,
     /// UI Size control as the client draws it, `"Ideal Ratio"`.
     ui_size: String,
 }
 
-/// `meta.json`: the ground truth for one captured frame. Required fields are left
-/// without defaults on purpose — a manifest that has lost a field must fail to
-/// parse, not read as a default.
+/// One PNG in a pair's manifest. `client` images are pasted into a composed
+/// client frame; `standalone` images are complete fixtures in their own right.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Meta {
-    client_w: u32,
-    client_h: u32,
-    ui_mode: String,
+pub(crate) struct FixtureImage {
+    pub(crate) id: String,
+    pub(crate) kind: String,
+    pub(crate) file: String,
+    pub(crate) source: String,
+    pub(crate) crop: Rect,
     #[serde(default)]
-    minimap_state: Option<String>,
+    pub(crate) state: Option<String>,
+    /// For a standalone readout crop (for example a full HUD whose EXP field is
+    /// read), the rect the reader consumes. Defaults to the whole image.
     #[serde(default)]
-    minimaps: Vec<MinimapCase>,
+    pub(crate) read_crop: Option<Rect>,
+    #[serde(default)]
+    pub(crate) exp_text: Option<String>,
+    #[serde(default)]
+    pub(crate) exp: Option<i64>,
+    #[serde(default)]
+    pub(crate) pct: Option<f64>,
+    #[serde(default)]
+    pub(crate) street: Option<String>,
+    #[serde(default)]
+    pub(crate) map: Option<String>,
+}
+
+impl FixtureImage {
+    pub(crate) fn read_region(&self) -> Region {
+        self.read_crop.unwrap_or(self.crop).region()
+    }
+}
+
+/// `meta.json`: the pair's ground truth and the index of every PNG. Required
+/// fields are left without defaults on purpose — a manifest that has lost a
+/// field must fail to parse, not read as a default.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Meta {
+    pub(crate) version: u32,
+    pub(crate) client_w: u32,
+    pub(crate) client_h: u32,
+    pub(crate) ui_mode: String,
     name: String,
     job: String,
     level: u32,
@@ -106,26 +129,26 @@ struct Meta {
     pct: f64,
     street: String,
     map: String,
-    crops: Crops,
     settings_display: SettingsDisplay,
+    pub(crate) images: Vec<FixtureImage>,
 }
 
 /// One fixture case: the manifest plus where its images live.
 struct Case {
-    /// Display key: the pair name for a single case, `pair/state` for a multi-state
-    /// pair.
+    /// Display key: `pair/state`.
     key: String,
     /// The pair directory's name (`1920x1080`, `1366x768`), checked against the
     /// preset key.
     pair_key: String,
     /// The directory holding this case's manifest and crops.
     dir: PathBuf,
-    /// The pair directory, where a shared `settings.png` lives (may equal `dir`).
-    pair_dir: PathBuf,
     /// The minimap variant this case exercises.
     minimap_state: String,
     minimap_file: String,
     minimap_crop: Rect,
+    hud_file: String,
+    hud_crop: Rect,
+    settings_crop: Rect,
     meta: Meta,
 }
 
@@ -153,18 +176,6 @@ impl Case {
         self.dir.join("meta.json")
     }
 
-    /// The evidence-only panel. A pair with one case keeps it in the case
-    /// directory; a pair with several minimap-state cases keeps one copy at the
-    /// pair root, because the panel is pair-level evidence, not frame state.
-    fn settings_path(&self) -> PathBuf {
-        let local = self.dir.join("settings.png");
-        if local.is_file() {
-            local
-        } else {
-            self.pair_dir.join("settings.png")
-        }
-    }
-
     fn client_size(&self) -> (u32, u32) {
         (self.meta.client_w, self.meta.client_h)
     }
@@ -172,6 +183,63 @@ impl Case {
     /// The in-file message prefix: every panic names its case.
     fn label(&self, what: &str) -> String {
         format!("{}: {what}", self.key)
+    }
+}
+
+/// Read a pair's manifest without going through the frame walker. Targeted
+/// tests use this to resolve an image by id, so renaming a PNG is a manifest
+/// edit rather than a source edit.
+pub(crate) fn fixture_manifest(pair: &str) -> Meta {
+    let path = fixtures_dir().join(pair).join("meta.json");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+    let meta: Meta = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("{} is not a manifest: {error}", path.display()));
+    assert_eq!(
+        meta.version,
+        2,
+        "{}: expected manifest version 2",
+        path.display()
+    );
+    meta
+}
+
+/// Resolve one image id inside a pair and return its path and manifest entry.
+pub(crate) fn fixture_image(pair: &str, id: &str) -> (PathBuf, FixtureImage) {
+    let meta = fixture_manifest(pair);
+    let image = meta
+        .images
+        .iter()
+        .find(|image| image.id == id)
+        .unwrap_or_else(|| {
+            panic!(
+                "{pair}: no image {id:?} in meta.json; ids are {}",
+                meta.images
+                    .iter()
+                    .map(|image| image.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+        .clone();
+    let path = fixtures_dir().join(pair).join(&image.file);
+    assert!(
+        path.is_file(),
+        "{pair}: image {id:?} points at missing {}",
+        path.display()
+    );
+    (path, image)
+}
+
+/// Decode a manifest image as a standalone frame. This is for focused fixtures
+/// such as EXP/map-label crops; frame cases are composed by `compose_frame`.
+pub(crate) fn fixture_frame(pair: &str, id: &str) -> Frame {
+    let (path, _) = fixture_image(pair, id);
+    let (width, height, rgba) = load_png_rgba(&path);
+    Frame {
+        width,
+        height,
+        rgba,
     }
 }
 
@@ -239,43 +307,56 @@ fn load_cases_in(root: &Path) -> Vec<Case> {
             )
         });
 
-        if meta.minimaps.is_empty() {
-            let state = meta.minimap_state.clone().unwrap_or_else(|| {
-                panic!("{pair_key}: meta.json needs minimapState or a minimaps list")
-            });
-            let crop = meta.crops.minimap.unwrap_or_else(|| {
-                panic!("{pair_key}: a single-case meta.json needs crops.minimap")
-            });
-            cases.push(Case {
-                key: pair_key.clone(),
-                pair_key: pair_key.clone(),
-                dir: dir.clone(),
-                pair_dir: dir.clone(),
-                minimap_state: state,
-                minimap_file: "minimap.png".into(),
-                minimap_crop: crop,
-                meta,
-            });
-            continue;
+        assert_eq!(
+            meta.version, 2,
+            "{pair_key}: manifest version must be 2 (image-indexed corpus)"
+        );
+        let mut hud: Option<FixtureImage> = None;
+        let mut settings: Option<FixtureImage> = None;
+        let mut minimaps: Vec<FixtureImage> = Vec::new();
+        for image in &meta.images {
+            match image.kind.as_str() {
+                "hud" => {
+                    assert!(hud.is_none(), "{pair_key}: more than one hud image");
+                    hud = Some(image.clone());
+                }
+                "settings" => {
+                    assert!(
+                        settings.is_none(),
+                        "{pair_key}: more than one settings image"
+                    );
+                    settings = Some(image.clone());
+                }
+                "minimap" => minimaps.push(image.clone()),
+                "exp" | "map-label" => {}
+                other => panic!(
+                    "{pair_key}: image {:?} has unknown kind {other:?}",
+                    image.id
+                ),
+            }
         }
+        let hud = hud.unwrap_or_else(|| panic!("{pair_key}: meta.json needs a hud image"));
+        let settings =
+            settings.unwrap_or_else(|| panic!("{pair_key}: meta.json needs a settings image"));
+        assert!(
+            !minimaps.is_empty(),
+            "{pair_key}: meta.json needs at least one minimap image"
+        );
 
-        assert!(
-            meta.minimap_state.is_none(),
-            "{pair_key}: use either minimapState or minimaps, not both"
-        );
-        assert!(
-            meta.crops.minimap.is_none(),
-            "{pair_key}: use either crops.minimap or minimaps, not both"
-        );
-        for variant in &meta.minimaps {
+        for variant in minimaps {
+            let state = variant.state.clone().unwrap_or_else(|| {
+                panic!("{pair_key}: minimap image {:?} needs a state", variant.id)
+            });
             cases.push(Case {
-                key: format!("{pair_key}/{}", variant.state),
+                key: format!("{pair_key}/{state}"),
                 pair_key: pair_key.clone(),
                 dir: dir.clone(),
-                pair_dir: dir.clone(),
-                minimap_state: variant.state.clone(),
-                minimap_file: variant.file.clone(),
+                minimap_state: state,
+                minimap_file: variant.file,
                 minimap_crop: variant.crop,
+                hud_file: hud.file.clone(),
+                hud_crop: hud.crop,
+                settings_crop: settings.crop,
                 meta: meta.clone(),
             });
         }
@@ -331,7 +412,7 @@ fn paste(frame: &mut Frame, case: &Case, file: &str, rect: Rect) {
 fn crop_name(file: &str) -> &'static str {
     if file.starts_with("minimap") {
         "minimap"
-    } else if file == "hud.png" {
+    } else if file.starts_with("hud") {
         "hud"
     } else {
         "settings"
@@ -341,8 +422,8 @@ fn crop_name(file: &str) -> &'static str {
 /// Build the frame a capture would have produced: `clientW` x `clientH`, black,
 /// with the minimap and HUD crops pasted at the rects they were cut from.
 ///
-/// `settings.png` is deliberately not pasted: it is evidence for the manifest,
-/// never input to a reader.
+/// The settings panel is deliberately not pasted: it is evidence for the
+/// manifest, never input to a reader.
 fn compose_frame(case: &Case) -> Frame {
     let (width, height) = case.client_size();
     assert!(
@@ -361,7 +442,7 @@ fn compose_frame(case: &Case) -> Frame {
         rgba,
     };
 
-    for (name, rect) in [("minimap", case.minimap_crop), ("hud", case.meta.crops.hud)] {
+    for (name, rect) in [("minimap", case.minimap_crop), ("hud", case.hud_crop)] {
         assert!(
             rect.fits(width, height),
             "{}",
@@ -373,7 +454,7 @@ fn compose_frame(case: &Case) -> Frame {
     }
 
     paste(&mut frame, case, &case.minimap_file, case.minimap_crop);
-    paste(&mut frame, case, "hud.png", case.meta.crops.hud);
+    paste(&mut frame, case, &case.hud_file, case.hud_crop);
     frame
 }
 
@@ -396,121 +477,255 @@ fn expected_state(state: &str) -> Option<MinimapState> {
 // ---------------------------------------------------------------------------
 
 /// The corpus itself: present, complete, self-consistent and in bounds. This is
-/// the test that fails when a fixture is half-added or a manifest drifts.
+/// the test that fails when a fixture is half-added, a manifest drifts, or a PNG
+/// is left out of the index.
 #[test]
 fn fixture_corpus_is_complete() {
     let cases = load_cases();
     assert!(!cases.is_empty(), "expected at least one fixture case");
 
+    let mut checked = BTreeSet::new();
     for case in &cases {
-        let meta = &case.meta;
-        let (client_w, client_h) = case.client_size();
-        let mode = case.mode();
-
-        // The pair directory name is the preset/profile key, so a misnamed
-        // fixture would silently test the wrong geometry. A nested case adds only
-        // a state subdirectory below it.
-        let expected_key = format!("{client_w}x{client_h}{}", mode.suffix());
-        assert_eq!(
-            case.pair_key,
-            expected_key,
-            "fixture directory {:?} must be named like its preset ({expected_key})",
-            case.dir.display()
-        );
-
-        // Every file the suite consumes, including the evidence-only panel.
-        for file in [case.minimap_file.as_str(), "hud.png"] {
-            let path = case.path(file);
-            assert!(
-                path.is_file(),
-                "{}",
-                case.label(&format!("{file} is missing at {}", path.display()))
-            );
+        if checked.insert(case.pair_key.clone()) {
+            validate_manifest(case);
         }
-        let manifest = case.manifest_path();
-        assert!(
-            manifest.is_file(),
-            "{}",
-            case.label(&format!("manifest is missing at {}", manifest.display()))
+        println!(
+            "{}: {}x{} {}",
+            case.key,
+            case.meta.client_w,
+            case.meta.client_h,
+            case.mode().id()
         );
-        let settings_path = case.settings_path();
-        assert!(
-            settings_path.is_file(),
-            "{}",
-            case.label(&format!(
-                "settings.png is missing at {}",
-                settings_path.display()
-            ))
-        );
-
-        // Crop rects, and the PNGs that must match them pixel for pixel.
-        for (name, file, rect) in [
-            ("minimap", case.minimap_file.as_str(), case.minimap_crop),
-            ("hud", "hud.png", meta.crops.hud),
-            ("settings", "settings.png", meta.crops.settings),
-        ] {
-            assert!(
-                rect.fits(client_w, client_h),
-                "{}",
-                case.label(&format!(
-                    "crops.{name} is {},{} {}x{} — outside the {client_w}x{client_h} client",
-                    rect.x, rect.y, rect.w, rect.h
-                ))
-            );
-
-            let path = if name == "settings" {
-                case.settings_path()
-            } else {
-                case.path(file)
-            };
-            let (w, h, _) = load_png_rgba(&path);
-            assert_eq!(
-                (w, h),
-                (rect.w as u32, rect.h as u32),
-                "{}",
-                case.label(&format!(
-                    "{file} is {w}x{h} but crops.{name} says {}x{}",
-                    rect.w, rect.h
-                ))
-            );
-        }
-
-        // The frame's own settings panel has to agree with the manifest, or the
-        // manifest's uiMode (and therefore the preset the read uses) is wrong.
-        assert_eq!(
-            meta.settings_display.resolution,
-            format!("{client_w} x {client_h}"),
-            "{}",
-            case.label("settingsDisplay.resolution disagrees with clientW/clientH")
-        );
-        assert_eq!(
-            meta.settings_display.ui_size,
-            mode.label(),
-            "{}",
-            case.label(&format!(
-                "settingsDisplay.uiSize should name uiMode {:?}",
-                meta.ui_mode
-            ))
-        );
-
-        // A blank settings.png would "agree" with anything, so require it to
-        // actually carry an image.
-        let (_, _, settings) = load_png_rgba(&case.settings_path());
-        let colours: BTreeSet<[u8; 3]> = settings
-            .chunks_exact(4)
-            .map(|pixel| [pixel[0], pixel[1], pixel[2]])
-            .collect();
-        assert!(
-            colours.len() > 1,
-            "{}",
-            case.label(&format!(
-                "settings.png is a single flat colour ({:?}) — it cannot be evidence",
-                colours.iter().next()
-            ))
-        );
-
-        println!("{}: {client_w}x{client_h} {}", case.key, mode.id());
     }
+}
+
+/// Validate one pair's manifest, every indexed PNG, and every PNG on disk.
+fn validate_manifest(case: &Case) {
+    let meta = &case.meta;
+    let (client_w, client_h) = case.client_size();
+    let mode = case.mode();
+    let manifest = case.manifest_path();
+    assert!(
+        manifest.is_file(),
+        "{}",
+        case.label(&format!("manifest is missing at {}", manifest.display()))
+    );
+
+    // The pair directory name is the preset/profile key, so a misnamed fixture
+    // would silently test the wrong geometry.
+    let expected_key = format!("{client_w}x{client_h}{}", mode.suffix());
+    assert_eq!(
+        case.pair_key,
+        expected_key,
+        "fixture directory {:?} must be named like its preset ({expected_key})",
+        case.dir.display()
+    );
+
+    let mut ids = BTreeSet::new();
+    let mut files = BTreeSet::new();
+    let mut kinds = std::collections::BTreeMap::new();
+    for image in &meta.images {
+        assert!(!image.id.is_empty(), "{}: image id is empty", case.key);
+        assert!(!image.file.is_empty(), "{}: image file is empty", case.key);
+        assert!(
+            ids.insert(image.id.clone()),
+            "{}: duplicate image id {:?}",
+            case.key,
+            image.id
+        );
+        assert!(
+            files.insert(image.file.clone()),
+            "{}: duplicate image file {:?}",
+            case.key,
+            image.file
+        );
+        *kinds.entry(image.kind.clone()).or_insert(0usize) += 1;
+
+        let path = case.path(&image.file);
+        assert!(
+            path.is_file(),
+            "{}",
+            case.label(&format!("{} is missing at {}", image.file, path.display()))
+        );
+        let (w, h, rgba) = load_png_rgba(&path);
+        assert_eq!(
+            (w, h),
+            (image.crop.w as u32, image.crop.h as u32),
+            "{}",
+            case.label(&format!(
+                "{} (id {:?}) is {w}x{h} but its crop says {}x{}",
+                image.file, image.id, image.crop.w, image.crop.h
+            ))
+        );
+
+        match image.source.as_str() {
+            "client" => assert!(
+                image.crop.fits(client_w, client_h),
+                "{}",
+                case.label(&format!(
+                    "{} crop {},{} {}x{} is outside the {client_w}x{client_h} client",
+                    image.file, image.crop.x, image.crop.y, image.crop.w, image.crop.h
+                ))
+            ),
+            "standalone" => assert!(
+                image.crop.x == 0
+                    && image.crop.y == 0
+                    && image.crop.w == w as i32
+                    && image.crop.h == h as i32,
+                "{}",
+                case.label(&format!(
+                    "{} is standalone so its crop must be the whole image (0,0 {w}x{h})",
+                    image.file
+                ))
+            ),
+            other => panic!(
+                "{}: image {:?} has unknown source {other:?}",
+                case.key, image.id
+            ),
+        }
+
+        match image.kind.as_str() {
+            "hud" | "settings" => assert!(
+                image.source == "client",
+                "{}",
+                case.label(&format!("{} must be a client crop", image.file))
+            ),
+            "minimap" => {
+                assert!(
+                    image.source == "client",
+                    "{}",
+                    case.label(&format!("{} must be a client crop", image.file))
+                );
+                let state = image
+                    .state
+                    .as_deref()
+                    .unwrap_or_else(|| panic!("{}: minimap {:?} has no state", case.key, image.id));
+                expected_state(state);
+            }
+            "exp" => {
+                assert!(
+                    image.source == "standalone",
+                    "{}",
+                    case.label(&format!("{} is a standalone readout", image.file))
+                );
+                let text = image.exp_text.as_deref().unwrap_or_else(|| {
+                    panic!("{}: exp image {:?} has no expText", case.key, image.id)
+                });
+                let exp = image
+                    .exp
+                    .unwrap_or_else(|| panic!("{}: exp image {:?} has no exp", case.key, image.id));
+                let pct = image
+                    .pct
+                    .unwrap_or_else(|| panic!("{}: exp image {:?} has no pct", case.key, image.id));
+                let parsed = ocr::parse_exp_text(text)
+                    .unwrap_or_else(|| panic!("{}: expText {text:?} is not a readout", case.key));
+                assert_eq!(parsed, (exp, pct), "{}: expText disagrees", case.key);
+                let read = image.read_crop.unwrap_or(image.crop);
+                assert!(
+                    read.fits(w, h),
+                    "{}",
+                    case.label(&format!(
+                        "{} readCrop {},{} {}x{} is outside the {w}x{h} image",
+                        image.file, read.x, read.y, read.w, read.h
+                    ))
+                );
+            }
+            "map-label" => {
+                assert!(
+                    image.source == "standalone",
+                    "{}",
+                    case.label(&format!("{} is a standalone map label", image.file))
+                );
+                assert!(
+                    image.street.is_some() && image.map.is_some(),
+                    "{}: map-label {:?} needs street and map",
+                    case.key,
+                    image.id
+                );
+            }
+            other => panic!(
+                "{}: image {:?} has unknown kind {other:?}",
+                case.key, image.id
+            ),
+        }
+
+        if image.kind == "settings" {
+            let colours: BTreeSet<[u8; 3]> = rgba
+                .chunks_exact(4)
+                .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+                .collect();
+            assert!(
+                colours.len() > 1,
+                "{}",
+                case.label(&format!(
+                    "{} is a single flat colour ({:?}) — it cannot be evidence",
+                    image.file,
+                    colours.iter().next()
+                ))
+            );
+        }
+    }
+
+    assert_eq!(
+        kinds.get("hud").copied().unwrap_or(0),
+        1,
+        "{}: manifest needs exactly one hud image",
+        case.key
+    );
+    assert_eq!(
+        kinds.get("settings").copied().unwrap_or(0),
+        1,
+        "{}: manifest needs exactly one settings image",
+        case.key
+    );
+    assert!(
+        kinds.get("minimap").copied().unwrap_or(0) >= 1,
+        "{}: manifest needs at least one minimap image",
+        case.key
+    );
+
+    // No PNG may sit in the directory without an index entry: that is the
+    // focused-fixture leak this schema exists to prevent.
+    let mut on_disk = BTreeSet::new();
+    for entry in std::fs::read_dir(&case.dir)
+        .unwrap_or_else(|error| panic!("cannot list {}: {error}", case.dir.display()))
+    {
+        let path = entry
+            .unwrap_or_else(|error| panic!("cannot list {}: {error}", case.dir.display()))
+            .path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("png") {
+            on_disk.insert(
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(file) = on_disk.difference(&files).next() {
+        panic!(
+            "{}: {file} is not indexed in meta.json — every PNG needs an image entry",
+            case.key
+        );
+    }
+
+    // The frame's own settings panel has to agree with the manifest, or the
+    // manifest's uiMode (and therefore the preset the read uses) is wrong.
+    assert_eq!(
+        meta.settings_display.resolution,
+        format!("{client_w} x {client_h}"),
+        "{}",
+        case.label("settingsDisplay.resolution disagrees with clientW/clientH")
+    );
+    assert_eq!(
+        meta.settings_display.ui_size,
+        mode.label(),
+        "{}",
+        case.label(&format!(
+            "settingsDisplay.uiSize should name uiMode {:?}",
+            meta.ui_mode
+        ))
+    );
 }
 
 /// The minimap state detector must name the state each frame was captured in.
@@ -542,11 +757,11 @@ fn minimap_state_matches_ground_truth() {
 fn settings_panel_is_evidence_only() {
     for case in load_cases() {
         let frame = compose_frame(&case);
-        let rect = case.meta.crops.settings;
+        let rect = case.settings_crop;
         assert!(
             rect.fits(frame.width, frame.height),
             "{}",
-            case.label("crops.settings is outside the client")
+            case.label("the settings crop is outside the client")
         );
 
         for y in rect.y as u32..(rect.y as u32 + rect.h as u32) {
@@ -651,7 +866,7 @@ fn a_fixture_directory_without_a_manifest_panics() {
     let root = TempRoot::new("no-manifest");
     let case = root.0.join("1920x1080@ideal");
     std::fs::create_dir_all(&case).expect("create the fixture directory");
-    std::fs::write(case.join("hud.png"), b"not really a png").expect("write a stray image");
+    std::fs::write(case.join("hud-main.png"), b"not really a png").expect("write a stray image");
     load_cases_in(&root.0);
 }
 

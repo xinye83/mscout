@@ -814,8 +814,7 @@ mod tests {
                 .join("\n")
         };
         for pair in ["1920x1080", "1920x1080@filtered"] {
-            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("testdata/{pair}/minimap-folded.png"));
+            let path = crate::regression::fixture_image(pair, "minimap-folded").0;
             let image = image::open(&path).expect("folded fixture").to_rgba8();
             let frame = crate::capture::Frame {
                 width: image.width(),
@@ -891,8 +890,7 @@ mod tests {
             .expect("MSCW dir");
         let dir = std::path::Path::new(&dir);
         for pair in ["1920x1080", "1920x1080@filtered"] {
-            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("testdata/{pair}/minimap-expanded.png"));
+            let path = crate::regression::fixture_image(pair, "minimap-expanded").0;
             let image = image::open(&path).expect("minimap fixture").to_rgba8();
             let frame = crate::capture::Frame {
                 width: image.width(),
@@ -1106,15 +1104,12 @@ mod tests {
             ("filtered", "name", 112, 33, 110, 20),
         ];
         for (pair, label, x, y, w, h) in cases {
-            let file = format!(
-                "testdata/{}/hud.png",
-                if pair == "default" {
-                    "1920x1080"
-                } else {
-                    "1920x1080@filtered"
-                }
-            );
-            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(file);
+            let pair_key = if pair == "default" {
+                "1920x1080"
+            } else {
+                "1920x1080@filtered"
+            };
+            let path = crate::regression::fixture_image(pair_key, "hud-main").0;
             let hud = image::open(&path).expect("hud fixture").to_rgba8();
             let frame = crate::capture::Frame {
                 width: hud.width(),

@@ -1346,10 +1346,115 @@ fn match_map_and_street(
     }
 }
 
+/// Split a map name's trailing Roman-numeral instance (`The Tree That Grew I`).
+/// Only a small, known set is treated as a suffix; ordinary words are untouched.
+fn roman_suffix(name: &str) -> Option<(&str, &str)> {
+    let (base, suffix) = name.rsplit_once(' ')?;
+    matches!(
+        suffix,
+        "I" | "II" | "III" | "IV" | "V" | "VI" | "VII" | "VIII" | "IX" | "X"
+    )
+    .then_some((base, suffix))
+}
+
+/// Count the vertical bars in the last word of a label line. `I`, `II` and `III`
+/// produce one, two and three runs; this is independent of the line's width.
+fn trailing_bar_count(gray: &ocr::Gray) -> Option<usize> {
+    if gray.w == 0 || gray.h == 0 {
+        return None;
+    }
+    let ink: Vec<bool> = (0..gray.w)
+        .map(|x| (0..gray.h).any(|y| gray.px[y * gray.w + x] > 180))
+        .collect();
+    let mut end = gray.w;
+    while end > 0 && !ink[end - 1] {
+        end -= 1;
+    }
+    if end == 0 {
+        return None;
+    }
+    let mut start = None;
+    let mut gap = 0usize;
+    for x in (0..end).rev() {
+        if ink[x] {
+            if gap >= 2 {
+                start = Some(x + 1);
+                break;
+            }
+            gap = 0;
+        } else {
+            gap += 1;
+        }
+    }
+    let start = start?;
+    let mut bars = 0usize;
+    let mut inside = false;
+    for &column in &ink[start..end] {
+        if column && !inside {
+            bars += 1;
+            inside = true;
+        } else if !column {
+            inside = false;
+        }
+    }
+    (bars > 0).then_some(bars)
+}
+
+/// The whole-line DTW can prefer a longer Roman-numeral sibling because the
+/// labels are otherwise nearly identical. Re-rank only within that sibling set
+/// by the trailing numeral's bar count, then by rendered width. This is the
+/// fallback path; exact OCR still wins before it runs.
+fn resolve_roman_sibling(
+    name: &str,
+    live: &ocr::Gray,
+    index: &crate::font_seed::LabelIndex,
+) -> String {
+    let Some((base, _)) = roman_suffix(name) else {
+        return name.to_string();
+    };
+    let siblings: Vec<(&str, &ocr::Gray)> = index
+        .map_names
+        .iter()
+        .filter_map(|(candidate, rendered)| {
+            let (candidate_base, _) = roman_suffix(candidate)?;
+            (candidate_base == base).then_some((candidate.as_str(), rendered))
+        })
+        .collect();
+    if siblings.len() < 2 {
+        return name.to_string();
+    }
+    if let Some(bars) = trailing_bar_count(live) {
+        let bar_matches: Vec<&str> = siblings
+            .iter()
+            .filter_map(|(candidate, _)| {
+                let (_, suffix) = roman_suffix(candidate)?;
+                (suffix.chars().all(|ch| ch == 'I') && suffix.len() == bars).then_some(*candidate)
+            })
+            .collect();
+        if let [only] = bar_matches.as_slice() {
+            return (*only).to_string();
+        }
+    }
+    let mut scored: Vec<(f64, &str)> = siblings
+        .iter()
+        .map(|(candidate, rendered)| ((rendered.w as f64 - live.w as f64).abs(), *candidate))
+        .collect();
+    scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let Some((best_delta, best_name)) = scored.first().copied() else {
+        return name.to_string();
+    };
+    let runner = scored.get(1).map(|(delta, _)| *delta).unwrap_or(f64::MAX);
+    if runner - best_delta >= 1.5 {
+        best_name.to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 fn match_map_name(frame: &Frame) -> Option<String> {
     let dir = settings::mscw_dir()?;
     let line = ocr::map_label_lines(frame)?.last()?.clone();
-    let mut best: Option<(String, f64)> = None;
+    let mut best: Option<(String, f64, u32)> = None;
     for px in LABEL_SIZES {
         let Some(index) = crate::font_seed::label_index(std::path::Path::new(&dir), px) else {
             continue;
@@ -1358,12 +1463,17 @@ fn match_map_name(frame: &Frame) -> Option<String> {
         if let Some((name, score)) =
             crate::font_seed::match_label(&line, &index.map_names, 14, max_score)
         {
-            if best.as_ref().map_or(true, |(_, current)| score < *current) {
-                best = Some((name, score));
+            if best
+                .as_ref()
+                .map_or(true, |(_, current, _)| score < *current)
+            {
+                best = Some((name, score, px));
             }
         }
     }
-    let (name, score) = best?;
+    let (name, score, px) = best?;
+    let index = crate::font_seed::label_index(std::path::Path::new(&dir), px)?;
+    let name = resolve_roman_sibling(&name, &line, &index);
     log_once(&format!(
         "map name from the client's map table: {name:?} (score {score:.2})"
     ));
@@ -1776,14 +1886,7 @@ mod tests {
     #[test]
     #[ignore = "requires MSCW: live Tree That Grew I minimap label"]
     fn reads_live_tree_that_grew_one() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("testdata/1920x1080@filtered/minimap-tree-1.png");
-        let image = image::open(&path).expect("minimap fixture").to_rgba8();
-        let frame = Frame {
-            width: image.width(),
-            height: image.height(),
-            rgba: image.into_raw(),
-        };
+        let frame = crate::regression::fixture_frame("1920x1080@filtered", "map-tree-1");
 
         let (street, map, exact) = match_label_ocr(&frame).expect("map label");
         assert_eq!(street.as_deref(), Some("Victoria Road"));
@@ -1857,6 +1960,75 @@ mod tests {
     }
 
     #[test]
+    fn roman_suffix_is_reranked_by_rendered_width() {
+        fn gray(width: usize) -> crate::ocr::Gray {
+            crate::ocr::Gray {
+                w: width,
+                h: 10,
+                px: vec![0; width * 10],
+            }
+        }
+        let index = crate::font_seed::LabelIndex {
+            map_names: vec![
+                ("The Tree That Grew I".into(), gray(165)),
+                ("The Tree That Grew II".into(), gray(169)),
+                ("The Tree That Grew III".into(), gray(173)),
+            ],
+            streets: Vec::new(),
+            folded_lines: Vec::new(),
+        };
+        assert_eq!(
+            resolve_roman_sibling("The Tree That Grew III", &gray(166), &index),
+            "The Tree That Grew I"
+        );
+        assert_eq!(
+            resolve_roman_sibling("The Tree That Grew I", &gray(173), &index),
+            "The Tree That Grew III"
+        );
+        assert_eq!(
+            resolve_roman_sibling("The Tree That Grew III", &gray(170), &index),
+            "The Tree That Grew II"
+        );
+    }
+
+    #[test]
+    fn roman_trailing_bars_are_counted_as_runs() {
+        fn line(bars: &[usize]) -> crate::ocr::Gray {
+            let width = 24;
+            let height = 10;
+            let mut px = vec![0u8; width * height];
+            for x in 0..10 {
+                for y in 0..height {
+                    px[y * width + x] = 255;
+                }
+            }
+            for &x in bars {
+                for y in 0..height {
+                    px[y * width + x] = 255;
+                }
+            }
+            crate::ocr::Gray {
+                w: width,
+                h: height,
+                px,
+            }
+        }
+        assert_eq!(trailing_bar_count(&line(&[13])), Some(1));
+        assert_eq!(trailing_bar_count(&line(&[13, 15])), Some(2));
+        assert_eq!(trailing_bar_count(&line(&[13, 15, 17])), Some(3));
+    }
+
+    #[test]
+    #[ignore = "requires MSCW: Tree That Grew Roman-numeral DTW fallback"]
+    fn reads_tree_roman_from_table_dtw() {
+        let frame = crate::regression::fixture_frame("1920x1080@filtered", "map-tree-1");
+        assert_eq!(
+            match_map_name(&frame).as_deref(),
+            Some("The Tree That Grew I")
+        );
+    }
+
+    #[test]
     fn exp_level_disagreement_is_detected_and_small_pct_errors_are_repaired() {
         assert!(matches!(
             check_exp_level(36_262, 18.61, 36),
@@ -1881,14 +2053,7 @@ mod tests {
     #[test]
     #[ignore = "requires MSCW: Deep Valley minimap label"]
     fn reads_deep_valley_label() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("testdata/1920x1080@filtered/minimap-deep-valley.png");
-        let image = image::open(&path).expect("minimap fixture").to_rgba8();
-        let frame = Frame {
-            width: image.width(),
-            height: image.height(),
-            rgba: image.into_raw(),
-        };
+        let frame = crate::regression::fixture_frame("1920x1080@filtered", "map-deep-valley");
         let (street, map, _) = match_label_ocr(&frame).expect("map label");
         assert_eq!(street.as_deref(), Some("Warning Street"));
         assert_eq!(map.as_deref(), Some("Deep Valley I"));

@@ -1,4 +1,5 @@
 {
+  "version": 2,
   "clientW": 1920,
   "clientH": 1080,
   "uiMode": "ideal",
@@ -10,17 +11,15 @@
   "pct": 70.63,
   "street": "Victoria Road",
   "map": "East Rocky Mountain III",
-  "crops": {
-    "hud": { "x": 560, "y": 1036, "w": 574, "h": 44 },
-    "settings": { "x": 650, "y": 255, "w": 405, "h": 525 }
-  },
   "settingsDisplay": {
     "resolution": "1920 x 1080",
     "uiSize": "Ideal Ratio"
   },
-  "minimaps": [
-    { "state": "expanded", "file": "minimap-expanded.png", "crop": { "x": 18, "y": 12, "w": 200, "h": 210 } },
-    { "state": "titlebar", "file": "minimap-titlebar.png", "crop": { "x": 18, "y": 12, "w": 200, "h": 210 } },
-    { "state": "folded", "file": "minimap-folded.png", "crop": { "x": 12, "y": 4, "w": 320, "h": 40 } }
+  "images": [
+    { "id": "hud-main", "kind": "hud", "file": "hud-main.png", "source": "client", "crop": { "x": 560, "y": 1036, "w": 574, "h": 44 } },
+    { "id": "settings-panel", "kind": "settings", "file": "settings-panel.png", "source": "client", "crop": { "x": 650, "y": 255, "w": 405, "h": 525 } },
+    { "id": "minimap-expanded", "kind": "minimap", "state": "expanded", "file": "minimap-expanded.png", "source": "client", "crop": { "x": 18, "y": 12, "w": 200, "h": 210 } },
+    { "id": "minimap-titlebar", "kind": "minimap", "state": "titlebar", "file": "minimap-titlebar.png", "source": "client", "crop": { "x": 18, "y": 12, "w": 200, "h": 210 } },
+    { "id": "minimap-folded", "kind": "minimap", "state": "folded", "file": "minimap-folded.png", "source": "client", "crop": { "x": 12, "y": 4, "w": 320, "h": 40 } }
   ]
 }

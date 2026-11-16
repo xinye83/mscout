@@ -2031,7 +2031,11 @@ pub fn detect_minimap(frame: &Frame) -> Option<Minimap> {
     let panel_shape = |w: i32, h: i32| (80..=900).contains(&w) && (12..=300).contains(&h);
 
     // The same orange range occurs in scenery, so try each badge-shaped blob and
-    // keep the first that actually sits inside a minimap body.
+    // keep the first that actually sits inside a minimap body. A weak
+    // titlebar-only fallback is deferred until every badge has had a chance to
+    // match a real folded or expanded body; otherwise a scenery blob near the
+    // bottom-right can hide the actual folded bar at the top-left.
+    let mut titlebar_fallback_match = None;
     for badge in &badges {
         let cx = badge.x + badge.w / 2;
         let cy = badge.y + badge.h / 2;
@@ -2140,13 +2144,14 @@ pub fn detect_minimap(frame: &Frame) -> Option<Minimap> {
         }
 
         // Default title-bar-only: the title bar is white, not #99BBCC, and there is
-        // no name band. The MINI MAP text plus the dark map body identify it.
-        if let Some(minimap) = titlebar_fallback(frame, *badge) {
-            return Some(minimap);
+        // no name band. The MINI MAP text plus the dark map body identify it. Keep
+        // it as a fallback until the remaining badges have been checked.
+        if titlebar_fallback_match.is_none() {
+            titlebar_fallback_match = titlebar_fallback(frame, *badge);
         }
     }
 
-    None
+    titlebar_fallback_match
 }
 
 fn folded_minimap(bar: Region, badge: Region) -> Minimap {
@@ -2822,6 +2827,47 @@ mod tests {
             bright_segments(&keyed, 127).len(),
             2,
             "the two digits survive; the tile does not"
+        );
+    }
+
+    #[test]
+    fn folded_bar_wins_over_a_scenery_titlebar_fallback() {
+        // A real folded bar at the top-left and a slightly larger scenery badge
+        // at the bottom-right. The scenery badge passes the weak titlebar
+        // fallback (the frame background is dark), so the scan must not return it
+        // before checking the real folded body.
+        let mut frame = Frame {
+            width: 600,
+            height: 600,
+            rgba: vec![0; 600 * 600 * 4],
+        };
+        for pixel in frame.rgba.chunks_exact_mut(4) {
+            pixel[3] = 255;
+        }
+        let paint =
+            |frame: &mut Frame, x0: usize, y0: usize, x1: usize, y1: usize, rgb: [u8; 3]| {
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let index = (y * 600 + x) * 4;
+                        frame.rgba[index..index + 4]
+                            .copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                    }
+                }
+            };
+
+        // Folded body and its WORLD badge.
+        paint(&mut frame, 20, 20, 220, 40, [221, 221, 221]);
+        paint(&mut frame, 170, 25, 204, 35, [230, 170, 40]);
+        // Larger orange blob in the scenery; the dark frame around it satisfies
+        // the titlebar fallback's ink/body checks.
+        paint(&mut frame, 400, 400, 436, 412, [230, 170, 40]);
+
+        let minimap = detect_minimap(&frame).expect("folded minimap");
+        assert_eq!(minimap.state, MinimapState::Folded);
+        assert_eq!(
+            (minimap.badge.x, minimap.badge.y),
+            (170, 25),
+            "the real folded badge must win"
         );
     }
 }

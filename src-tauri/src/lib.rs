@@ -562,6 +562,7 @@ pub fn run() {
             window_target::clear_target,
             window_target::open_target_window,
             calibration::capture_preview,
+            calibration::save_diagnostic,
             calibration::get_calibration,
             calibration::calibration_for,
             calibration::set_calibration,

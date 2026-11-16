@@ -96,7 +96,9 @@ Attach the game window, then:
 4. Name and job seed from Windows Arial once their boxes exist. Use **Correct
    manually** only for a correction or a display the automatic path cannot read.
 5. **Test read** the frozen frame; it must match what is on screen before you
-   rely on it.
+   rely on it. If a field is rejected, the readout shows the reason. **Save
+   diagnostic** writes a local JSON snapshot (readings, glyph candidates and map
+   crops, no full screenshot) under `data/diagnostics/` for bug reports.
 
 Moving the game window is harmless: boxes are relative to the client area, and
 minimap detection follows the panel. Calibration is stored per client size and

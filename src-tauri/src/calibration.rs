@@ -479,6 +479,83 @@ pub fn parse_probe(serial: u64) -> Result<Readings, String> {
     )
 }
 
+/// Write a local, support-friendly snapshot of the current calibration read:
+/// raw readout text, glyph candidates, map label crops and the frame's
+/// dimensions. This is the "why did it not read?" artefact; it contains no full
+/// screenshot and is written only under `data/diagnostics/`.
+#[tauri::command]
+pub fn save_diagnostic(serial: u64) -> Result<String, String> {
+    let frame = cached_frame(serial)?;
+    use_frame_profile(&frame)?;
+    let calibration = settings::load_calibration();
+    let exp_atlas = settings::load_atlas();
+    let level_atlas = settings::load_level_atlas();
+    let identity_atlas = settings::load_identity_atlas();
+    let started = std::time::Instant::now();
+    let readings = if calibration.is_ready() {
+        engine::read_frame(
+            &frame,
+            &calibration,
+            &Atlas::from_settings(&exp_atlas),
+            &Atlas::from_settings(&level_atlas),
+            &Atlas::from_settings(&identity_atlas),
+            &settings::load_maps(),
+            &settings::load_streets(),
+            &settings::load_identities(),
+        )
+        .map(|readings| serde_json::json!(readings))
+        .unwrap_or_else(|error| serde_json::json!({ "error": error }))
+    } else {
+        serde_json::json!({ "error": "save the EXP box first" })
+    };
+    let lines = ocr::map_label_line_regions(&frame)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(region, gray)| {
+            serde_json::json!({
+                "region": region,
+                "w": gray.w,
+                "h": gray.h,
+                "px": settings::to_hex(&gray.px),
+            })
+        })
+        .collect::<Vec<_>>();
+    let payload = serde_json::json!({
+        "version": 1,
+        "capturedAt": chrono::Local::now().to_rfc3339(),
+        "readMs": started.elapsed().as_secs_f64() * 1000.0,
+        "engine": "hud-atlas+map-table+dtw",
+        "frame": { "w": frame.width, "h": frame.height },
+        "profile": crate::profile::active_key(),
+        "uiMode": settings::ui_mode().id(),
+        "calibration": calibration,
+        "readings": readings,
+        "expGlyphs": box_glyphs(serial, "exp".into()).unwrap_or_default(),
+        "levelGlyphs": box_glyphs(serial, "level".into()).unwrap_or_default(),
+        "mapLines": lines,
+        "atlas": {
+            "expGlyphs": exp_atlas.glyphs.len(),
+            "expSize": exp_atlas.common_glyph_size(),
+            "levelGlyphs": level_atlas.glyphs.len(),
+            "levelSize": level_atlas.common_glyph_size(),
+            "identityGlyphs": identity_atlas.glyphs.len(),
+            "identitySize": identity_atlas.common_glyph_size(),
+        },
+    });
+    let dir = crate::data_dir()?.join("diagnostics");
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let path = dir.join(format!(
+        "read-{}.json",
+        chrono::Local::now().format("%Y%m%d-%H%M%S")
+    ));
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&payload).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(path.display().to_string())
+}
+
 /// Split a single name/job box into the two stacked lines it encloses, top
 /// line first (the game draws job above name). The player draws one generous box
 /// around both and each line becomes its own fingerprint region.

@@ -934,20 +934,9 @@ mod tests {
     #[test]
     #[ignore = "requires MSCW: live 21,865 EXP punctuation"]
     fn reads_live_exp_21865() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("testdata/1920x1080@filtered/exp-21865.png");
-        let image = image::open(&path).expect("exp fixture").to_rgba8();
-        let frame = Frame {
-            width: image.width(),
-            height: image.height(),
-            rgba: image.into_raw(),
-        };
-        let region = Region {
-            x: 0,
-            y: 0,
-            w: 155,
-            h: 18,
-        };
+        let (_, fixture) = crate::regression::fixture_image("1920x1080@filtered", "exp-21865");
+        let frame = crate::regression::fixture_frame("1920x1080@filtered", "exp-21865");
+        let region = fixture.read_region();
         let gray = crate::ocr::crop_gray(&frame, region).expect("exp crop");
         let (stored, height) = seed_exp_atlas(&gray, &game_dir()).expect("exp seed");
         let atlas = crate::ocr::Atlas::from_settings(&stored);
@@ -963,45 +952,16 @@ mod tests {
         // Seed from the value the Filtered profile started with; the live
         // leading `3` is a near miss that the strict threshold used to drop,
         // yielding a plausible but wrong `6,818[18.90%]`.
-        let seed_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("testdata/1920x1080@filtered/hud-low-percent.png");
-        let hud = image::open(&seed_path).expect("hud fixture").to_rgba8();
-        let frame = Frame {
-            width: hud.width(),
-            height: hud.height(),
-            rgba: hud.into_raw(),
-        };
-        let seed = crate::ocr::crop_gray(
-            &frame,
-            Region {
-                x: 650,
-                y: 15,
-                w: 155,
-                h: 18,
-            },
-        )
-        .expect("seed crop");
+        let (_, seed_fixture) =
+            crate::regression::fixture_image("1920x1080@filtered", "hud-low-percent");
+        let frame = crate::regression::fixture_frame("1920x1080@filtered", "hud-low-percent");
+        let seed = crate::ocr::crop_gray(&frame, seed_fixture.read_region()).expect("seed crop");
         let (stored, height) = seed_exp_atlas(&seed, &game_dir()).expect("exp seed");
         let atlas = crate::ocr::Atlas::from_settings(&stored);
 
-        let live_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("testdata/1920x1080@filtered/exp-36818.png");
-        let live = image::open(&live_path).expect("exp fixture").to_rgba8();
-        let frame = Frame {
-            width: live.width(),
-            height: live.height(),
-            rgba: live.into_raw(),
-        };
-        let gray = crate::ocr::crop_gray(
-            &frame,
-            Region {
-                x: 0,
-                y: 0,
-                w: 155,
-                h: 18,
-            },
-        )
-        .expect("exp crop");
+        let (_, live_fixture) = crate::regression::fixture_image("1920x1080@filtered", "exp-36818");
+        let frame = crate::regression::fixture_frame("1920x1080@filtered", "exp-36818");
+        let gray = crate::ocr::crop_gray(&frame, live_fixture.read_region()).expect("exp crop");
         let (text, confidence) = atlas.recognize_readout(&gray).expect("exp read");
         assert_eq!(text, "36,818[18.90%]");
         assert_eq!(crate::ocr::parse_exp_text(&text), Some((36818, 18.90)));
@@ -1017,72 +977,26 @@ mod tests {
         // 2,056[1.06%] HUD), must read every digit and the punctuation across
         // the live EXP crops. This is the coverage check the per-value fixes
         // were missing.
-        let seed_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("testdata/1920x1080@filtered/hud-low-percent.png");
-        let hud = image::open(&seed_path).expect("seed fixture").to_rgba8();
-        let seed_frame = Frame {
-            width: hud.width(),
-            height: hud.height(),
-            rgba: hud.into_raw(),
-        };
-        let seed = crate::ocr::crop_gray(
-            &seed_frame,
-            Region {
-                x: 650,
-                y: 15,
-                w: 155,
-                h: 18,
-            },
-        )
-        .expect("seed crop");
+        let (_, seed_fixture) =
+            crate::regression::fixture_image("1920x1080@filtered", "hud-low-percent");
+        let seed_frame = crate::regression::fixture_frame("1920x1080@filtered", "hud-low-percent");
+        let seed =
+            crate::ocr::crop_gray(&seed_frame, seed_fixture.read_region()).expect("seed crop");
         let (stored, height) = seed_exp_atlas(&seed, &game_dir()).expect("exp seed");
         let atlas = crate::ocr::Atlas::from_settings(&stored);
 
         let cases = [
-            (
-                "hud-low-percent.png",
-                650,
-                15,
-                "2,056[1.06%]",
-                Some((2056, 1.06)),
-            ),
-            (
-                "exp-21865.png",
-                0,
-                0,
-                "21,865[11.22%]",
-                Some((21865, 11.22)),
-            ),
-            ("exp-26487.png", 0, 0, "26,487[13.58%]", None),
-            (
-                "exp-36818.png",
-                0,
-                0,
-                "36,818[18.90%]",
-                Some((36818, 18.90)),
-            ),
+            ("hud-low-percent", "2,056[1.06%]", Some((2056, 1.06))),
+            ("exp-21865", "21,865[11.22%]", Some((21865, 11.22))),
+            ("exp-26487", "26,487[13.58%]", None),
+            ("exp-36818", "36,818[18.90%]", Some((36818, 18.90))),
         ];
 
         let mut digits = BTreeSet::new();
-        for (name, x, y, expected, parsed) in cases {
-            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("testdata/1920x1080@filtered/{name}"));
-            let image = image::open(&path).expect("exp fixture").to_rgba8();
-            let frame = Frame {
-                width: image.width(),
-                height: image.height(),
-                rgba: image.into_raw(),
-            };
-            let gray = crate::ocr::crop_gray(
-                &frame,
-                Region {
-                    x,
-                    y,
-                    w: 155,
-                    h: 18,
-                },
-            )
-            .expect("exp crop");
+        for (name, expected, parsed) in cases {
+            let (_, fixture) = crate::regression::fixture_image("1920x1080@filtered", name);
+            let frame = crate::regression::fixture_frame("1920x1080@filtered", name);
+            let gray = crate::ocr::crop_gray(&frame, fixture.read_region()).expect("exp crop");
             let (text, _) = atlas.recognize_readout(&gray).expect("exp read");
 
             if let Some(parsed) = parsed {
@@ -1117,21 +1031,10 @@ mod tests {
     #[test]
     #[ignore = "requires MSCW: low-percent EXP period on the Filtered HUD"]
     fn reads_filtered_low_percent_exp() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("testdata/1920x1080@filtered/hud-low-percent.png");
-        let hud = image::open(&path).expect("hud fixture").to_rgba8();
-        let frame = Frame {
-            width: hud.width(),
-            height: hud.height(),
-            rgba: hud.into_raw(),
-        };
-        let region = Region {
-            x: 650,
-            y: 15,
-            w: 155,
-            h: 18,
-        };
-        let gray = crate::ocr::crop_gray(&frame, region).expect("exp crop");
+        let (_, fixture) =
+            crate::regression::fixture_image("1920x1080@filtered", "hud-low-percent");
+        let frame = crate::regression::fixture_frame("1920x1080@filtered", "hud-low-percent");
+        let gray = crate::ocr::crop_gray(&frame, fixture.read_region()).expect("exp crop");
         let (stored, height) = seed_exp_atlas(&gray, &game_dir()).expect("exp seed");
         let atlas = crate::ocr::Atlas::from_settings(&stored);
         let (text, confidence) = atlas.recognize_readout(&gray).expect("exp read");
@@ -1146,8 +1049,7 @@ mod tests {
         let hud_path = std::env::var("MSCOUT_HUD_PNG")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("testdata/1920x1080@filtered/hud.png")
+                crate::regression::fixture_image("1920x1080@filtered", "hud-main").0
             });
         let hud = image::open(&hud_path).expect("hud fixture").to_rgba8();
         let frame = Frame {
@@ -1270,8 +1172,7 @@ mod tests {
             }
         }
 
-        let mm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("testdata/1920x1080@filtered/minimap-expanded.png");
+        let mm_path = crate::regression::fixture_image("1920x1080@filtered", "minimap-expanded").0;
         let mm = image::open(&mm_path).expect("minimap fixture").to_rgba8();
         let mm_frame = Frame {
             width: mm.width(),
@@ -1317,8 +1218,7 @@ mod tests {
     #[test]
     #[ignore = "diagnostic: explains the 1920 Default job/name read"]
     fn probe_1920_default_identity() {
-        let hud_path =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/1920x1080/hud.png");
+        let hud_path = crate::regression::fixture_image("1920x1080", "hud-main").0;
         let hud = image::open(&hud_path).expect("hud fixture").to_rgba8();
         let frame = Frame {
             width: hud.width(),

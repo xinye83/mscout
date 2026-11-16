@@ -98,15 +98,6 @@ product features.
 - [ ] **UI Size auto-detection.** Choose the box set from the status bar instead
   of the manual setting; fall back to manual when the match is not unique. The
   manual setting remains authoritative until this ships.
-- [ ] **Redesign the testdata corpus layout.** Each `WxH@mode` setting should be
-  one self-contained subdirectory with many explicitly named PNGs — multiple
-  minimap-state images, multiple HUD/EXP captures, map-label crops, and the
-  settings evidence — with a manifest that indexes every image and its crop and
-  ground truth. This replaces the current mix of manifest-listed state files and
-  extra focused fixtures (`exp-*.png`, `minimap-*.png`, `hud-low-percent.png`)
-  at the pair root. Update the `regression.rs` walker and tiers,
-  `testdata/README.md`, and migrate the existing fixtures while preserving
-  `MSCOUT_CASE`/state filtering and the hermetic/client split.
 - [ ] **Version-bump script.** One command to set the project version everywhere
   it is stored: `src-tauri/Cargo.toml`, the `mscout` entry in
   `src-tauri/Cargo.lock`, `package.json`, the root/workspace entries in
@@ -114,7 +105,7 @@ product features.
   `CHANGELOG` Unreleased section to a dated release. Add a `--check` mode so a
   release or CI run fails when the versions drift apart.
 - [ ] **Screenshot import tool.** Turn a client screenshot + ground truth into a
-  complete `testdata/<WxH@mode>/` fixture and manifest entry.
+  complete `testdata/<WxH@mode>/` fixture and its manifest image entries.
 - [ ] **Multi-resolution portability.** Anchor-relative boxes + scale-aware
   matching so one calibration serves several resolutions; blocked on a
   two-resolution capture diff.
