@@ -6,6 +6,10 @@ and glyph assets live, and what was verified against the live client.
 This supersedes the earlier "the UI is Arial" summary. The client uses **three
 different mechanisms**, and only one of them is a font render at all.
 
+> Current support (0.6.0): 1366×768 and 1920×1080 in all three UI sizes. The
+> 12 px sizes below are the Ideal reference; Default/Filtered are measured per
+> pair and use the seeded variants plus OCR fallbacks.
+
 ## Summary
 
 | What MScout reads | How the client draws it | Source | Reproducible? |
@@ -189,8 +193,8 @@ reader matches whole rendered names instead of OCR. See
    let a 2×7 `[` "match" a `1` by shifting its ink out of the box; the live
    round-trip read `74,521142.78%1` until this was fixed. It now reads
    `74,521[42.78%]` at distance 0 on 1366 Ideal, 1920 Ideal and 1920×1200 Default.
-   0.5.0 ships 1366×768 in all three UI sizes and 1920×1080 Ideal; the
-   1920 Default/Filtered pairs are deferred.
+   0.6.0 ships 1366×768 and 1920×1080 in all three UI sizes; the Filtered
+   digits use their own variants and white-key level path.
 4. **The level reader tries bright ink first.** On a pale tile the adaptive
    threshold marks the whole tile as ink; with a stale tile-sized glyph in the
    atlas, the adaptive read looked successful and returned `55` for a real `35`.

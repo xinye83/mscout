@@ -47,10 +47,15 @@ The PNGs are **lossless crops of real client frames**, written with no
 resampling, no palette reduction and no lossy encoding. For a pair with several
 states, the shared `settings.png` is a crop of the state captured with the panel
 open; it is pair-level evidence, not a claim about each state's pixels. Only
-tests read this directory; the running application never opens it. The
-client-tier tests skip a pair with no shipped preset; the 1920 Default/Filtered
-fixtures are tracked for a later pass, and the minimap state gate still covers
-every pair.
+tests read this directory; the running application never opens it. Client-tier
+tests require a shipped preset for the pair; every 1366×768 and 1920×1080 UI
+Size now has one. 1920×1200 has no fixture or preset.
+
+Additional focused fixtures sit alongside the manifest corpus:
+`minimap-deep-valley.png` and `minimap-tree-1.png` pin map-label regressions,
+`hud-low-percent.png` pins the low-percent EXP punctuation, and the `exp-*.png`
+crops pin the Filtered EXP readout and frame-check cases. They are consumed by
+targeted client-tier tests, not by the manifest walk.
 
 ## Multi-state pairs
 

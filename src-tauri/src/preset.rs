@@ -104,14 +104,17 @@ mod tests {
             );
             checked += 1;
         }
-        assert!(checked >= 3, "expected the shipped preset set, found {checked}");
+        assert!(
+            checked >= 3,
+            "expected the shipped preset set, found {checked}"
+        );
     }
 
     #[test]
     fn ideal_presets_cover_the_two_supported_resolutions() {
         for (w, h) in [(1366, 768), (1920, 1080)] {
-            let profile = for_size(w, h, UiMode::Ideal)
-                .unwrap_or_else(|| panic!("Ideal preset for {w}x{h}"));
+            let profile =
+                for_size(w, h, UiMode::Ideal).unwrap_or_else(|| panic!("Ideal preset for {w}x{h}"));
             assert!(profile.is_calibrated(), "{w}x{h} has no usable boxes");
             assert!(
                 profile.calibration.level.is_some(),
@@ -137,8 +140,8 @@ mod tests {
         // HUD geometry, and the saved-frame corpus reads every mode and minimap
         // state with the shipped boxes.
         for mode in UiMode::ALL {
-            let profile = for_size(1366, 768, mode)
-                .unwrap_or_else(|| panic!("1366x768 preset for {mode:?}"));
+            let profile =
+                for_size(1366, 768, mode).unwrap_or_else(|| panic!("1366x768 preset for {mode:?}"));
             assert!(
                 profile.is_calibrated(),
                 "1366x768 {mode:?} has no usable boxes"
@@ -150,17 +153,21 @@ mod tests {
             );
         }
 
-        // 1920x1080 ships Ideal only. Default/Filtered are deferred past 0.5.0;
-        // those pairs fall back to calibration instead of borrowing Ideal boxes.
-        let profile = for_size(1920, 1080, UiMode::Ideal).expect("1920x1080 Ideal preset");
-        assert!(profile.is_calibrated(), "1920x1080 Ideal has no usable boxes");
-        assert!(profile.calibration.level.is_some());
-        assert!(
-            profile.calibration.name.is_some() && profile.calibration.job.is_some(),
-            "1920x1080 Ideal has no name/job boxes"
-        );
-        assert!(for_size(1920, 1080, UiMode::Default).is_none());
-        assert!(for_size(1920, 1080, UiMode::Filtered).is_none());
+        // 1920x1080 ships all three UI modes from 0.6.0. Ideal has its own
+        // geometry; Default and Filtered share the measured set.
+        for mode in UiMode::ALL {
+            let profile = for_size(1920, 1080, mode)
+                .unwrap_or_else(|| panic!("1920x1080 preset for {mode:?}"));
+            assert!(
+                profile.is_calibrated(),
+                "1920x1080 {mode:?} has no usable boxes"
+            );
+            assert!(profile.calibration.level.is_some());
+            assert!(
+                profile.calibration.name.is_some() && profile.calibration.job.is_some(),
+                "1920x1080 {mode:?} has no name/job boxes"
+            );
+        }
 
         // 1920x1200 has no shipped preset; every mode falls back to a local
         // calibration pass instead of borrowing geometry from another size.

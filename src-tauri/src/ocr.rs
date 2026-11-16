@@ -8,9 +8,14 @@ pub const CELL_LEN: usize = CELL_W * CELL_H;
 const MATCH_THRESHOLD: f64 = 30.0;
 /// Ordinary text (name/job) is anti-aliased at Default Ratio and further
 /// softened by the Filter Applied rendering, so its letters match further out
-/// than a bitmap readout. The map label and the readouts keep the tighter
-/// threshold.
+/// than a bitmap readout. The map label and readouts use their own thresholds.
 const TEXT_MATCH_THRESHOLD: f64 = 65.0;
+/// A readout glyph in the Filtered rendering can sit far from the strict
+/// threshold (the live `3` measured 31, the 4x11 `1` measured 58). The engine
+/// cross-checks the EXP against the level and percentage, so the closest
+/// readout glyph is safe to accept here. A shape past this tolerance is still
+/// reported as unknown.
+const READOUT_TOLERANCE: f64 = TEXT_MATCH_THRESHOLD;
 const MIN_GLYPH_PIXELS: usize = 1;
 /// How far a sample may slide within its cell when matching (sub-pixel drift).
 const SHIFT_SEARCH: i32 = 1;
@@ -60,7 +65,7 @@ pub struct Gray {
     pub px: Vec<u8>,
 }
 
-pub fn crop_gray(frame: &Frame, region: Region) -> Option<Gray> {
+fn crop_bounds(frame: &Frame, region: Region) -> Option<(usize, usize, usize, usize)> {
     if region.w <= 1 || region.h <= 1 {
         return None;
     }
@@ -77,8 +82,11 @@ pub fn crop_gray(frame: &Frame, region: Region) -> Option<Gray> {
         return None;
     }
 
-    let w = x1 - x0;
-    let h = y1 - y0;
+    Some((x0, y0, x1 - x0, y1 - y0))
+}
+
+pub fn crop_gray(frame: &Frame, region: Region) -> Option<Gray> {
+    let (x0, y0, w, h) = crop_bounds(frame, region)?;
     let mut px = Vec::with_capacity(w * h);
     for y in 0..h {
         for x in 0..w {
@@ -87,6 +95,37 @@ pub fn crop_gray(frame: &Frame, region: Region) -> Option<Gray> {
             let g = frame.rgba[index + 1] as u32;
             let b = frame.rgba[index + 2] as u32;
             px.push(((77 * r + 150 * g + 29 * b) >> 8) as u8);
+        }
+    }
+
+    Some(Gray { w, h, px })
+}
+
+/// Crop `region` as a white-text ink image: saturated pixels (a coloured HUD
+/// tile, panel or world pixel) become background, and only low-saturation
+/// bright pixels survive. This is the level-tile case: the digits are white,
+/// the orange tile and its pale edge are not.
+///
+/// The extraction is the saturation-aware white key used by mpl-ocr; it is
+/// reimplemented here for MScout's `Gray` pipeline. See
+/// `THIRD_PARTY_NOTICES.md`.
+pub fn crop_white_key(frame: &Frame, region: Region) -> Option<Gray> {
+    let (x0, y0, w, h) = crop_bounds(frame, region)?;
+    let mut px = Vec::with_capacity(w * h);
+    for y in 0..h {
+        for x in 0..w {
+            let index = ((y0 + y) * frame.width as usize + (x0 + x)) * 4;
+            let r = frame.rgba[index] as i32;
+            let g = frame.rgba[index + 1] as i32;
+            let b = frame.rgba[index + 2] as i32;
+            let lo = r.min(g).min(b);
+            let hi = r.max(g).max(b);
+            let ink = if hi - lo >= 60 {
+                0
+            } else {
+                ((lo - 150) * 5 / 2).clamp(0, 255) as u8
+            };
+            px.push(ink);
         }
     }
 
@@ -125,9 +164,8 @@ fn otsu_threshold(gray: &Gray) -> u8 {
         sum_background += value as f64 * *count as f64;
         let mean_background = sum_background / weight_background;
         let mean_foreground = (sum - sum_background) / weight_foreground;
-        let variance = weight_background
-            * weight_foreground
-            * (mean_background - mean_foreground).powi(2);
+        let variance =
+            weight_background * weight_foreground * (mean_background - mean_foreground).powi(2);
 
         if variance > best_variance {
             best_variance = variance;
@@ -252,10 +290,8 @@ fn normalize(
 
     for gy in 0..CELL_H {
         for gx in 0..CELL_W {
-            let sx = (x0 + ((gx as f64 + 0.5) * w as f64 / CELL_W as f64) as usize)
-                .min(x_end - 1);
-            let sy = (y0 + ((gy as f64 + 0.5) * h as f64 / CELL_H as f64) as usize)
-                .min(y_end - 1);
+            let sx = (x0 + ((gx as f64 + 0.5) * w as f64 / CELL_W as f64) as usize).min(x_end - 1);
+            let sy = (y0 + ((gy as f64 + 0.5) * h as f64 / CELL_H as f64) as usize).min(y_end - 1);
             cell[gy * CELL_W + gx] = if on(sx, sy) { 255 } else { 0 };
         }
     }
@@ -284,8 +320,7 @@ fn split_part(segment: &Segment, start: u32, width: u32) -> Segment {
     let mut mask = vec![0u8; (width * segment.h) as usize];
     for y in 0..segment.h {
         for x in 0..width {
-            mask[(y * width + x) as usize] =
-                segment.mask[(y * segment.w + start + x) as usize];
+            mask[(y * width + x) as usize] = segment.mask[(y * segment.w + start + x) as usize];
         }
     }
     let cell = cell_of_native(&mask, width as usize, segment.h as usize);
@@ -337,11 +372,7 @@ pub fn shape_art(gray: &Gray) -> Vec<String> {
 pub fn row_ink(gray: &Gray) -> Vec<u32> {
     let mask = foreground(gray);
     (0..gray.h)
-        .map(|y| {
-            (0..gray.w)
-                .filter(|x| mask[y * gray.w + x])
-                .count() as u32
-        })
+        .map(|y| (0..gray.w).filter(|x| mask[y * gray.w + x]).count() as u32)
         .collect()
 }
 
@@ -437,8 +468,7 @@ fn split_shapes(gray: &Gray, floor: Option<u8>, keep_full_height: bool) -> Vec<S
             continue;
         }
 
-        let (cell, native) =
-            normalize(gray, &mask, gray.w, start, top, end - start, bottom - top);
+        let (cell, native) = normalize(gray, &mask, gray.w, start, top, end - start, bottom - top);
         out.push(Segment {
             mask: native,
             cell,
@@ -612,10 +642,7 @@ fn cell_distance_shifted(a: &Cell, b: &Cell, search: i32) -> f64 {
                     // Out-of-bounds counts as background. Skipping those pixels
                     // instead let a narrow shape "match" by shifting its ink out
                     // of the box and comparing only the easy columns.
-                    let b_pixel = if sx >= 0
-                        && sy >= 0
-                        && sx < CELL_W as i32
-                        && sy < CELL_H as i32
+                    let b_pixel = if sx >= 0 && sy >= 0 && sx < CELL_W as i32 && sy < CELL_H as i32
                     {
                         right[sy as usize * CELL_W + sx as usize] as i32
                     } else {
@@ -881,6 +908,28 @@ impl Atlas {
         best.filter(|(_, distance)| *distance <= MATCH_THRESHOLD)
     }
 
+    /// Like [`Atlas::match_segment_within`], but accepts the closest readout
+    /// glyph up to [`READOUT_TOLERANCE`]. The Filtered digits are genuinely
+    /// ambiguous (the live `3` measures 31 against a nearby runner-up), and the
+    /// engine rejects an EXP that does not fit its level and percentage.
+    fn match_segment_within_tolerant(
+        &self,
+        segment: &Segment,
+        allowed: &str,
+    ) -> Option<(char, f64)> {
+        let mut best: Option<(char, f64)> = None;
+        for glyph in &self.glyphs {
+            if !allowed.contains(glyph.ch) {
+                continue;
+            }
+            let distance = self.distance_to(segment, glyph);
+            if best.map_or(true, |(_, closest)| distance < closest) {
+                best = Some((glyph.ch, distance));
+            }
+        }
+        best.filter(|(_, distance)| *distance <= READOUT_TOLERANCE)
+    }
+
     /// Read an EXP-style readout — a number, then a bracketed percentage — using
     /// the shape of the readout to restrict what each position may contain. The
     /// closing bracket is only a candidate once the percentage has started, which
@@ -909,6 +958,23 @@ impl Atlas {
                 continue;
             }
 
+            // A tiny shape in a punctuation slot cannot be a digit at this font
+            // size. The Filtered rendering changes the comma/period enough that
+            // the atlas can be far away; infer the punctuation from the readout
+            // grammar and let the digits decide the value.
+            if segment.w <= 4 && segment.h <= 5 {
+                let punct = match stage {
+                    0 => Some(','),
+                    1 => Some('.'),
+                    _ => None,
+                };
+                if let Some(ch) = punct {
+                    let (_, best, _) = self.match_segment(&segment);
+                    out.push((segment, ch, best));
+                    continue;
+                }
+            }
+
             // A wide shape can be two touching glyphs (the 1920 Default `2`+`7`);
             // try every cut and keep the pair that explains the pixels best.
             if let Some(parts) = self.split_segment(&segment, allowed) {
@@ -920,6 +986,19 @@ impl Atlas {
                     }
                     out.push((sub, ch, best));
                 }
+                continue;
+            }
+
+            // A single glyph that is just past the strict threshold (the live
+            // Filtered `3` measures 31). Try this after splitting so a touching
+            // pair is not mistaken for one wide digit.
+            if let Some((ch, best)) = self.match_segment_within_tolerant(&segment, allowed) {
+                if ch == '[' {
+                    stage = 1;
+                } else if ch == '%' {
+                    stage = 2;
+                }
+                out.push((segment, ch, best));
             }
         }
         out
@@ -927,11 +1006,12 @@ impl Atlas {
 
     /// Cut a wide shape into two touching glyphs and match both halves.
     fn split_segment(&self, segment: &Segment, allowed: &str) -> Option<Vec<(Segment, char, f64)>> {
-        if segment.w < 13 {
+        if segment.w < 9 {
             return None;
         }
-        let mut best: Option<(f64, Vec<(Segment, char, f64)>)> = None;
-        for cut in 4..=segment.w.saturating_sub(4) {
+        type SplitMatch = (Segment, char, f64);
+        let mut best: Option<(f64, Vec<SplitMatch>)> = None;
+        for cut in 3..=segment.w.saturating_sub(3) {
             let left = split_part(segment, 0, cut);
             let right = split_part(segment, cut, segment.w - cut);
             let Some((left_ch, left_distance)) = self.match_segment_within(&left, allowed) else {
@@ -942,8 +1022,7 @@ impl Atlas {
                 '%' => "]",
                 _ => allowed,
             };
-            let Some((right_ch, right_distance)) =
-                self.match_segment_within(&right, right_allowed)
+            let Some((right_ch, right_distance)) = self.match_segment_within(&right, right_allowed)
             else {
                 continue;
             };
@@ -1196,6 +1275,7 @@ impl Atlas {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn recognize(&self, gray: &Gray) -> Result<(String, f64), String> {
         if self.glyphs.is_empty() {
             return Err("no glyphs learned yet".into());
@@ -1232,16 +1312,83 @@ impl Atlas {
 
         let bright = bright_segments(gray, TEXT_FLOOR);
         if !bright.is_empty() {
-            if let Ok((text, confidence)) = self.read_shapes(bright) {
+            if let Ok((text, confidence)) = self.read_digit_shapes(bright) {
                 if !text.is_empty() {
                     return Ok((text, confidence));
                 }
             }
         }
 
-        self.recognize(gray)
+        self.recognize_digits(gray)
     }
 
+    /// Read the level from a white-ink keyed crop. The key has already removed
+    /// the coloured tile, so a lower fixed floor is safe and keeps anti-aliased
+    /// strokes that [`TEXT_FLOOR`] would drop.
+    pub fn recognize_level_keyed(&self, keyed: &Gray) -> Result<(String, f64), String> {
+        if self.glyphs.is_empty() {
+            return Err("no glyphs learned yet".into());
+        }
+
+        let bright = bright_segments(keyed, 127);
+        if !bright.is_empty() {
+            if let Ok((text, confidence)) = self.read_digit_shapes(bright) {
+                if !text.is_empty() {
+                    return Ok((text, confidence));
+                }
+            }
+        }
+
+        self.recognize_digits(keyed)
+    }
+
+    fn recognize_digits(&self, gray: &Gray) -> Result<(String, f64), String> {
+        if self.glyphs.is_empty() {
+            return Err("no glyphs learned yet".into());
+        }
+        let found = segments(gray);
+        if found.is_empty() {
+            return Err("nothing readable in the box".into());
+        }
+        self.read_digit_shapes(found)
+    }
+
+    /// Read a digits-only readout (the level) with the same ordered fallback as
+    /// the EXP readout: strict glyph, split a touching pair, then accept a
+    /// clear near miss. The EXP path adds punctuation inference on top; the
+    /// level box has no punctuation.
+    fn read_digit_shapes(&self, found: Vec<Segment>) -> Result<(String, f64), String> {
+        const DIGITS: &str = "0123456789";
+        let mut text = String::with_capacity(found.len());
+        let mut confidence = 0.0;
+        let mut matched = 0usize;
+
+        for segment in found {
+            let mut hits: Vec<(char, f64)> = Vec::new();
+            if let Some((ch, best)) = self.match_segment_within(&segment, DIGITS) {
+                hits.push((ch, best));
+            } else if let Some(parts) = self.split_segment(&segment, DIGITS) {
+                for (_, ch, best) in parts {
+                    hits.push((ch, best));
+                }
+            } else if let Some((ch, best)) = self.match_segment_within_tolerant(&segment, DIGITS) {
+                hits.push((ch, best));
+            }
+
+            for (ch, best) in hits {
+                text.push(ch);
+                confidence += (1.0 - best / 255.0).max(0.0);
+                matched += 1;
+            }
+        }
+
+        if matched == 0 {
+            return Err("nothing recognizable in the box — learn the digits".into());
+        }
+        Ok((text, confidence / matched as f64))
+    }
+
+    #[cfg(test)]
     fn read_shapes(&self, found: Vec<Segment>) -> Result<(String, f64), String> {
         let mut text = String::with_capacity(found.len());
         let mut confidence = 0.0;
@@ -1332,8 +1479,8 @@ const LABEL_MAX_DARK: u8 = 40;
 pub fn resample(gray: &Gray, w: usize, h: usize) -> Gray {
     let mut px = Vec::with_capacity(w * h);
     for y in 0..h {
-        let sy = (((y as f64 + 0.5) * gray.h as f64 / h as f64) as usize)
-            .min(gray.h.saturating_sub(1));
+        let sy =
+            (((y as f64 + 0.5) * gray.h as f64 / h as f64) as usize).min(gray.h.saturating_sub(1));
         for x in 0..w {
             let sx = (((x as f64 + 0.5) * gray.w as f64 / w as f64) as usize)
                 .min(gray.w.saturating_sub(1));
@@ -1548,18 +1695,8 @@ pub struct Minimap {
     pub state: MinimapState,
     /// The chrome band: the title bar in states 1/2, the whole bar when folded.
     pub bar: Region,
-    /// The `MINI MAP` title text, states 1/2 only. Exposed as an anchor for
-    /// diagnostics and future text bounds.
-    #[allow(dead_code)]
-    pub title: Option<Region>,
     /// The `WORLD` badge (the orange chip).
     pub badge: Region,
-    /// The map icon in the name band, state 1 only. Exposed as an anchor.
-    #[allow(dead_code)]
-    pub icon: Option<Region>,
-    /// Active (bright blue) zoom buttons found in the title bar.
-    #[allow(dead_code)]
-    pub active_buttons: usize,
 }
 
 const FOLDED_FILL: (i32, i32, i32) = (221, 221, 221);
@@ -1856,10 +1993,7 @@ fn titlebar_fallback(frame: &Frame, badge: Region) -> Option<Minimap> {
     Some(Minimap {
         state: MinimapState::TitleBarOnly,
         bar,
-        title: Some(ink),
         badge,
-        icon: None,
-        active_buttons: active_zoom_buttons(frame, bar, badge),
     })
 }
 
@@ -1902,25 +2036,30 @@ pub fn detect_minimap(frame: &Frame) -> Option<Minimap> {
         let cx = badge.x + badge.w / 2;
         let cy = badge.y + badge.h / 2;
         let inside = |region: &Region| {
-            cx >= region.x
-                && cx < region.x + region.w
-                && cy >= region.y
-                && cy < region.y + region.h
+            cx >= region.x && cx < region.x + region.w && cy >= region.y && cy < region.y + region.h
         };
 
-        for bar in component_regions(frame, |x, y| near_rgb(frame, x, y, FOLDED_FILL, 6), bar_shape) {
+        for bar in component_regions(
+            frame,
+            |x, y| near_rgb(frame, x, y, FOLDED_FILL, 6),
+            bar_shape,
+        ) {
             if inside(&bar) {
-                return Some(folded_minimap(frame, bar, *badge));
+                return Some(folded_minimap(bar, *badge));
             }
         }
         // Filter Applied: the exact fill breaks into fragments; a solid light-gray
         // bar containing the badge is the same state.
-        for bar in component_regions(frame, |x, y| is_folded_pixel_tolerant(frame, x, y), bar_shape) {
+        for bar in component_regions(
+            frame,
+            |x, y| is_folded_pixel_tolerant(frame, x, y),
+            bar_shape,
+        ) {
             if inside(&bar)
                 && component_solidity(frame, bar, |x, y| is_folded_pixel_tolerant(frame, x, y))
                     >= 30.0
             {
-                return Some(folded_minimap(frame, bar, *badge));
+                return Some(folded_minimap(bar, *badge));
             }
         }
 
@@ -1945,10 +2084,7 @@ pub fn detect_minimap(frame: &Frame) -> Option<Minimap> {
             return Some(Minimap {
                 state,
                 bar,
-                title,
                 badge: *badge,
-                icon,
-                active_buttons,
             });
         }
 
@@ -1957,7 +2093,11 @@ pub fn detect_minimap(frame: &Frame) -> Option<Minimap> {
         // solid blue-gray band at least as tall as a name band is the expanded
         // state; the shorter (hollow) title bar is rejected by the solidity and
         // height checks.
-        for panel in component_regions(frame, |x, y| is_panel_pixel_tolerant(frame, x, y), panel_shape) {
+        for panel in component_regions(
+            frame,
+            |x, y| is_panel_pixel_tolerant(frame, x, y),
+            panel_shape,
+        ) {
             let near = inside(&panel)
                 || (cx >= panel.x
                     && cx < panel.x + panel.w
@@ -1966,20 +2106,15 @@ pub fn detect_minimap(frame: &Frame) -> Option<Minimap> {
             if !near || panel.h < 25 {
                 continue;
             }
-            if component_solidity(frame, panel, |x, y| is_panel_pixel_tolerant(frame, x, y)) < 30.0 {
+            if component_solidity(frame, panel, |x, y| is_panel_pixel_tolerant(frame, x, y)) < 30.0
+            {
                 continue;
             }
             let bar = bar_of(&panel);
-            let title = detect_title_text(frame, bar, *badge);
-            let icon = detect_icon(frame, panel, bar);
-            let active_buttons = active_zoom_buttons(frame, bar, *badge);
             return Some(Minimap {
                 state: MinimapState::Expanded,
                 bar,
-                title,
                 badge: *badge,
-                icon,
-                active_buttons,
             });
         }
 
@@ -1993,21 +2128,13 @@ pub fn detect_minimap(frame: &Frame) -> Option<Minimap> {
                     && cx < panel.x + panel.w
                     && panel.y >= badge.y - 2
                     && panel.y <= badge.y + badge.h + 40);
-            let lines = map_label_lines(frame)
-                .map(|lines| lines.len())
-                .unwrap_or(0);
+            let lines = map_label_lines(frame).map(|lines| lines.len()).unwrap_or(0);
             if lines >= 2 || (near && panel.h >= 25) {
                 let bar = bar_of(&panel);
-                let title = detect_title_text(frame, bar, *badge);
-                let icon = detect_icon(frame, panel, bar);
-                let active_buttons = active_zoom_buttons(frame, bar, *badge);
                 return Some(Minimap {
                     state: MinimapState::Expanded,
                     bar,
-                    title,
                     badge: *badge,
-                    icon,
-                    active_buttons,
                 });
             }
         }
@@ -2022,14 +2149,11 @@ pub fn detect_minimap(frame: &Frame) -> Option<Minimap> {
     None
 }
 
-fn folded_minimap(frame: &Frame, bar: Region, badge: Region) -> Minimap {
+fn folded_minimap(bar: Region, badge: Region) -> Minimap {
     Minimap {
         state: MinimapState::Folded,
         bar,
-        title: None,
         badge,
-        icon: None,
-        active_buttons: active_zoom_buttons(frame, bar, badge),
     }
 }
 
@@ -2313,7 +2437,9 @@ fn without_channel(text: &str) -> String {
     let lower = text.to_ascii_lowercase();
     match (lower.find('<'), lower.rfind('>')) {
         (Some(open), Some(close)) if close > open => {
-            format!("{}{}", &text[..open], &text[close + 1..]).trim().to_string()
+            format!("{}{}", &text[..open], &text[close + 1..])
+                .trim()
+                .to_string()
         }
         _ => text.trim().to_string(),
     }
@@ -2414,6 +2540,62 @@ mod tests {
         let (text, confidence) = atlas.recognize(&b).unwrap();
         assert_eq!(text, "01");
         assert!(confidence > 0.9);
+    }
+
+    fn near_miss_digit() -> (Atlas, Segment) {
+        let mut three = vec![0u8; 7 * 11];
+        for y in 0..11 {
+            three[y * 7 + 3] = 255;
+        }
+        let mut mask = three.clone();
+        for y in 2..9 {
+            for x in 1..6 {
+                if (x + y) % 2 == 0 {
+                    mask[y * 7 + x] = 255;
+                }
+            }
+        }
+        let glyph = |ch, bitmap| Glyph {
+            ch,
+            bitmap,
+            cell: [0; CELL_LEN],
+            w: 7,
+            h: 11,
+        };
+        let atlas = Atlas {
+            glyphs: vec![glyph('3', three), glyph('8', vec![255; 7 * 11])],
+        };
+        let segment = Segment {
+            mask,
+            cell: [0; CELL_LEN],
+            x: 0,
+            y: 0,
+            w: 7,
+            h: 11,
+        };
+        (atlas, segment)
+    }
+
+    #[test]
+    fn readout_accepts_a_near_miss_digit() {
+        let (atlas, segment) = near_miss_digit();
+        assert!(atlas.match_segment_within(&segment, "38").is_none());
+        let (ch, distance) = atlas
+            .match_segment_within_tolerant(&segment, "38")
+            .expect("near miss");
+        assert_eq!(ch, '3');
+        assert!(
+            distance > MATCH_THRESHOLD && distance <= READOUT_TOLERANCE,
+            "{distance}"
+        );
+    }
+
+    #[test]
+    fn level_reads_a_near_miss_digit() {
+        let (atlas, segment) = near_miss_digit();
+        let (text, confidence) = atlas.read_digit_shapes(vec![segment]).expect("level read");
+        assert_eq!(text, "3");
+        assert!(confidence > 0.7);
     }
 
     #[test]
@@ -2533,7 +2715,9 @@ mod tests {
         let mut atlas = Atlas::default();
         atlas.learn_glyph(
             '7',
-            base.iter().map(|bit| if *bit > 0 { 255 } else { 0 }).collect(),
+            base.iter()
+                .map(|bit| if *bit > 0 { 255 } else { 0 })
+                .collect(),
             3,
             5,
         );
@@ -2562,7 +2746,10 @@ mod tests {
 
     #[test]
     fn labels_snap_across_channels() {
-        assert_eq!(label_similarity("Free Market <15>", "Free Market <16>"), 1.0);
+        assert_eq!(
+            label_similarity("Free Market <15>", "Free Market <16>"),
+            1.0
+        );
 
         let near = label_similarity(
             "Hidden Street\nFree Markei <15>",
@@ -2589,4 +2776,52 @@ mod tests {
         assert_eq!(parse_level("--"), None);
     }
 
+    #[test]
+    fn white_key_drops_coloured_tile_and_keeps_digits() {
+        // A dark status bar with a saturated orange level tile and two white
+        // digits. The luma bright floor sees the tile as ink too; the white key
+        // must not, so the two digits segment on their own.
+        let mut frame = Frame {
+            width: 20,
+            height: 12,
+            rgba: vec![0; 20 * 12 * 4],
+        };
+        let put = |frame: &mut Frame, x: usize, y: usize, [b, g, r]: [u8; 3]| {
+            let index = (y * 20 + x) * 4;
+            frame.rgba[index..index + 4].copy_from_slice(&[b, g, r, 255]);
+        };
+        for y in 0..12 {
+            for x in 0..20 {
+                put(&mut frame, x, y, [32, 32, 32]);
+            }
+        }
+        for y in 1..11 {
+            for x in 1..19 {
+                put(&mut frame, x, y, [30, 140, 240]);
+            }
+        }
+        for x0 in [3usize, 11] {
+            for y in 3..8 {
+                for x in x0..x0 + 3 {
+                    put(&mut frame, x, y, [255, 255, 255]);
+                }
+            }
+        }
+
+        let region = Region {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 12,
+        };
+        let keyed = crop_white_key(&frame, region).expect("crop");
+        assert_eq!(keyed.px[0], 0, "dark panel is background");
+        assert_eq!(keyed.px[2 * 20 + 2], 0, "orange tile is background");
+        assert_eq!(keyed.px[4 * 20 + 4], 255, "white digit is ink");
+        assert_eq!(
+            bright_segments(&keyed, 127).len(),
+            2,
+            "the two digits survive; the tile does not"
+        );
+    }
 }

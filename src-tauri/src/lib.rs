@@ -23,6 +23,8 @@ mod profile;
 mod regression;
 mod settings;
 mod window_target;
+#[cfg(windows)]
+mod winocr;
 
 struct OverlayState {
     interactive: AtomicBool,
@@ -428,7 +430,11 @@ fn toggle_interactive<R: Runtime>(app: &AppHandle<R>) {
 fn toggle_visible<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let visible = window.is_visible().unwrap_or(true);
-        let _ = if visible { window.hide() } else { window.show() };
+        let _ = if visible {
+            window.hide()
+        } else {
+            window.show()
+        };
     }
 }
 
@@ -482,12 +488,16 @@ fn register_shortcuts<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std:
 
 fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "Show / hide", true, None::<&str>)?;
-    let interactive = MenuItem::with_id(app, "interactive", "Toggle interactive", true, None::<&str>)?;
+    let interactive =
+        MenuItem::with_id(app, "interactive", "Toggle interactive", true, None::<&str>)?;
     let target = MenuItem::with_id(app, "target", "Choose game window…", true, None::<&str>)?;
     let calibrate = MenuItem::with_id(app, "calibrate", "Calibrate boxes…", true, None::<&str>)?;
     let history = MenuItem::with_id(app, "history", "History", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&toggle, &interactive, &target, &calibrate, &history, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&toggle, &interactive, &target, &calibrate, &history, &quit],
+    )?;
 
     let mut builder = TrayIconBuilder::with_id("tray")
         .menu(&menu)
@@ -517,9 +527,7 @@ pub fn run() {
         .manage(OverlayState {
             interactive: AtomicBool::new(false),
         })
-        .manage(window_target::TargetState::new(
-            settings::load_target(),
-        ))
+        .manage(window_target::TargetState::new(settings::load_target()))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {

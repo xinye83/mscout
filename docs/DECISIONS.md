@@ -23,6 +23,8 @@ The map label is pixel-identical for the same map at the same resolution. Electr
 Decision: teach each map once (store the ROI bitmap), then nearest-match.
 Consequence: maps must be taught; templates are resolution/scale specific; unknown maps report `unknown`, never a guessed name.
 
+*Superseded by D23: map/street names now come from the client table with OCR fallbacks; taught fingerprints remain the correction path.*
+
 ## D6 — Wall-clock rate, no session splitting
 Rates use trailing differences over wall-clock time. Idle time counts against the rate; the curve is continuous and never split into sessions.
 Consequence: a long break visibly drags the rate down and it takes one window length to recover. This is intended.
@@ -106,12 +108,29 @@ rather than letting the reader re-load it from the active-profile cache. The
 cache can lag a profile switch or a just-seeded atlas, which made name/job read
 as unknown even though the profile on disk was complete.
 
+*0.6.0 note: the 1920×1080 Default/Filtered name/job render larger and
+anti-aliased. They use the same Arial face, per-line seeding, and Windows OCR
+fusion; the 12 px statements above are the Ideal path.*
+
 ## D23 — Map/street names come from the client's map table
 The two minimap lines are the client's own `mapName` and `streetName` strings in `Data/String/String_000.wz` → `Map.img/<region>/<map id>`. The current client exposes 347 map names and 11 unique streets; the count is client-version-specific and is never shipped as a list. Both saved samples are present (`VictoriaIsland/010003007` = Kerning City Civic Center / Victoria Road, `010003070` = Sunset Sky / Victoria Road).
-The label is Arial Bold 12 px, so the reader renders every candidate name with GDI Arial Bold 12, keeps those whose width is within 8 px of the live line, and scores the whole line with a column-pattern DTW. The correct name scores 0.236 / 0.346 / 0.268 on the three saved lines; a 0.05 margin over the runner-up and a 0.55 cap reject ambiguous lines. No glyph segmentation is involved, which is what made per-glyph Arial seeding fail.
+The label is Arial Bold at the measured size. The reader renders every candidate name at 12–24 px, keeps those whose width is within 8 px of the live line, and scores the whole line with a column-pattern DTW. The Ideal fixtures score 0.236 / 0.346 / 0.268; a 0.05 runner-up margin and a per-size cap (0.55 below 14 px, 0.95 at 14 px and above) reject ambiguous lines. No glyph segmentation is involved, which is what made per-glyph Arial seeding fail.
 Taught fingerprints still win when present; the name table is the fallback for untaught maps. The same pass reads the street line.
 The public map list at meowdb.com/msclassic/maps/all is larger because it includes Ossyria/El Nath and instanced/upcoming content; the client's own table is the authoritative live set and matches both samples.
-Consequence: map/street no longer need teaching. The name index is rendered at 12 px, matching the Ideal HUD; a UI Size that draws the label at another pixel size needs its own rendered index (roadmap multi-resolution work).
+Consequence: map/street no longer need teaching. The name index is tried at 12–24 px and the Default/Filtered labels can use Windows OCR; a UI Size whose label falls outside that range would need its own rendered index.
+
+The client's table can lag the running client: `Where the Balrogs Live` is not in the
+current 347-name table. The expanded label therefore tries Windows OCR before the
+learned glyph map atlas. A line with no table match is returned as the literal
+on-screen name, and a one-line label has no street; known names still snap to the
+table. This stops the misaligned glyph atlas from inventing a different map name
+(`Western Swamp`).
+
+An **exact** OCR match also outranks the rendered whole-line DTW. The DTW can
+confuse Roman-numeral siblings (`The Tree That Grew I` → `... III`) because it
+scores the whole line; the OCR union reads the final `I` exactly, so it decides
+before the DTW runs. The DTW remains the fallback when OCR is absent or only
+fuzzy.
 
 ## D24 — Shipping boundary: code/geometry/numbers only
 Ship our code, UI, preset **boxes** (geometry only), the EXP table (numbers, estimated values labelled) and detection constants. Do **not** ship Nexon bitmap atlases, minimap/UI art, game fonts, a map/street name list, Arial or any system font, or player profiles.
@@ -125,6 +144,8 @@ Consequence: presets carry zero glyphs (verified), `.gitignore` excludes `fonts/
 Evidence: on the live 1920×1080 Default frame the EXP digits read but punctuation drops, the level's `3` is far from the scaled Ideal/EXP glyph (`41.7` versus `27.8` for `5`), and Arial seeding finds no matching size for name/job. 1920×1200 Default EXP reads exactly, so this needs a pair-by-pair rendering investigation, not a global "Default" switch. Filtered keeps Default's positions but changes the glyph drawing, so it needs its own seeding.
 
 Consequence: the supported matrix is explicit in [PRESETS.md](PRESETS.md). Adding a Default/Filtered preset requires a live capture, a source/size check for digits and level, an Arial quality/size match, a map index at that label size, and a saved-frame test first.
+
+*Superseded for 0.6.0 by D31: 1920×1080 Default and Filtered now ship after the per-pair verification described here.*
 
 ## D29 — 0.5.0 drops the 1920×1200 preset
 
@@ -194,3 +215,82 @@ three modes and 1920×1080 Ideal are the supported matrix; the 1920 Default and
 Filtered fixtures remain for a later pass. Resolution stays automatic from the
 captured client size; the UI Size stays the manual in-app setting (no layout
 autodetection in 0.5.0).
+
+*Superseded for 0.6.0 by D31: 1920×1080 Default/Filtered are supported; UI Size
+auto-detection remains deferred.*
+
+## D31 — 0.6.0 adds 1920 Default/Filtered with selected mpl-ocr ideas, not mpl-ocr
+
+Goal: read the 1920×1080 Default and Default (Filter Applied) pairs. The
+1366×768 three modes and 1920×1080 Ideal stay the reference paths and must not
+change behaviour; new readers are fallbacks or content-based choices that return
+the same result on Ideal.
+
+After 0.5.0 the remaining gaps are Default job/map and Filtered level/name/map.
+We borrow three ideas from [mpl-ocr](https://github.com/Shonitbar/mpl-ocr):
+
+1. **Saturation-aware white key** for the level box: coloured tile pixels become
+   background, near-white glyph pixels survive. MScout's luma-only bright floor
+   lets the Filtered tile edge merge with a digit. Seeding and reading try both
+   extractions and keep the longer valid read, so an Ideal frame that already
+   reads is not changed.
+2. **Strict learned-glyph acceptance** for identity text: a near-miss GDI fit is
+   not stored as an exact variant. An uncertain letter is reported as unknown
+   instead of becoming a confidently wrong name (the Filtered `Furoh ood`).
+3. **Windows OCR as a candidate source** for the Default/Filtered name, job and
+   map labels, followed by the client table and the existing width/DTW decision.
+   OCR reads the two label lines on the deferred pairs but drops a trailing
+   `<N>`, so the client table and suffix-only DTW decide the instance and an
+   ambiguous line stays `unknown`. A confident leading glyph can restore a
+   character OCR dropped (`age` + glyph `p` → `Page`).
+
+Rejected: a runtime dependency on mpl-ocr, its `%LOCALAPPDATA%` config/data
+model, its global `scale = clientH / 768` layout (the 1920×1080 HUD is 1:1 while
+the minimap scales), its per-ROI learned-atlas teaching workflow (game-asset
+seeding is better for digits), and its tooltip/inventory/damage detectors (out
+of scope).
+
+License: mpl-ocr is MIT, Copyright (c) 2026 mpl-ocr contributors. Algorithms
+and ideas are reimplemented; if source is copied, the MIT notice is retained in
+that source and in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md). MScout
+stays MIT and ships no Nexon assets.
+
+Consequence: 0.6.0 adds 1920 Default/Filtered presets and fixture coverage; the
+existing Ideal and 1366 paths remain the regression baseline.
+
+## D32 — EXP near-miss digits are accepted; the level/percentage cross-check gates them
+
+The Filtered HUD's EXP glyphs can drift past the strict 30 threshold: the
+leading `3` of the live `36,818[18.90%]` measured 31.6, and a 4×11 `1` measured
+58. The old readout dropped them, producing a plausible but wrong number
+(`6,818[18.90%]`, `36,88[18.90%]`) that failed the level check and was never
+recorded.
+
+The readout now tries, in order: a strict single-glyph match; punctuation
+inferred from a tiny shape in a comma/period slot; a split of a touching pair
+(9 px or wider, parts from 3 px); then the closest glyph up to the 65 soft-text
+threshold. The level reader uses the same strict → split → tolerant order
+(digits only), so a Filtered level digit is not dropped just because it drifted
+past 30.
+
+A **large** mismatch between EXP, percentage and level invalidates both the EXP
+and the level for that frame; map/name/job are kept. Before this, the EXP was
+kept and only the level was dropped, so a plausible wrong EXP could still be
+shown. A **small** percentage gap (up to 1 pp) is repaired from the EXP and
+level instead: the percentage is redundant, and the Filtered `3`/`8` shape can
+read `23.33` as `23.83`. The level/percentage check is not a complete validator:
+an `8`→`6` substitution changes a 5-digit EXP by ~20, which shifts the
+percentage by only ~0.01 pp and still fits the rounding tolerance.
+
+That limit is real and recorded: the live `26,487[13.58%]` still reads
+`26,467[13.59%]` with both the HUD-seeded and profile atlases. The correct `8`
+scores ~29 against the nearest atlas `8`, while `6`/`9` score ~10–12 at 8×11; a
+simple Gaussian soft variant and another frame's seed do not close it. The
+digit sweep records the gap and the roadmap tracks the filtered atlas-variant
+work.
+
+Fixtures: `1920x1080@filtered/exp-21865.png`, `exp-26487.png` and
+`exp-36818.png`, seeded by the live `hud-low-percent.png`; hermetic tests
+`ocr::tests::readout_accepts_a_near_miss_digit` and
+`ocr::tests::level_reads_a_near_miss_digit`; client-tier
+`game_font::tests::reads_filtered_exp_digit_sweep`.

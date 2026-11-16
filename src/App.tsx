@@ -7,7 +7,6 @@ import { expRequired } from "./expTable";
 import ExpChart from "./ExpChart";
 import { dotState } from "./overlayState";
 
-const MAP_MAX = 30;
 const MAX_SAMPLES = 5400;
 /** Solid dash placeholders, sized to the element they stand in for. */
 const PLACEHOLDER = {
@@ -200,16 +199,20 @@ export default function App() {
     return () => observer.disconnect();
   }, [expanded, current !== undefined]);
   const uncalibrated = capture?.state === "uncalibrated";
+  const lost = capture?.state === "lost";
+  const statusMapHidden = mapHidden && !lost;
 
   // One status line, not one per problem: two rows read as two separate complaints
   // and both ended with the same instruction, so they looked like echoes. The read
   // failure and the unrecognised fields are listed together and share one action.
+  // A lost window is the exception: that reason is the whole message, and stale
+  // field warnings from the last reading are noise.
   const readReason =
     capture && capture.state !== "reading"
       ? capture.reason ?? (uncalibrated ? "not calibrated for this size" : "not reading")
       : "";
   const recognisable =
-    unrecognised.length > 0
+    !lost && unrecognised.length > 0
       ? `${joinWords(unrecognised)} not recognised — teach ${
           unrecognised.length > 1 ? "them" : "it"
         } in Calibration`
@@ -235,10 +238,8 @@ export default function App() {
     mapHidden || !current
       ? []
       : current.map.split("\n");
-  const mapName =
-    mapHidden || !current ? PLACEHOLDER.map : mapLines[mapLines.length - 1];
   const mapLabel =
-    mapName.length > MAP_MAX ? `${mapName.slice(0, MAP_MAX - 1)}…` : mapName;
+    mapHidden || !current ? PLACEHOLDER.map : mapLines[mapLines.length - 1];
   const mapSub =
     current && !mapHidden && mapLines.length > 1
       ? mapLines[0]
@@ -357,26 +358,32 @@ export default function App() {
         </div>
       )}
 
-      {(readReason || recognisable || mapHidden) && (
+      {(readReason || recognisable || statusMapHidden) && (
         <div
           className={`row status-reason ${
             capture && capture.state !== "reading" ? capture.state : "unrecognised"
           }`}
         >
           <span>
-            {mapHidden && (
+            {lost ? (
+              readReason
+            ) : (
               <>
-                minimap collapsed
-                {(readReason || recognisable) && " · "}
-              </>
-            )}
-            {readReason &&
-              (recognisable ? readReason.split(" — ")[0].trim() : readReason)}
-            {readReason && recognisable && " · "}
-            {recognisable && (
-              <>
-                <strong>{joinWords(unrecognised)}</strong> not recognised — teach{" "}
-                {unrecognised.length > 1 ? "them" : "it"} in Calibration
+                {statusMapHidden && (
+                  <>
+                    minimap collapsed
+                    {(readReason || recognisable) && " · "}
+                  </>
+                )}
+                {readReason &&
+                  (recognisable ? readReason.split(" — ")[0].trim() : readReason)}
+                {readReason && recognisable && " · "}
+                {recognisable && (
+                  <>
+                    <strong>{joinWords(unrecognised)}</strong> not recognised — teach{" "}
+                    {unrecognised.length > 1 ? "them" : "it"} in Calibration
+                  </>
+                )}
               </>
             )}
           </span>

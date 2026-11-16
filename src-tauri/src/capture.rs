@@ -9,13 +9,11 @@ use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Win32::Foundation::{HMODULE, HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
-    D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ,
-    D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
 };
-use windows::Win32::Graphics::Dwm::{
-    DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS,
-};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::WinRT::Direct3D11::{
@@ -87,8 +85,8 @@ impl Capturer {
         let interop: IGraphicsCaptureItemInterop =
             factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
                 .map_err(|e| e.to_string())?;
-        let item: GraphicsCaptureItem = unsafe { interop.CreateForWindow(hwnd_from(hwnd)) }
-            .map_err(|e| e.to_string())?;
+        let item: GraphicsCaptureItem =
+            unsafe { interop.CreateForWindow(hwnd_from(hwnd)) }.map_err(|e| e.to_string())?;
         let size = item.Size().map_err(|e| e.to_string())?;
 
         let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
@@ -298,7 +296,12 @@ mod tests {
             raw.width,
             raw.height,
             client_metrics(window.hwnd),
-            (window.client.w, window.client.h, window.screen.x, window.screen.y)
+            (
+                window.client.w,
+                window.client.h,
+                window.screen.x,
+                window.screen.y
+            )
         );
 
         let frame = crop_to_client(raw, window.hwnd).expect("capture failed");
@@ -312,7 +315,8 @@ mod tests {
         assert!(lit > frame.rgba.len() / 10, "captured frame looks blank");
     }
 
-    fn write_bmp(frame: &Frame, path: &std::path::Path) {        let width = frame.width;
+    fn write_bmp(frame: &Frame, path: &std::path::Path) {
+        let width = frame.width;
         let height = frame.height;
         let row = width as usize * 4;
         let size = 54 + row * height as usize;
@@ -399,7 +403,10 @@ mod tests {
                 }
             }
             Ok(spec) => {
-                let parts: Vec<i32> = spec.split(',').map(|p| p.trim().parse().expect("number")).collect();
+                let parts: Vec<i32> = spec
+                    .split(',')
+                    .map(|p| p.trim().parse().expect("number"))
+                    .collect();
                 crate::settings::Region {
                     x: parts[0],
                     y: parts[1],
@@ -408,12 +415,9 @@ mod tests {
                 }
             }
             Err(_) => {
-                let profile = crate::profile::load_for_mode(
-                    1920,
-                    1080,
-                    crate::settings::UiMode::Ideal,
-                )
-                .expect("1920x1080 Ideal profile");
+                let profile =
+                    crate::profile::load_for_mode(1920, 1080, crate::settings::UiMode::Ideal)
+                        .expect("1920x1080 Ideal profile");
                 profile.calibration.exp.expect("EXP box")
             }
         };
@@ -533,8 +537,7 @@ mod tests {
         let mut lines = Vec::new();
 
         if let Some(label_region) = label {
-            let label_gray =
-                crate::ocr::crop_gray(&frame, label_region).expect("label crop");
+            let label_gray = crate::ocr::crop_gray(&frame, label_region).expect("label crop");
             write_bmp(&magnify(&label_gray, 5), &dir.join("label-magnified.bmp"));
             for threshold in [160u8, 180, 200] {
                 let binary = binarize(&label_gray, threshold);
@@ -544,9 +547,7 @@ mod tests {
                 );
             }
 
-            for (index, (x, y, w, h)) in crate::ocr::text_lines(&label_gray)
-                .into_iter()
-                .enumerate()
+            for (index, (x, y, w, h)) in crate::ocr::text_lines(&label_gray).into_iter().enumerate()
             {
                 let region = crate::settings::Region {
                     x: label_region.x + x,
@@ -641,7 +642,8 @@ mod tests {
     fn dumps_map_label() {
         let selector = crate::settings::WindowSelector {
             title: String::new(),
-            process: std::env::var("MSCOUT_DUMP_PROCESS").unwrap_or_else(|_| "MapleStory.exe".into()),
+            process: std::env::var("MSCOUT_DUMP_PROCESS")
+                .unwrap_or_else(|_| "MapleStory.exe".into()),
         };
         let window = crate::window_target::resolve_selector(&selector).expect("game window");
         let frame = client_frame(window.hwnd).expect("capture failed");
@@ -652,11 +654,17 @@ mod tests {
         println!("panel={panel:?} label={label:?}");
 
         write_bmp(
-            &magnify(&crate::ocr::crop_gray(&frame, panel).expect("panel crop"), 3),
+            &magnify(
+                &crate::ocr::crop_gray(&frame, panel).expect("panel crop"),
+                3,
+            ),
             &dir.join("panel-crop.bmp"),
         );
         write_bmp(
-            &magnify(&crate::ocr::crop_gray(&frame, label).expect("label crop"), 5),
+            &magnify(
+                &crate::ocr::crop_gray(&frame, label).expect("label crop"),
+                5,
+            ),
             &dir.join("label-crop.bmp"),
         );
 
@@ -666,7 +674,10 @@ mod tests {
             .enumerate()
         {
             println!("line {index}: {}x{}", line.w, line.h);
-            write_bmp(&magnify(line, 5), &dir.join(format!("label-line-{index}.bmp")));
+            write_bmp(
+                &magnify(line, 5),
+                &dir.join(format!("label-line-{index}.bmp")),
+            );
         }
     }
 }

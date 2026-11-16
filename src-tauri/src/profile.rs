@@ -124,10 +124,7 @@ pub fn dir() -> Result<PathBuf, String> {
 }
 
 pub fn path_for(client_w: u32, client_h: u32, ui_mode: UiMode) -> Result<PathBuf, String> {
-    Ok(dir()?.join(format!(
-        "{client_w}x{client_h}{}.json",
-        ui_mode.suffix()
-    )))
+    Ok(dir()?.join(format!("{client_w}x{client_h}{}.json", ui_mode.suffix())))
 }
 
 fn parse_profile(text: &str) -> Option<Profile> {
@@ -348,11 +345,7 @@ pub fn active_profile() -> Option<ProfileSummary> {
 }
 
 #[tauri::command]
-pub fn delete_profile(
-    client_w: u32,
-    client_h: u32,
-    ui_mode: Option<String>,
-) -> Result<(), String> {
+pub fn delete_profile(client_w: u32, client_h: u32, ui_mode: Option<String>) -> Result<(), String> {
     let ui_mode = match ui_mode.as_deref() {
         Some(value) => {
             UiMode::parse(value).ok_or_else(|| format!("unknown UI size mode {value}"))?
@@ -368,7 +361,10 @@ mod tests {
 
     #[test]
     fn key_is_the_client_size() {
-        assert_eq!(Profile::new_for_mode(1366, 768, UiMode::Default).key(), "1366x768");
+        assert_eq!(
+            Profile::new_for_mode(1366, 768, UiMode::Default).key(),
+            "1366x768"
+        );
         assert_eq!(
             Profile::new_for_mode(1920, 1080, UiMode::Ideal).key(),
             "1920x1080@ideal"
@@ -383,8 +379,18 @@ mod tests {
         assert_eq!(summary.glyphs, 0);
         assert_eq!(summary.key, "1366x768");
 
-        profile.calibration.exp = Some(settings::Region { x: 1, y: 2, w: 3, h: 4 });
-        profile.calibration.level = Some(settings::Region { x: 5, y: 6, w: 7, h: 8 });
+        profile.calibration.exp = Some(settings::Region {
+            x: 1,
+            y: 2,
+            w: 3,
+            h: 4,
+        });
+        profile.calibration.level = Some(settings::Region {
+            x: 5,
+            y: 6,
+            w: 7,
+            h: 8,
+        });
         assert!(profile.summary().calibrated);
     }
 

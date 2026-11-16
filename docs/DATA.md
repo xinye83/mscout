@@ -24,7 +24,7 @@ One JSON object per line, one line per second of captured play, grouped by local
 | `lv` | integer | Character level |
 | `exp` | integer | EXP accumulated inside the current level |
 | `pct` | number | EXP bar percentage as shown in game |
-| `map` | string | Taught map name, or `unknown` |
+| `map` | string | Matched map name, literal OCR name, or `unknown` |
 | `state` | string | `gaining` or `idle` |
 | `conf` | number | Parse confidence 0–1 |
 | `bad` | boolean | Optional. The row is a known misread; every reader skips it |
@@ -35,7 +35,7 @@ One JSON object per line, one line per second of captured play, grouped by local
 - **No synthetic rows.** `not_recording` is represented by the absence of rows; a gap > 5 s means "not recording".
 - **Monotonic within a level.** `exp` only decreases on level-up (reset) or death (penalty). A decrease that does not hold is rejected at capture time.
 - **Levels never go backwards.** A derivation that lands below the last accepted one is a misread however self-consistent it looks; it is rejected.
-- **Cross-check.** `pct ≈ exp / required(lv) × 100`, within the precision of the two-decimal percentage (about 0.02 pp for the confirmed levels 1–49, looser where the requirement is only estimated).
+- **Cross-check.** `pct ≈ exp / required(lv) × 100`, within about 0.02 pp for confirmed levels 1–49 (rounding) and 1 pp where the requirement is estimated. A close difference (up to 1 pp) is repaired from the valid EXP and level; a larger disagreement invalidates both the EXP and level for that frame.
 
 ### Repairing recorded history
 
@@ -51,9 +51,9 @@ data/profiles/1920x1080@ideal.json
 ```
 
 A profile for another UI Size uses the `@filtered` suffix or the bare name for
-Default Ratio. 1366×768 ships presets in all three UI sizes; 1920×1080 ships
-Ideal only; 1920×1200 ships none. A pair with no preset is created locally when
-the player calibrates it.
+Default Ratio. 1366×768 and 1920×1080 ship presets in all three UI sizes;
+1920×1200 ships none. A pair with no preset is created locally when the player
+calibrates it.
 
 Each profile holds the calibration boxes, the EXP and level glyph atlases, the Arial-seeded name/job atlas, taught map/street fingerprints and the character name/job fingerprints. The engine activates the profile matching the live frame size and UI Size on every tick, so changing either switches calibration sets instead of invalidating everything.
 
@@ -103,12 +103,13 @@ Sharing a profile between machines is safe when they run the game at the same cl
 
 ### Reading the name and job
 
-The name and job are **Arial** (12 px at the supported pairs, 1-bit GDI) and are seeded automatically from
-the Windows face when their boxes are drawn — no teaching. The atlas stores
-`source: "font"`; the one ambiguity at this size (`l` and `I` are the same 1 px
-bar) is resolved by treating a mid-word bar in a mixed-case word as `l`. The
-taught fingerprints remain as the exact fallback, and **Teach name/job** corrects
-a misread.
+The name and job are **Arial** at each crop's measured height (12 px at Ideal;
+the Default/Filtered renderings are larger and anti-aliased, with OCR fusion)
+and are seeded automatically from the Windows face when their boxes are drawn —
+no teaching. The atlas stores `source: "font"`; the `l`/`I` ambiguity is
+resolved by treating a mid-word bar in a mixed-case word as `l`. The taught
+fingerprints remain as the exact fallback, and **Teach name/job** corrects a
+misread.
 
 The minimap label is **Arial Bold** at the rendered size with a 1 px shadow. Its text is the
 client's own `mapName`/`streetName` table, so it is matched as a whole line rather
@@ -118,11 +119,11 @@ than segmented; see below.
 
 The fingerprint crop is found by **detection**, not by a stored box: detection follows the whole label wherever the minimap sits, and a longer map name simply makes a wider crop. A stored map box is only the fallback for a frame where detection fails — a box drawn around a shorter name must never clip the next map's name.
 
-The two lines are the client's own **`mapName`/`streetName` strings** in `Data/String/String_000.wz` → `Map.img/<region>/<map id>`. The current client exposes 347 map names and 11 unique streets; the count is client-version-specific and is never shipped as a list. The label is Arial Bold 12 px; the reader renders every candidate name, keeps those within 8 px of the live line's width, and scores the whole line with a column-pattern DTW. The correct name wins by a wide margin (0.236 / 0.346 on the two saved map lines, 0.268 on the street); a 0.05 runner-up margin and 0.55 cap reject ambiguous lines. No glyph segmentation is involved, which is what made per-glyph Arial seeding fail.
+The two lines are the client's own **`mapName`/`streetName` strings** in `Data/String/String_000.wz` → `Map.img/<region>/<map id>`. The current client exposes 347 map names and 11 unique streets; the count is client-version-specific and is never shipped as a list. The label is Arial Bold at the rendered size; the reader renders every candidate name, filters by width, and scores the whole line with a column-pattern DTW. Windows OCR reads the label union too: an exact table match wins, then the suffix-only DTW for `<N>` and a clear fuzzy winner, then the literal OCR line for a map absent from the table.
 
 Taught **fingerprints** still win when they match, and a taught `mapAtlas` letter set remains as a fallback for a name not in the client table. Teaching is now only for corrections or a map missing from the table. The client table matches the saved samples exactly; the public meowdb list is larger because it includes Ossyria/El Nath and instanced/upcoming content.
 
-The name-table match is only trusted when the best whole-line DTW score is below 0.55 and clear of the runner-up; an ambiguous line is reported `unknown` rather than guessed. The taught letter-atlas text path keeps its old rule (nearly every shape matched), and a near miss is snapped onto a name that was taught explicitly — that restores the spaces a glyph read drops (`VictoriaRoad` → `Victoria Road`) and ignores the channel marker, so `Free Market <15>` still matches on channel 16.
+An exact or clear fuzzy OCR table match is preferred. If OCR is absent or only non-exact, the whole-line DTW fallback runs and can still mispick (for example, Roman-numeral siblings); see [ROADMAP.md](ROADMAP.md). A one-line label has no street. A missing table name is shown literally. The taught-letter path snaps a near miss onto a taught name, which restores spaces a glyph read drops (`VictoriaRoad` → `Victoria Road`).
 
 The label glyph set is per UI Size like every other raster, so switching mode starts its letters over.
 
@@ -151,10 +152,11 @@ inverted before matching because the existing matcher expects ink-on-dark.
 A frame that carries no name — title-bar-only — records `map: "unknown"` with
 `mapHidden: true`. The overlay shows placeholders for the map and street, a yellow
 dot, and `minimap collapsed` as a warning at the bottom; it does not offer
-calibration, because there is nothing on screen to read. A label that is present but fails to match
-records `unknown` with `mapHidden: false`, which is the case that does warrant a
-correction. The app never carries the last name forward: if the name is not on
-screen, it is not assumed.
+calibration, because there is nothing on screen to read. A label that is present
+but unreadable or ambiguous records `unknown` with `mapHidden: false`, which is
+the case that does warrant a correction. A name absent from the table is shown
+from OCR instead. The app never carries the last name
+forward: if the name is not on screen, it is not assumed.
 
 ### Managing profiles
 
@@ -170,9 +172,9 @@ It is picked in the Calibration window rather than detected: guessing wrong read
 
 The modes differ by more than rendering. **Default Ratio (Filter Applied)** keeps the HUD where Default Ratio puts it but changes how the glyphs are drawn; **Ideal Ratio** moves the HUD *and* draws a smaller font, so its boxes were measured separately (the 1920×1080 EXP box is `1023,1050,90×11` against Default's `1048,1036,155×18`). Ideal Ratio also draws a bright one-pixel rule across the status bar above the readout, which merges every glyph into one shape under an adaptive threshold — `segments` falls back to a high fixed threshold when a crop collapses to a single shape, since these readouts are near-white text.
 
-1366×768 ships all three UI sizes, verified by the saved-frame corpus. 1920×1080
-ships Ideal only; 1920×1200 ships no preset. The 1920×1080 Default/Filtered work
-is deferred past 0.5.0. See [PRESETS.md](PRESETS.md).
+1366×768 and 1920×1080 ship all three UI sizes, verified by the saved-frame
+corpus. 1920×1200 ships no preset and falls back to manual calibration. See
+[PRESETS.md](PRESETS.md).
 
 ### Presets
 

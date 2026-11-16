@@ -142,7 +142,8 @@ Equivalent for **portable** use: copy the release exe plus its `data/` folder an
 | `link.exe not found` | Visual Studio Build Tools / C++ workload missing |
 | Blank window | WebView2 runtime missing |
 | Overlay shows `not calibrated for WxH` | that client size/UI Size has no profile yet — run calibration |
-| Overlay shows `unknown` map | the map is missing from the client table, or the label line could not be matched — teach a correction |
+| Overlay shows a wrong map | a name missing from the client table is shown from OCR; teach a correction if the literal line is misread |
+| Overlay shows `unknown` map | the label line could not be read, or an ambiguous table match was rejected — teach a correction |
 | Build fails with `EBUSY` on a DLL | a previous instance is still running; quit it from the tray first |
 | Capture fails on fullscreen | the game must run windowed or borderless; exclusive fullscreen cannot be captured without hooking, which is out of scope |
 
@@ -153,6 +154,6 @@ Equivalent for **portable** use: copy the release exe plus its `data/` folder an
 The helper never touches the game process: no memory reading, no injection, no input. It reads pixels via the OS compositor. That imposes two rules on the game:
 
 - Run **windowed or borderless**. Exclusive fullscreen cannot be captured or overlaid.
-- Run at a **client size and UI Size you have calibrated**. Changing either switches profiles; a pair never calibrated needs one calibration pass. Presets ship for 1366×768 in all three UI sizes and for 1920×1080 Ideal only; 1920×1200 falls back to calibration.
+- Run at a **client size and UI Size you have calibrated**. Changing either switches profiles; a pair never calibrated needs one calibration pass. Presets ship for 1366×768 and 1920×1080 in all three UI sizes; 1920×1200 falls back to calibration.
 
 See [SPEC.md §1](SPEC.md) for the full constraint list and the reasoning behind it.

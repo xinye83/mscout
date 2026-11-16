@@ -6,13 +6,11 @@
 
 use std::path::{Path, PathBuf};
 
-use wz_reader::WzNodeCast;
 use wz_reader::WzNodeArc;
+use wz_reader::WzNodeCast;
 
 #[derive(Clone, Debug)]
 pub struct MapEntry {
-    #[allow(dead_code)] // kept for future map-id lookups
-    pub id: String,
     pub name: String,
     pub street: String,
 }
@@ -51,11 +49,7 @@ fn children(root: &WzNodeArc, path: &str) -> Vec<String> {
 }
 
 fn string_at(root: &WzNodeArc, path: &str) -> Option<String> {
-    let node = root
-        .read()
-        .ok()?
-        .at_path_parsed(path)
-        .ok()?;
+    let node = root.read().ok()?.at_path_parsed(path).ok()?;
     let guard = node.read().ok()?;
     guard.try_as_string()?.get_string().ok()
 }
@@ -75,11 +69,7 @@ pub fn load(mscw_dir: &Path) -> Result<Vec<MapEntry>, String> {
                 continue;
             }
             let street = string_at(&root, &format!("{base}/streetName")).unwrap_or_default();
-            out.push(MapEntry {
-                id: id.replace(".img", ""),
-                name,
-                street,
-            });
+            out.push(MapEntry { name, street });
         }
     }
     Ok(out)
@@ -94,16 +84,39 @@ mod tests {
         PathBuf::from(
             std::env::var("MSCOUT_MSCW_DIR")
                 .ok()
-                .or_else(|| crate::settings::mscw_dir())
+                .or_else(crate::settings::mscw_dir)
                 .expect("no MSCW dir; set MSCOUT_MSCW_DIR"),
         )
     }
 
     const JOB_NAMES: &[&str] = &[
-        "Beginner", "Warrior", "Magician", "Bowman", "Thief", "Pirate", "Fighter", "Page",
-        "Spearman", "Cleric", "Hunter", "Crossbowman", "Assassin", "Bandit", "Brawler",
-        "Gunslinger", "Hero", "Paladin", "Dark Knight", "Arch Mage", "Bishop", "Bowmaster",
-        "Marksman", "Night Lord", "Shadower", "Buccaneer", "Corsair",
+        "Beginner",
+        "Warrior",
+        "Magician",
+        "Bowman",
+        "Thief",
+        "Pirate",
+        "Fighter",
+        "Page",
+        "Spearman",
+        "Cleric",
+        "Hunter",
+        "Crossbowman",
+        "Assassin",
+        "Bandit",
+        "Brawler",
+        "Gunslinger",
+        "Hero",
+        "Paladin",
+        "Dark Knight",
+        "Arch Mage",
+        "Bishop",
+        "Bowmaster",
+        "Marksman",
+        "Night Lord",
+        "Shadower",
+        "Buccaneer",
+        "Corsair",
     ];
 
     fn scan_job_strings(root: &WzNodeArc, path: &str, depth: usize) {
@@ -112,7 +125,7 @@ mod tests {
         }
         if let Some(value) = string_at(root, path) {
             let value = value.trim();
-            if JOB_NAMES.iter().any(|name| *name == value) {
+            if JOB_NAMES.contains(&value) {
                 println!("  JOB {path} = {value:?}");
             }
         }
@@ -123,6 +136,17 @@ mod tests {
                 format!("{path}/{child}")
             };
             scan_job_strings(root, &next, depth + 1);
+        }
+    }
+
+    #[test]
+    #[ignore = "diagnostic: searches the client map table for Deep Valley"]
+    fn probe_deep_valley() {
+        let entries = load(&mscw()).expect("map table");
+        for entry in &entries {
+            if entry.name.contains("Deep Valley") || entry.street.contains("Warning") {
+                println!("{:?}", entry);
+            }
         }
     }
 
@@ -195,7 +219,11 @@ mod tests {
 
         let etc000 = base.join("Data/Etc/Etc_000.wz");
         if let Ok(root) = open_wz(&etc000) {
-            for top in ["MakeCharInfo.img", "FreeJobChange.img", "RecommendedSkill.img"] {
+            for top in [
+                "MakeCharInfo.img",
+                "FreeJobChange.img",
+                "RecommendedSkill.img",
+            ] {
                 let entries = children(&root, top);
                 if entries.is_empty() {
                     continue;

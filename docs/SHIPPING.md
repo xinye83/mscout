@@ -10,7 +10,7 @@ stays in `data/`.
 | Item | Why it is safe to ship | Notes |
 |---|---|---|
 | Rust/React executable, UI, icons | our code and art | — |
-| Preset calibration boxes (`src-tauri/presets/*.json`) | measured **geometry** only | Every preset has `expGlyphs = levelGlyphs = mapGlyphs = 0`, no maps/identities. Shipped pairs: **1366×768 at Default, Ideal and Filtered; 1920×1080 at Ideal only**. 1920×1200 has no preset and falls back to calibration. See [PRESETS.md](PRESETS.md). |
+| Preset calibration boxes (`src-tauri/presets/*.json`) | measured **geometry** only | Every preset has `expGlyphs = levelGlyphs = mapGlyphs = 0`, no maps/identities. Shipped pairs: **1366×768 and 1920×1080 at Default, Ideal and Filtered**. 1920×1200 has no preset and falls back to calibration. See [PRESETS.md](PRESETS.md). |
 | EXP table | game **numbers**, not art | `exp_table.rs` / `expTable.ts`; 1–49 confirmed, 50–89 estimated and labelled, 90–100 anchored. |
 | Detection constants and rate math | our logic | minimap panel colour/proportions, ROI rules, rate windows. |
 | Docs, tray/overlay assets | ours | — |
@@ -23,7 +23,7 @@ fingerprints.
 | Client path | Used for | Why it is read at runtime |
 |---|---|---|
 | `Data/UI/_Canvas/_Canvas_000.wz` → `EXPBar/number`, `ShowLevel/0`, `status/lvNumber` | EXP/level digit atlases | Nexon bitmap art; not redistributable. Seeded into the player's profile at runtime. |
-| `Data/String/String_000.wz` → `Map.img/<region>/<map id>/mapName`, `streetName` | map and street names (347 / 11 in the current client; count varies) | Client content and version-specific; rendered with Arial Bold 12 at runtime. Not shipped as a list. |
+| `Data/String/String_000.wz` → `Map.img/<region>/<map id>/mapName`, `streetName` | map and street names (347 / 11 in the current client; count varies) | Client content and version-specific; rendered with Arial Bold at 12–24 px or read with Windows OCR at runtime. Not shipped as a list. |
 | `Data/UI/Font/Font_000.wz` → Noto Sans KR Medium | general/Korean text font | **Not used** by MScout: the game UI is English and name/job/map are Arial. OFL, so it could be shipped, but there is no need. |
 | Client version, resolution, UI Size | profile selection | Detected/selected, not a file to copy. |
 
@@ -31,15 +31,17 @@ The calibration window asks for the folder once (`mscwDir`, native folder picker
 No game file is copied into the repository or into the app bundle.
 
 **If the client files are missing:** the app falls back to typed digit learning,
-taught map/street fingerprints and taught letter sets, and reports the map as
-`unknown`. It never guesses.
+taught map/street fingerprints and taught letter sets. Without the map table it
+reports `unknown` unless the on-screen label can be read literally; it never
+invents a table name.
 
 ## Read from Windows
 
 | Asset | Used for | Why not shipped |
 |---|---|---|
-| **Arial Regular 12 px** (1-bit GDI) | character name / job (1366×768 UI sizes; 1920×1080 Ideal) | Proprietary system font; loaded from Windows at runtime, never bundled. 1920×1080 Default/Filtered and 1920×1200 have no preset and are not auto-supported. |
-| **Arial Bold 12 px** (anti-aliased GDI) | map / street label rendering for the name-table match (rendered at 12–24 px) | Same. |
+| **Arial Regular 12 px** (1-bit GDI) | character name / job (1366×768 UI sizes; 1920×1080 Ideal) | Proprietary system font; loaded from Windows at runtime, never bundled. The 1920×1080 Default/Filtered alphabets are anti-aliased and use the same Arial face plus a Windows OCR fallback for the name/job. 1920×1200 has no preset and is not auto-supported. |
+| **Arial Bold** (anti-aliased GDI, rendered at 12–24 px) | map / street label rendering for the name-table match | Same. |
+| `Windows.Media.Ocr` (English) | map/street label and identity fallback on renderings the bitmap/font readers cannot reproduce | OS component; no model is shipped and no language pack is installed by the app. If English OCR is unavailable, the readers fall back to the table/fingerprint/unknown path. |
 | WGC / hotkey / shell APIs | capture, hotkeys, folder picker | OS. |
 
 If Arial is unavailable, font seeding fails gracefully to the taught
@@ -86,20 +88,25 @@ contain redistributable-restricted content.
   `mapAtlas`; no maps or identities.
   `preset::tests::shipped_presets_contain_no_game_art` fails the build if a
   preset ever gains glyph/map/identity content.
-- Verified presets ship for 1366×768 in all three UI sizes and for 1920×1080
-  Ideal only. 1920×1200 has no preset; a missing pair reports uncalibrated
-  instead of applying a stale preset.
+- Verified presets ship for 1366×768 and 1920×1080 in all three UI sizes.
+  1920×1200 has no preset; a missing pair reports uncalibrated instead of
+  applying a stale preset.
 - `map_names.rs` reads `String_000.wz` at runtime; `game_font.rs` reads
   `_Canvas_000.wz`; `font_seed` renders Windows Arial; no font or map list is
   bundled.
 - Seeded atlases live in the player's profile under `data/`.
 - Clean-start proof: with no profiles, atlases or preset overrides, the shipped
-  presets (boxes only) + `_Canvas_000.wz` + `String_000.wz` + Windows Arial read
-  the saved frames exactly (level, EXP, name, job, map, street): 1366×768 in all
-  three UI sizes and 1920×1080 Ideal. No local override is needed for a known
-  size.
+  presets (boxes only) + `_Canvas_000.wz` + `String_000.wz` + Windows Arial (and
+  `Windows.Media.Ocr` for the anti-aliased 1920 Default/Filtered name/job and map
+  label) read the saved frames exactly (level, EXP, name, job, map, street):
+  1366×768 and 1920×1080 in all three UI sizes. No local override is needed for a
+  known size.
 
 ## Recommendations / open decisions
+
+These are not a second roadmap. The cache is part of the calibration-startup
+work under **Next**; the auto-discovery and offline-cache items are unscheduled
+under **Later** in [ROADMAP.md](ROADMAP.md).
 
 1. **Cache the derived map name list and rendered Arial index** in
    `data/cache/`, keyed by `String_000.wz` size+mtime, the Windows Arial

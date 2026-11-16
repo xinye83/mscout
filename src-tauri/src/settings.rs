@@ -196,7 +196,6 @@ pub fn save_mscw_dir(path: Option<&str>) -> Result<(), String> {
     })
 }
 
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(default)]

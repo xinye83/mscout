@@ -4,6 +4,89 @@ All notable changes to MScout are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the major version is `0`, the minor version is bumped for features and the patch for fixes; anything may still change between `0.x` releases.
 
+## [Unreleased] — 0.6.0 work
+
+### Added
+- 1920×1080 Default and Default (Filter Applied) presets (boxes only). All six
+  1920×1080 pair/state cases and all nine 1366×768 cases pass the client-tier
+  saved-frame corpus.
+- Saturation-aware white-ink key for the level tile. The level seeder and reader
+  try both plain luma and the key and keep the longer valid read, so Ideal is
+  unchanged while the Filtered tile no longer merges with a digit.
+- Windows OCR fallback for the 1920 Default/Filtered name, job and minimap
+  labels. `Windows.Media.Ocr` is an OS component; no model is shipped.
+- Client-table snapping and suffix-only DTW for map labels whose trailing
+  `<N>` Windows OCR drops (`Free Market <8>`), for both expanded and folded
+  minimaps.
+- Glyph/OCR identity fusion: a confident leading glyph restores a character
+  OCR dropped (`age` + glyph `p` → `Page`).
+- `hud-low-percent.png` regression fixture and a test for the live
+  `2,056[1.06%]` readout; the missing 1×2 period variant is now seeded.
+- Live Filtered EXP fixtures `exp-21865.png`, `exp-26487.png` and
+  `exp-36818.png`, a profile-seeded test for the near-miss leading digit,
+  hermetic unit tests for the tolerant readout/level matchers, and a
+  digit-sweep test covering `0-9` plus punctuation across the live crops.
+- The level readout now uses the same ordered matcher as EXP (strict → split a
+  touching pair → tolerant near miss) instead of the strict-only text path.
+- EXP/level/pct are validated as a frame: a mismatch reports both EXP and level
+  as unrecognised while keeping map/name/job.
+- Third-party notice for mpl-ocr (MIT); its ideas are reimplemented with no
+  runtime dependency. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and
+  decision D31.
+
+### Fixed
+- Filtered name no longer bakes a partial GDI fit into the atlas as a wrong
+  letter; partial fits go to the OCR fallback, and an uncertain line is
+  reported as unknown rather than `Furoh ood`.
+- Default job reads `Page` instead of `p ge`.
+- Filtered folded minimap reads `Hidden Street / Free Market <8>` instead of a
+  wrong map name; the suffix splitter ignores the bar's zoom controls and badge.
+- Filtered EXP punctuation: a leading-zero percentage no longer loses its
+  period; comma/period shapes are inferred from the readout grammar when the
+  atlas drifts.
+- Filtered EXP no longer drops a near-miss digit (the leading `3`, a 4×11 `1`)
+  or a touching pair, so `36,818[18.90%]` reads in full instead of
+  `36,88[18.90%]`/`6,818[18.90%]`. The tolerant match is gated by the existing
+  level/percentage cross-check.
+- Map labels now prefer an exact client-table match from OCR and accept a clear
+  fuzzy winner when OCR reads one character wrong (`Deep Vallev I` →
+  `Deep Valley I`). Added the live `Warning Street / Deep Valley I` minimap as
+  `minimap-deep-valley.png` and a focused regression test.
+- A map missing from the client's name table is now named from the OCR label
+  before the learned glyph atlas. `Where the Balrogs Live` no longer becomes
+  `Western Swamp`, and a one-line label reports no street. Known names still
+  snap to the client table; the literal fallback is covered by resolution tests.
+- An exact OCR map match now outranks the whole-line rendered DTW, which could
+  read a single trailing `I` as `III`. The live `Victoria Road / The Tree That
+  Grew I` minimap is `minimap-tree-1.png` with a focused regression test.
+- The overlay no longer truncates long map names at 30 characters or ellipsizes
+  them. The map and street rows wrap, and the existing panel-height observer
+  grows the window to fit.
+- When the game window is lost, the overlay status line now shows only the
+  capture reason (e.g. `game window not found`). Stale `name`/`job` not
+  recognised warnings from the previous reading are suppressed; a minimap
+  warning no longer joins that message either.
+- The 1 Hz loop was taking about 10 s per read because name/job atlases were
+  re-seeded from Arial on every tick and map matching ran every tick. The
+  profile's merged identity atlas is now reused, map results are cached by
+  label pixels, and successful reads are emitted to the overlay immediately
+  (history still waits for three good reads). A map change now appears in a
+  couple of seconds instead of 10–20.
+- A disagreement between the EXP readout, its percentage and the level no
+  longer leaves a plausible but wrong EXP on screen while dropping only the
+  level; the frame reports both as unrecognised.
+- A close percentage error no longer invalidates a valid level and EXP. The
+  percentage is redundant, so a gap of up to 1 pp is recomputed from
+  `exp / required(level)`; a larger disagreement still rejects both. The live
+  `45,458[23.83%]` read at level 36 (screen `23.33%`) keeps its level and EXP.
+
+### Known issues
+- One live Filtered `8` shape is not represented in the atlas:
+  `26,487[13.58%]` reads `26,467[13.59%]`. The correct `8` scores ~29 while
+  `6`/`9` score ~10–12, and the 20-EXP difference still fits the percentage
+  rounding. The digit sweep records it; the filter-variant work is tracked in
+  [docs/ROADMAP.md](docs/ROADMAP.md).
+
 ## [0.5.0] - 2026-11-15
 
 ### Added

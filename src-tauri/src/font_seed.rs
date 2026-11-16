@@ -32,6 +32,11 @@ const OFFSETS: [(i32, i32); 3] = [(0, 0), (1, 0), (2, 0)];
 // exact name/job, so a wrong size is caught there rather than guessed silently.
 const IDENTITY_MAX_SCORE: f64 = 50.0;
 
+/// A candidate that leaves a shape unexplained is worse than one whose mean
+/// distance is slightly higher. Without this, Default Ratio could pick an 18 px
+/// render that matches two job letters exactly and drops the other two.
+const UNKNOWN_SHAPE_PENALTY: f64 = 50.0;
+
 /// Seed a 1-bit identity atlas (name/job) from the live crop.
 pub fn seed_identity(gray: &Gray) -> Option<(settings::Atlas, u32)> {
     // Ideal's name/job are 1-bit Arial; Default Ratio at 1920 is anti-aliased.
@@ -84,46 +89,54 @@ fn seed(
     // best match can be well above it.
     let high = (hint + 14).min(36);
 
-    let mut best: Option<(f64, Vec<AtlasGlyph>, i32)> = None;
+    let mut best: Option<(f64, f64, f64, Vec<AtlasGlyph>, i32)> = None;
     for &(anti_aliased, threshold) in modes {
         for px in low..=high {
             let glyphs = match render_mode("Arial", px, anti_aliased, threshold, charset) {
                 Ok(glyphs) => glyphs,
                 Err(_) => continue,
             };
-            let Some(score) = score(&glyphs, gray) else {
+            let Some((rank, mean, unknown)) = score(&glyphs, gray) else {
                 continue;
             };
-            if best
-                .as_ref()
-                .map_or(true, |(best_score, _, _)| score < *best_score)
+            // A render that explains every shape may sit a little above the
+            // normal text threshold (Default Ratio's anti-aliasing); a render
+            // that drops shapes must still meet it.
+            let acceptable = mean <= max_score || (unknown == 0.0 && mean <= max_score * 1.5);
+            if acceptable
+                && best
+                    .as_ref()
+                    .map_or(true, |(best_rank, _, _, _, _)| rank < *best_rank)
             {
-                best = Some((score, glyphs, px));
+                best = Some((rank, mean, unknown, glyphs, px));
             }
         }
     }
 
-    let (score, glyphs, px) = best?;
-    if score > max_score {
-        return None;
-    }
+    let (_, _mean, _unknown, glyphs, px) = best?;
 
     let mut atlas = Atlas::default();
     for glyph in glyphs {
         atlas.learn_glyph(glyph.ch, glyph.bitmap, glyph.w, glyph.h);
     }
-    // The Default rendering is anti-aliased; learn the exact live shapes that the
-    // render already explains, so the first read is not a near miss.
-    atlas.learn_text_rendering(gray);
+    // Learn the live rendering only when the GDI atlas explains every shape. A
+    // partial fit is a wrong size or a filtered rendering; learning it would bake
+    // a wrong letter (the Filtered `Euroh ood`) into the atlas as an exact variant.
+    let guesses = atlas.explain_text(gray);
+    if !guesses.is_empty() && guesses.iter().all(|guess| guess.known) {
+        atlas.learn_text_rendering(gray);
+    }
     let mut stored = atlas.to_settings();
     stored.format = 2;
     stored.source = "font".into();
     Some((stored, px as u32))
 }
 
-/// Mean best-match distance of every segmented shape in `gray` against `glyphs`.
-/// The correct font size reproduces the crop, so its mean is near zero.
-fn score(glyphs: &[AtlasGlyph], gray: &Gray) -> Option<f64> {
+/// `(rank, mean)` for a candidate render. The mean is the best-match distance
+/// of every segmented shape; the correct font size reproduces the crop, so its
+/// mean is near zero. The rank penalizes unexplained shapes so a size that
+/// matches two letters exactly and drops two cannot win on mean alone.
+fn score(glyphs: &[AtlasGlyph], gray: &Gray) -> Option<(f64, f64, f64)> {
     let mut atlas = Atlas::default();
     for glyph in glyphs {
         atlas.learn_glyph(glyph.ch, glyph.bitmap.clone(), glyph.w, glyph.h);
@@ -133,7 +146,9 @@ fn score(glyphs: &[AtlasGlyph], gray: &Gray) -> Option<f64> {
         return None;
     }
     let total: f64 = guesses.iter().map(|guess| guess.distance).sum();
-    Some(total / guesses.len() as f64)
+    let mean = total / guesses.len() as f64;
+    let unknown = guesses.iter().filter(|guess| !guess.known).count() as f64;
+    Some((mean + unknown * UNKNOWN_SHAPE_PENALTY, mean, unknown))
 }
 
 #[cfg(windows)]
@@ -202,14 +217,7 @@ fn render_variant(
         bmi.bmiHeader.biCompression = BI_RGB;
 
         let mut bits: *mut c_void = std::ptr::null_mut();
-        let bitmap = CreateDIBSection(
-            dc,
-            &bmi,
-            DIB_RGB_COLORS,
-            &mut bits,
-            std::ptr::null_mut(),
-            0,
-        );
+        let bitmap = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
         if bitmap.is_null() || bits.is_null() {
             DeleteDC(dc);
             return Err("CreateDIBSection failed".into());
@@ -221,7 +229,11 @@ fn render_variant(
             0,
             0,
             0,
-            if bold { FW_BOLD as i32 } else { FW_NORMAL as i32 },
+            if bold {
+                FW_BOLD as i32
+            } else {
+                FW_NORMAL as i32
+            },
             0,
             0,
             0,
@@ -285,9 +297,7 @@ fn render_variant(
         DeleteDC(dc);
 
         out.sort_by_key(|glyph| (glyph.ch, glyph.w, glyph.h));
-        out.dedup_by(|a, b| {
-            a.ch == b.ch && a.w == b.w && a.h == b.h && a.bitmap == b.bitmap
-        });
+        out.dedup_by(|a, b| a.ch == b.ch && a.w == b.w && a.h == b.h && a.bitmap == b.bitmap);
         Ok(out)
     }
 }
@@ -340,14 +350,7 @@ pub(crate) fn render_text_bitmap(
         bmi.bmiHeader.biBitCount = 32;
         bmi.bmiHeader.biCompression = BI_RGB;
         let mut bits: *mut c_void = std::ptr::null_mut();
-        let bitmap = CreateDIBSection(
-            dc,
-            &bmi,
-            DIB_RGB_COLORS,
-            &mut bits,
-            std::ptr::null_mut(),
-            0,
-        );
+        let bitmap = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
         if bitmap.is_null() || bits.is_null() {
             DeleteDC(dc);
             return None;
@@ -358,7 +361,11 @@ pub(crate) fn render_text_bitmap(
             0,
             0,
             0,
-            if bold { FW_BOLD as i32 } else { FW_NORMAL as i32 },
+            if bold {
+                FW_BOLD as i32
+            } else {
+                FW_NORMAL as i32
+            },
             0,
             0,
             0,
@@ -420,233 +427,6 @@ pub(crate) fn render_text_bitmap(
     None
 }
 
-/// Characters that can appear in a street or map label.
-#[allow(dead_code)] // used by the segmentation-free OCR prototype/tests
-const LABEL_CHARS: &str = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-
-#[cfg(windows)]
-#[allow(dead_code)] // used by the segmentation-free OCR prototype/tests
-#[derive(Clone)]
-pub struct LabelGlyph {
-    ch: char,
-    advance: i32,
-    /// Cell in origin coordinates: width = advance, height = the font's ink
-    /// height, with the glyph's ink at its left bearing and aligned to the
-    /// tallest ink in the character set.
-    cell: Gray,
-}
-
-#[cfg(windows)]
-#[allow(dead_code)] // used by the segmentation-free OCR prototype/tests
-pub struct LabelFont {
-    glyphs: Vec<LabelGlyph>,
-    cell_h: i32,
-    max_left: i32,
-    max_advance: i32,
-}
-
-#[cfg(windows)]
-#[allow(dead_code)] // used by the segmentation-free OCR prototype/tests
-fn label_font() -> Option<&'static LabelFont> {
-    use std::sync::OnceLock;
-
-    static FONT: OnceLock<Option<LabelFont>> = OnceLock::new();
-    FONT.get_or_init(|| build_label_font("Arial", 12, true, 4, 180))
-        .as_ref()
-}
-
-#[cfg(windows)]
-#[allow(dead_code)] // used by the segmentation-free OCR prototype/tests
-fn build_label_font(
-    face: &str,
-    px: i32,
-    bold: bool,
-    quality: u8,
-    threshold: u8,
-) -> Option<LabelFont> {
-    use std::ffi::c_void;
-
-    use windows_sys::Win32::Graphics::Gdi::{
-        CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, GetCharWidth32W,
-        SelectObject, SetBkColor, SetBkMode, SetTextColor, TextOutW, BITMAPINFO, BITMAPINFOHEADER,
-        BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, FF_DONTCARE,
-        FW_BOLD, FW_NORMAL, OUT_DEFAULT_PRECIS, TRANSPARENT,
-    };
-
-    let canvas = 64i32;
-    let margin = 16i32;
-    let face_wide: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
-
-    unsafe {
-        let dc = CreateCompatibleDC(std::ptr::null_mut());
-        if dc.is_null() {
-            return None;
-        }
-        let mut bmi: BITMAPINFO = std::mem::zeroed();
-        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        bmi.bmiHeader.biWidth = canvas;
-        bmi.bmiHeader.biHeight = -canvas;
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB;
-        let mut bits: *mut c_void = std::ptr::null_mut();
-        let bitmap = CreateDIBSection(
-            dc,
-            &bmi,
-            DIB_RGB_COLORS,
-            &mut bits,
-            std::ptr::null_mut(),
-            0,
-        );
-        if bitmap.is_null() || bits.is_null() {
-            DeleteDC(dc);
-            return None;
-        }
-        let old_bitmap = SelectObject(dc, bitmap);
-        let font = CreateFontW(
-            -px,
-            0,
-            0,
-            0,
-            if bold { FW_BOLD as i32 } else { FW_NORMAL as i32 },
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET as u32,
-            OUT_DEFAULT_PRECIS as u32,
-            CLIP_DEFAULT_PRECIS as u32,
-            quality as u32,
-            (DEFAULT_PITCH | FF_DONTCARE) as u32,
-            face_wide.as_ptr(),
-        );
-        if font.is_null() {
-            SelectObject(dc, old_bitmap);
-            DeleteObject(bitmap);
-            DeleteDC(dc);
-            return None;
-        }
-        let old_font = SelectObject(dc, font);
-        SetBkMode(dc, TRANSPARENT as i32);
-        SetTextColor(dc, 0x00FF_FFFF);
-        SetBkColor(dc, 0x0000_0000);
-
-        struct Raw {
-            ch: char,
-            advance: i32,
-            left: i32,
-            top: i32,
-            w: i32,
-            h: i32,
-            bitmap: Vec<u8>,
-        }
-
-        let mut raw = Vec::new();
-        for ch in LABEL_CHARS.chars() {
-            let mut advance = 0i32;
-            GetCharWidth32W(dc, ch as u32, ch as u32, &mut advance);
-            advance = advance.max(1);
-
-            std::ptr::write_bytes(bits as *mut u8, 0, (canvas * canvas * 4) as usize);
-            if ch != ' ' {
-                let mut code = [ch as u16];
-                TextOutW(dc, margin, margin, code.as_mut_ptr(), 1);
-            }
-
-            let pixels =
-                std::slice::from_raw_parts(bits as *const u8, (canvas * canvas * 4) as usize);
-            let mut mask = vec![0u8; (canvas * canvas) as usize];
-            for index in 0..mask.len() {
-                let luminance = (pixels[index * 4] as u32
-                    + pixels[index * 4 + 1] as u32
-                    + pixels[index * 4 + 2] as u32)
-                    / 3;
-                if luminance >= threshold as u32 {
-                    mask[index] = 255;
-                }
-            }
-            let Some(trimmed) = trim_bitmap(&mask, canvas as u32, canvas as u32) else {
-                raw.push(Raw {
-                    ch,
-                    advance,
-                    left: 0,
-                    top: 0,
-                    w: 0,
-                    h: 0,
-                    bitmap: Vec::new(),
-                });
-                continue;
-            };
-            let left = trimmed.min_x as i32 - margin;
-            let top = trimmed.min_y as i32 - margin;
-            raw.push(Raw {
-                ch,
-                advance,
-                left,
-                top,
-                w: trimmed.w as i32,
-                h: trimmed.h as i32,
-                bitmap: trimmed.bitmap,
-            });
-        }
-
-        SelectObject(dc, old_font);
-        SelectObject(dc, old_bitmap);
-        DeleteObject(font);
-        DeleteObject(bitmap);
-        DeleteDC(dc);
-
-        let min_top = raw
-            .iter()
-            .filter(|glyph| glyph.w > 0)
-            .map(|glyph| glyph.top)
-            .min()?;
-        let max_bottom = raw
-            .iter()
-            .filter(|glyph| glyph.w > 0)
-            .map(|glyph| glyph.top + glyph.h)
-            .max()?;
-        let cell_h = (max_bottom - min_top).max(1);
-        let max_left = raw.iter().map(|glyph| glyph.left).max().unwrap_or(0);
-        let max_advance = raw.iter().map(|glyph| glyph.advance).max().unwrap_or(1);
-
-        let mut glyphs = Vec::new();
-        for glyph in raw {
-            let advance = glyph.advance.max(glyph.left + glyph.w).max(1);
-            let mut cell = vec![0u8; (advance * cell_h) as usize];
-            for y in 0..glyph.h {
-                for x in 0..glyph.w {
-                    let cx = glyph.left + x;
-                    let cy = glyph.top - min_top + y;
-                    if cx >= 0
-                        && cy >= 0
-                        && cx < advance
-                        && cy < cell_h
-                        && glyph.bitmap[(y * glyph.w + x) as usize] > 0
-                    {
-                        cell[(cy * advance + cx) as usize] = 255;
-                    }
-                }
-            }
-            glyphs.push(LabelGlyph {
-                ch: glyph.ch,
-                advance,
-                cell: Gray {
-                    w: advance as usize,
-                    h: cell_h as usize,
-                    px: cell,
-                },
-            });
-        }
-
-        Some(LabelFont {
-            glyphs,
-            cell_h,
-            max_left,
-            max_advance,
-        })
-    }
-}
-
 fn binarize_gray(gray: &Gray, threshold: u8) -> Gray {
     Gray {
         w: gray.w,
@@ -657,159 +437,6 @@ fn binarize_gray(gray: &Gray, threshold: u8) -> Gray {
             .map(|pixel| if *pixel > threshold { 255 } else { 0 })
             .collect(),
     }
-}
-
-#[cfg(windows)]
-#[allow(dead_code)] // used by the segmentation-free OCR prototype/tests
-fn cell_cost(live: &Gray, x: i32, y: i32, glyph: &LabelGlyph, width: i32) -> f64 {
-    let mut cost = 0u32;
-    for yy in 0..glyph.cell.h as i32 {
-        let ly = y + yy;
-        for xx in 0..width {
-            let lx = x + xx;
-            let a = if lx >= 0 && ly >= 0 && lx < live.w as i32 && ly < live.h as i32 {
-                live.px[ly as usize * live.w + lx as usize]
-            } else {
-                0
-            };
-            let b = if xx < glyph.cell.w as i32 {
-                glyph.cell.px[yy as usize * glyph.cell.w + xx as usize]
-            } else {
-                0
-            };
-            if (a > 0) != (b > 0) {
-                cost += 1;
-            }
-        }
-    }
-    cost as f64
-}
-
-/// Read one map/street label line with Arial Bold 12 and a dynamic-programming
-/// search. Unlike column segmentation, the DP places whole glyph cells, so a
-/// letter whose anti-aliased strokes leave empty columns is still compared as a
-/// whole and cannot fragment into stems.
-#[cfg(windows)]
-#[allow(dead_code)] // used by the segmentation-free OCR prototype/tests
-pub fn read_label_line(gray: &Gray) -> Option<String> {
-    let font = label_font()?;
-    let mut best: Option<(f64, String)> = None;
-
-    for threshold in [160u8, 170, 180, 190, 200] {
-        let live = binarize_gray(gray, threshold);
-        let left_pad = font.max_left.max(0) as usize;
-        let right_pad = font.max_advance.max(1) as usize;
-        let w = live.w + left_pad + right_pad;
-        let h = live.h + 4;
-        let mut px = vec![0u8; w * h];
-        for y in 0..live.h {
-            for x in 0..live.w {
-                if live.px[y * live.w + x] > 0 {
-                    px[(y + 2) * w + x + left_pad] = 255;
-                }
-            }
-        }
-        let padded = Gray { w, h, px };
-
-        for cy in 2..=2 {
-            for scale in [1.0f64] {
-            let inf = f64::INFINITY;
-            let mut dp = vec![inf; w + 1];
-            let mut prev: Vec<Option<(usize, Option<char>)>> = vec![None; w + 1];
-            dp[..=left_pad].fill(0.0);
-
-            for x in 0..w {
-                if !dp[x].is_finite() {
-                    continue;
-                }
-                let ink = (0..font.cell_h)
-                    .filter(|yy| {
-                        let ly = cy + yy;
-                        ly >= 0 && ly < h as i32 && padded.px[ly as usize * w + x] > 0
-                    })
-                    .count();
-                let skip = 1.0 + ink as f64 * 3.0;
-                if dp[x] + skip < dp[x + 1] {
-                    dp[x + 1] = dp[x] + skip;
-                    prev[x + 1] = Some((x, None));
-                }
-
-                for glyph in &font.glyphs {
-                    let cw = ((glyph.advance as f64) * scale).round() as i32;
-                    if cw <= 0 {
-                        continue;
-                    }
-                    let next = x + cw as usize;
-                    if next > w {
-                        continue;
-                    }
-                    for shift in -2..=2 {
-                        let sx = x as i32 + shift;
-                        if sx < 0 {
-                            continue;
-                        }
-                        let cost = cell_cost(&padded, sx, cy, glyph, cw)
-                            + 0.2
-                            + (cw - glyph.advance).unsigned_abs() as f64 * 0.01
-                            + shift.abs() as f64 * 0.05;
-                        if dp[x] + cost < dp[next] {
-                            dp[next] = dp[x] + cost;
-                            prev[next] = Some((x, Some(glyph.ch)));
-                        }
-                    }
-                }
-            }
-
-            let start = w.saturating_sub(right_pad + 2);
-            let mut end = w;
-            let mut score = f64::INFINITY;
-            for (x, value) in dp.iter().enumerate().take(w + 1).skip(start) {
-                if *value < score {
-                    score = *value;
-                    end = x;
-                }
-            }
-            if !score.is_finite() {
-                continue;
-            }
-
-            let mut chars = Vec::new();
-            let mut x = end;
-            while x > left_pad {
-                let Some((previous, ch)) = prev[x] else {
-                    break;
-                };
-                if let Some(ch) = ch {
-                    chars.push(ch);
-                }
-                x = previous;
-                if x == 0 {
-                    break;
-                }
-            }
-            chars.reverse();
-            let text: String = chars.into_iter().collect();
-            let text = text.trim().to_string();
-            if text.is_empty() {
-                continue;
-            }
-            if best
-                .as_ref()
-                .map_or(true, |(best_score, _)| score < *best_score)
-            {
-                best = Some((score, text));
-            }
-            }
-        }
-    }
-
-    best.map(|(_, text)| text)
-}
-
-#[cfg(not(windows))]
-#[allow(dead_code)]
-pub fn read_label_line(_gray: &Gray) -> Option<String> {
-    None
 }
 
 fn column_bits(gray: &Gray, shift: i32) -> Vec<u32> {
@@ -894,10 +521,7 @@ static LABEL_INDEX: std::sync::Mutex<Vec<(String, std::sync::Arc<LabelIndex>)>> 
 /// anti-aliased) and cached per size. Matching a live line is then a width filter
 /// plus a shape-sequence DTW, so no column segmentation is involved. Default
 /// Ratio draws the label larger than Ideal, so the caller tries several sizes.
-pub fn label_index(
-    mscw_dir: &std::path::Path,
-    px: u32,
-) -> Option<std::sync::Arc<LabelIndex>> {
+pub fn label_index(mscw_dir: &std::path::Path, px: u32) -> Option<std::sync::Arc<LabelIndex>> {
     let key = format!("{}#{px}", mscw_dir.to_string_lossy());
     let mut guard = LABEL_INDEX
         .lock()
@@ -989,6 +613,100 @@ pub fn match_folded_label(
     Some((best_candidate.0.clone(), best_score))
 }
 
+/// The last word-like run of a label line: the text after its final wide gap.
+/// `Free Market <8>` splits to `<8>`, which is what distinguishes map instances
+/// that share a base name.
+fn binarized_suffix(gray: &Gray) -> Option<Gray> {
+    let binary = binarize_gray(gray, 180);
+    let ink = |x: usize| (0..binary.h).any(|y| binary.px[y * binary.w + x] > 0);
+    let mut runs = Vec::new();
+    let mut x = 0;
+    while x < binary.w {
+        if !ink(x) {
+            let start = x;
+            while x < binary.w && !ink(x) {
+                x += 1;
+            }
+            runs.push((start, x - start));
+        } else {
+            x += 1;
+        }
+    }
+    // The folded bar draws zoom controls and the WORLD badge to the right of
+    // the text, separated by a wide blank gap. Ignore that tail so the suffix
+    // is the map text's last token, not a control icon.
+    let mut limit = binary.w;
+    while let Some((start, len)) = runs.last().copied() {
+        if len >= 10 && start > binary.w / 2 {
+            limit = start;
+            runs.pop();
+        } else {
+            break;
+        }
+    }
+    let pick = |min_len: usize| {
+        runs.iter()
+            .rev()
+            .find(|(start, len)| {
+                if *len < min_len || *start <= binary.w / 2 || *start + *len > limit {
+                    return false;
+                }
+                let suffix_width = limit - (*start + *len);
+                (8..=64).contains(&suffix_width)
+            })
+            .copied()
+    };
+    // A word space is wider than the gaps between glyphs; prefer it so the
+    // suffix starts at `<N>`, not inside it (where `<8>` would look like `<18>`).
+    let (start, len) = pick(4).or_else(|| pick(2))?;
+    let x0 = start + len;
+    if x0 + 4 >= limit {
+        return None;
+    }
+    let mut y0 = binary.h;
+    let mut y1 = 0;
+    for yy in 0..binary.h {
+        for xx in x0..limit {
+            if binary.px[yy * binary.w + xx] > 0 {
+                y0 = y0.min(yy);
+                y1 = y1.max(yy + 1);
+            }
+        }
+    }
+    if y0 >= y1 {
+        return None;
+    }
+    let mut suffix = Gray {
+        w: limit - x0,
+        h: y1 - y0,
+        px: Vec::new(),
+    };
+    for yy in y0..y1 {
+        suffix
+            .px
+            .extend_from_slice(&binary.px[yy * binary.w + x0..yy * binary.w + limit]);
+    }
+    Some(suffix)
+}
+
+/// DTW distance between the trailing token of a live label and a rendered
+/// candidate. Comparing only the suffix keeps the shared `Free Market` prefix
+/// from diluting the one character that identifies the instance.
+pub(crate) fn suffix_distance(live: &Gray, rendered: &Gray) -> Option<f64> {
+    let live = binarized_suffix(live)?;
+    let rendered = binarized_suffix(rendered)?;
+    if live.w == 0 || rendered.w == 0 {
+        return None;
+    }
+    let ratio = rendered.w as f64 / live.w as f64;
+    if !(0.4..=2.2).contains(&ratio) {
+        return None;
+    }
+    let live = crate::ocr::resample(&live, 60, 16);
+    let rendered = crate::ocr::resample(&rendered, 60, 16);
+    Some(dtw_distance(&live, &rendered))
+}
+
 /// Match a live label line against rendered candidates. The width filter is what
 /// keeps this cheap: a 142 px live line can only be a name that renders near
 /// 142 px.
@@ -1071,6 +789,394 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "diagnostic: folded-bar suffix art"]
+    fn probe_folded_suffix_art() {
+        let dir = std::env::var("MSCOUT_MSCW_DIR")
+            .ok()
+            .or_else(crate::settings::mscw_dir)
+            .expect("MSCW dir");
+        let dir = std::path::Path::new(&dir);
+        let art = |gray: &Gray| -> String {
+            let binary = binarize_gray(gray, 180);
+            (0..binary.h)
+                .map(|y| {
+                    (0..binary.w)
+                        .map(|x| {
+                            if binary.px[y * binary.w + x] > 0 {
+                                '#'
+                            } else {
+                                '.'
+                            }
+                        })
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        for pair in ["1920x1080", "1920x1080@filtered"] {
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("testdata/{pair}/minimap-folded.png"));
+            let image = image::open(&path).expect("folded fixture").to_rgba8();
+            let frame = crate::capture::Frame {
+                width: image.width(),
+                height: image.height(),
+                rgba: image.into_raw(),
+            };
+            let Some(minimap) = crate::ocr::detect_minimap(&frame) else {
+                continue;
+            };
+            let Some(label) = crate::ocr::folded_label(&frame, &minimap) else {
+                continue;
+            };
+            println!("== {pair} label {}x{}", label.w, label.h);
+            let binary = binarize_gray(&label, 180);
+            let ink = |x: usize| (0..binary.h).any(|y| binary.px[y * binary.w + x] > 0);
+            let mut runs = Vec::new();
+            let mut x = 0;
+            while x < binary.w {
+                if !ink(x) {
+                    let start = x;
+                    while x < binary.w && !ink(x) {
+                        x += 1;
+                    }
+                    runs.push((start, x - start));
+                } else {
+                    x += 1;
+                }
+            }
+            println!("gaps: {:?}", runs);
+            println!("label art:\n{}", art(&label));
+            if let Some(suffix) = binarized_suffix(&label) {
+                println!(
+                    "live suffix {}x{} art:\n{}",
+                    suffix.w,
+                    suffix.h,
+                    art(&suffix)
+                );
+            } else {
+                println!("live suffix: none");
+            }
+            for px in [18u32, 20, 22, 24] {
+                let Some(index) = label_index(dir, px) else {
+                    continue;
+                };
+                let Some((_, rendered)) = index
+                    .folded_lines
+                    .iter()
+                    .find(|((s, n), _)| s == "Hidden Street" && n == "Free Market <8>")
+                else {
+                    continue;
+                };
+                println!("  px {px} rendered {}x{}", rendered.w, rendered.h);
+                if let Some(suffix) = binarized_suffix(rendered) {
+                    println!(
+                        "    rendered suffix {}x{} art:\n{}",
+                        suffix.w,
+                        suffix.h,
+                        art(&suffix)
+                    );
+                } else {
+                    println!("    rendered suffix: none");
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "diagnostic: Free Market suffix matching at 1920 Default/Filtered"]
+    fn probe_free_market_suffix() {
+        let dir = std::env::var("MSCOUT_MSCW_DIR")
+            .ok()
+            .or_else(crate::settings::mscw_dir)
+            .expect("MSCW dir");
+        let dir = std::path::Path::new(&dir);
+        for pair in ["1920x1080", "1920x1080@filtered"] {
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("testdata/{pair}/minimap-expanded.png"));
+            let image = image::open(&path).expect("minimap fixture").to_rgba8();
+            let frame = crate::capture::Frame {
+                width: image.width(),
+                height: image.height(),
+                rgba: image.into_raw(),
+            };
+            let Some(lines) = crate::ocr::map_label_lines(&frame) else {
+                continue;
+            };
+            let Some(live) = lines.last() else { continue };
+            println!("== {pair} live {}x{}", live.w, live.h);
+            let live_suffix = binarized_suffix(live);
+            for px in [12u32, 14, 16, 18, 20, 22, 24] {
+                let Some(index) = label_index(dir, px) else {
+                    continue;
+                };
+                let candidates: Vec<(String, Gray)> = index
+                    .map_names
+                    .iter()
+                    .filter(|(name, _)| name.starts_with("Free Market"))
+                    .cloned()
+                    .collect();
+                let current = match_label(live, &candidates, 14, 10.0);
+                let mut normalized = Vec::new();
+                for (name, rendered) in &candidates {
+                    let live_n = crate::ocr::resample(live, 240, 16);
+                    let rendered_n = crate::ocr::resample(rendered, 240, 16);
+                    let score = dtw_distance(&live_n, &rendered_n);
+                    normalized.push((score, name.clone(), rendered.w, rendered.h));
+                }
+                normalized.sort_by(|a, b| a.0.total_cmp(&b.0));
+                println!(
+                    "  px {px}: current={current:?} normalized={:?}",
+                    normalized.iter().take(3).collect::<Vec<_>>()
+                );
+                if let (Some(street_live), Some((_, street_rendered))) = (
+                    lines.first(),
+                    index
+                        .streets
+                        .iter()
+                        .find(|(name, _)| name == "Hidden Street"),
+                ) {
+                    let scale_x = street_live.w as f64 / street_rendered.w as f64;
+                    let mut by_width: Vec<(f64, String, usize)> = candidates
+                        .iter()
+                        .map(|(name, rendered)| {
+                            (
+                                (rendered.w as f64 * scale_x - live.w as f64).abs(),
+                                name.clone(),
+                                rendered.w,
+                            )
+                        })
+                        .collect();
+                    by_width.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    println!(
+                        "    scale_x={scale_x:.3} by_width={:?}",
+                        by_width.iter().take(3).collect::<Vec<_>>()
+                    );
+                }
+                if let Some(live_suffix) = &live_suffix {
+                    let mut by_suffix: Vec<(f64, String, usize, usize)> = candidates
+                        .iter()
+                        .filter_map(|(name, rendered)| {
+                            let rendered_suffix = binarized_suffix(rendered)?;
+                            let a = crate::ocr::resample(live_suffix, 60, 16);
+                            let b = crate::ocr::resample(&rendered_suffix, 60, 16);
+                            Some((
+                                dtw_distance(&a, &b),
+                                name.clone(),
+                                rendered_suffix.w,
+                                rendered_suffix.h,
+                            ))
+                        })
+                        .collect();
+                    by_suffix.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    println!(
+                        "    by_suffix={:?}",
+                        by_suffix.iter().take(3).collect::<Vec<_>>()
+                    );
+                }
+            }
+
+            let art = |gray: &Gray| -> String {
+                let binary = binarize_gray(gray, 180);
+                (0..binary.h)
+                    .map(|y| {
+                        (0..binary.w)
+                            .map(|x| {
+                                if binary.px[y * binary.w + x] > 0 {
+                                    '#'
+                                } else {
+                                    '.'
+                                }
+                            })
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            println!("  live art:\n{}", art(live));
+            let binary = binarize_gray(live, 180);
+            let ink = |x: usize| (0..binary.h).any(|y| binary.px[y * binary.w + x] > 0);
+            let mut runs = Vec::new();
+            let mut x = 0;
+            while x < binary.w {
+                if !ink(x) {
+                    let start = x;
+                    while x < binary.w && !ink(x) {
+                        x += 1;
+                    }
+                    runs.push((start, x - start));
+                } else {
+                    x += 1;
+                }
+            }
+            if let Some((start, len)) = runs
+                .iter()
+                .rev()
+                .find(|(start, len)| *len >= 2 && *start > binary.w / 2)
+                .copied()
+            {
+                let x0 = start + len;
+                if x0 + 4 < binary.w {
+                    let mut y0 = binary.h;
+                    let mut y1 = 0;
+                    for yy in 0..binary.h {
+                        for xx in x0..binary.w {
+                            if binary.px[yy * binary.w + xx] > 0 {
+                                y0 = y0.min(yy);
+                                y1 = y1.max(yy + 1);
+                            }
+                        }
+                    }
+                    if y0 < y1 {
+                        let mut suffix = Gray {
+                            w: binary.w - x0,
+                            h: y1 - y0,
+                            px: Vec::new(),
+                        };
+                        for yy in y0..y1 {
+                            suffix.px.extend_from_slice(
+                                &binary.px[yy * binary.w + x0..yy * binary.w + binary.w],
+                            );
+                        }
+                        println!(
+                            "  suffix at {x0} {}x{} art:\n{}",
+                            suffix.w,
+                            suffix.h,
+                            art(&suffix)
+                        );
+                        let segments = crate::ocr::text_segments(&suffix);
+                        println!(
+                            "  suffix segments {:?}",
+                            segments.iter().map(|s| (s.x, s.w, s.h)).collect::<Vec<_>>()
+                        );
+                        for (index, segment) in segments.iter().enumerate() {
+                            if segment.w < 2 {
+                                continue;
+                            }
+                            let mut crop = Gray {
+                                w: segment.w as usize,
+                                h: segment.h as usize,
+                                px: Vec::new(),
+                            };
+                            for yy in segment.y as usize..(segment.y + segment.h as i32) as usize {
+                                for xx in
+                                    segment.x as usize..(segment.x + segment.w as i32) as usize
+                                {
+                                    crop.px.push(binary.px[yy * binary.w + xx]);
+                                }
+                            }
+                            let up = crate::ocr::resample(&crop, crop.w * 4, crop.h * 4);
+                            println!(
+                                "    seg {index} {}x{} ocr={:?}",
+                                crop.w,
+                                crop.h,
+                                crate::winocr::recognize(&up)
+                            );
+                        }
+                    }
+                }
+            }
+            if let Some(index) = label_index(dir, 16) {
+                for name in [
+                    "Free Market <8>",
+                    "Free Market <10>",
+                    "Free Market Entrance",
+                ] {
+                    if let Some((_, rendered)) =
+                        index.map_names.iter().find(|(entry, _)| entry == name)
+                    {
+                        println!(
+                            "  {name} {}x{} art:\n{}",
+                            rendered.w,
+                            rendered.h,
+                            art(rendered)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "diagnostic: identity seed candidates for the 1920 Default/Filtered HUDs"]
+    fn probe_identity_candidates() {
+        let cases = [
+            ("default", "job", 112, 13, 70, 22),
+            ("default", "name", 112, 33, 110, 20),
+            ("filtered", "job", 112, 13, 70, 22),
+            ("filtered", "name", 112, 33, 110, 20),
+        ];
+        for (pair, label, x, y, w, h) in cases {
+            let file = format!(
+                "testdata/{}/hud.png",
+                if pair == "default" {
+                    "1920x1080"
+                } else {
+                    "1920x1080@filtered"
+                }
+            );
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(file);
+            let hud = image::open(&path).expect("hud fixture").to_rgba8();
+            let frame = crate::capture::Frame {
+                width: hud.width(),
+                height: hud.height(),
+                rgba: hud.into_raw(),
+            };
+            let gray = crate::ocr::crop_gray(&frame, crate::settings::Region { x, y, w, h })
+                .expect("crop");
+            let hint = ocr::dominant_glyph_height(&gray).unwrap_or(9).max(4) as i32;
+            let low = (hint - 1).max(6);
+            let high = (hint + 14).min(36);
+            let gap = (gray.h as i32 / 3).max(2);
+
+            let mut rows = Vec::new();
+            for (anti_aliased, threshold) in [(false, 1u8), (true, 96), (true, 128), (true, 160)] {
+                for px in low..=high {
+                    let Ok(glyphs) = render_mode("Arial", px, anti_aliased, threshold, IDENTITY)
+                    else {
+                        continue;
+                    };
+                    let Some((rank, mean, unknown)) = score(&glyphs, &gray) else {
+                        continue;
+                    };
+                    let mut atlas = Atlas::default();
+                    for glyph in &glyphs {
+                        atlas.learn_glyph(glyph.ch, glyph.bitmap.clone(), glyph.w, glyph.h);
+                    }
+                    let guesses = atlas.explain_text(&gray);
+                    let known = guesses.iter().filter(|guess| guess.known).count();
+                    let total = guesses.len();
+                    let read = atlas
+                        .recognize_text(&gray, gap)
+                        .map(|(text, _)| text)
+                        .unwrap_or_default();
+                    rows.push((
+                        rank,
+                        mean,
+                        unknown,
+                        px,
+                        anti_aliased,
+                        threshold,
+                        read,
+                        known,
+                        total,
+                    ));
+                }
+            }
+            rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+            println!(
+                "== {pair} {label} shapes {:?}",
+                crate::ocr::text_segments(&gray).len()
+            );
+            for (rank, mean, unknown, px, aa, threshold, read, known, total) in rows.iter().take(12)
+            {
+                println!(
+                    "  rank={rank:.1} mean={mean:.1} unknown={unknown} px={px} aa={aa} thr={threshold} read={read:?} known={known}/{total}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn identity_case_bar_is_a_lowercase_l_inside_a_word() {
         assert_eq!(fix_identity_case("EurobIood"), "Euroblood");
         assert_eq!(fix_identity_case("Page"), "Page");
@@ -1079,5 +1185,4 @@ mod tests {
         assert_eq!(fix_identity_case("BluebeIl"), "Bluebell");
         assert_eq!(fix_identity_case("Dawn Warrior"), "Dawn Warrior");
     }
-
 }

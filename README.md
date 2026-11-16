@@ -41,8 +41,8 @@ Tray menu offers the same actions plus Quit.
 ## Calibrating
 
 Calibration is a one-time pass per client size and UI Size. Presets ship for
-1366×768 in all three UI sizes and 1920×1080 Ideal; the full flow, preset
-support and troubleshooting are in
+1366×768 and 1920×1080 in all three UI sizes; the full flow, preset support and
+troubleshooting are in
 [docs/SETUP.md §3](docs/SETUP.md#calibrate) and
 [docs/PRESETS.md](docs/PRESETS.md). The overlay reports when a pair needs
 calibration; it never opens the calibration window by itself.
@@ -63,7 +63,7 @@ Sample format and invariants are documented in [docs/DATA.md](docs/DATA.md).
 | [docs/PRESETS.md](docs/PRESETS.md) | Preset and support matrix, reset behavior, limitations |
 | [CHANGELOG.md](CHANGELOG.md) | What each version added, changed and fixed |
 | [docs/SPEC.md](docs/SPEC.md) | Behavioral spec |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | What is built, what is next, known gaps |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Current release, scheduled/deferred work, known limitations |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Decision log — why things are the way they are |
 | [docs/DATA.md](docs/DATA.md) | File formats, profiles, schema, invariants |
 | [docs/TEXT_RENDERING.md](docs/TEXT_RENDERING.md) | Developer reference for HUD glyphs, fonts and text matching |
@@ -90,3 +90,6 @@ data/                runtime data (gitignored — personal, machine-specific)
 [MIT](LICENSE) © 2026 Xin Ye.
 
 Use it, modify it, redistribute it, sell it — just keep the copyright notice and the warranty disclaimer. The simplest licence that keeps the project usable by anyone.
+
+Third-party notices, including the MIT attribution for the mpl-ocr ideas used by
+the 0.6.0 readers, are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

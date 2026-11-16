@@ -111,9 +111,7 @@ fn learning_info(stored: &settings::Atlas) -> LearningInfo {
 pub fn capture_preview(
     state: State<'_, window_target::TargetState>,
 ) -> Result<tauri::ipc::Response, String> {
-    let selector = state
-        .selector()
-        .ok_or("attach a game window first")?;
+    let selector = state.selector().ok_or("attach a game window first")?;
     let window = window_target::resolve_selector(&selector).ok_or("game window not found")?;
     if window.minimized {
         return Err("game window is minimized".into());
@@ -141,9 +139,7 @@ pub fn capture_preview(
 }
 
 #[tauri::command]
-pub fn get_calibration(
-    state: State<'_, window_target::TargetState>,
-) -> Calibration {
+pub fn get_calibration(state: State<'_, window_target::TargetState>) -> Calibration {
     // Make sure a profile is active before reading it. Right after startup the engine
     // may not have ticked yet, and `active()` then has nothing — which handed the
     // window an all-null set it could save straight back over the real one.
@@ -269,7 +265,10 @@ fn learn_region(serial: u64, text: String, target: &str) -> Result<LearningInfo,
     } else {
         settings::save_atlas(&stored)?;
     }
-    log(&format!("learn_region: atlas now {} glyphs", atlas.glyphs.len()));
+    log(&format!(
+        "learn_region: atlas now {} glyphs",
+        atlas.glyphs.len()
+    ));
 
     Ok(learning_info(&stored))
 }
@@ -286,25 +285,21 @@ pub fn seed_atlas(serial: u64) -> Result<LearningInfo, String> {
         .exp
         .filter(Region::is_usable)
         .ok_or("save the EXP box first")?;
-    let gray =
-        ocr::crop_gray(&frame, region).ok_or("the EXP box is outside the window")?;
+    let gray = ocr::crop_gray(&frame, region).ok_or("the EXP box is outside the window")?;
     let dir = settings::mscw_dir().ok_or("choose your MapleStory MSCW folder first")?;
-    let (stored, height) =
-        crate::game_font::seed_exp_atlas(&gray, std::path::Path::new(&dir))?;
+    let (stored, height) = crate::game_font::seed_exp_atlas(&gray, std::path::Path::new(&dir))?;
     settings::save_atlas(&stored)?;
 
     // The level box is optional, but when it is drawn and reads digits, seed it
     // too — it is the same font drawn wider, so it needs no teaching.
     let mut level_note = String::new();
     if let Some(level_region) = calibration.level.filter(Region::is_usable) {
-        if let Some(level_gray) = ocr::crop_gray(&frame, level_region) {
-            match crate::game_font::seed_level_atlas(&level_gray, std::path::Path::new(&dir)) {
-                Ok((level_stored, (w, h))) => {
-                    settings::save_level_atlas(&level_stored)?;
-                    level_note = format!(", level {w}x{h}");
-                }
-                Err(error) => log(&format!("seed_atlas: level not seeded: {error}")),
+        match crate::game_font::seed_level_best(&frame, level_region, std::path::Path::new(&dir)) {
+            Some((level_stored, (w, h), _text)) => {
+                settings::save_level_atlas(&level_stored)?;
+                level_note = format!(", level {w}x{h}");
             }
+            None => log("seed_atlas: level not seeded"),
         }
     }
 
@@ -419,7 +414,9 @@ pub fn teach_street(serial: u64, street: String) -> Result<LearningInfo, String>
 #[tauri::command]
 pub fn teach_identity(serial: u64, kind: String, label: String) -> Result<LearningInfo, String> {
     let label = label.trim().to_string();
-    log(&format!("teach_identity serial={serial} kind={kind} label={label:?}"));
+    log(&format!(
+        "teach_identity serial={serial} kind={kind} label={label:?}"
+    ));
     if label.is_empty() {
         return Err("type the name first".into());
     }
@@ -486,14 +483,10 @@ pub fn parse_probe(serial: u64) -> Result<Readings, String> {
 /// line first (the game draws job above name). The player draws one generous box
 /// around both and each line becomes its own fingerprint region.
 #[tauri::command]
-pub fn split_identity(
-    serial: u64,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-) -> Result<Vec<Region>, String> {
-    log(&format!("split_identity serial={serial} box {x},{y} {w}x{h}"));
+pub fn split_identity(serial: u64, x: i32, y: i32, w: i32, h: i32) -> Result<Vec<Region>, String> {
+    log(&format!(
+        "split_identity serial={serial} box {x},{y} {w}x{h}"
+    ));
     let frame = cached_frame(serial)?;
     let region = Region { x, y, w, h };
     let gray = ocr::crop_gray(&frame, region).ok_or("the box is outside the frame")?;
@@ -512,7 +505,9 @@ pub fn split_identity(
             if height >= 8 {
                 let low = height / 4;
                 let high = height - height / 4;
-                (low..high).map(|row| (row, ink[row])).min_by_key(|(_, count)| *count)
+                (low..high)
+                    .map(|row| (row, ink[row]))
+                    .min_by_key(|(_, count)| *count)
             } else {
                 None
             }
@@ -520,14 +515,21 @@ pub fn split_identity(
             let ink = ocr::row_ink(&gray);
             let bounds = |from: usize, to: usize| {
                 let rows: Vec<usize> = (from..to).filter(|row| ink[*row] > 0).collect();
-                rows.first().zip(rows.last()).map(|(first, last)| (*first, last + 1))
+                rows.first()
+                    .zip(rows.last())
+                    .map(|(first, last)| (*first, last + 1))
             };
 
             if let (Some((top_start, top_end)), Some((bottom_start, bottom_end))) =
                 (bounds(0, split_row), bounds(split_row, ink.len()))
             {
                 lines = vec![
-                    (0, top_start as i32, gray.w as i32, (top_end - top_start) as i32),
+                    (
+                        0,
+                        top_start as i32,
+                        gray.w as i32,
+                        (top_end - top_start) as i32,
+                    ),
                     (
                         0,
                         bottom_start as i32,
@@ -535,7 +537,10 @@ pub fn split_identity(
                         (bottom_end - bottom_start) as i32,
                     ),
                 ];
-                log(&format!("split_identity: fell back to a row split {:?}", lines));
+                log(&format!(
+                    "split_identity: fell back to a row split {:?}",
+                    lines
+                ));
             }
         }
     }
@@ -696,12 +701,8 @@ pub fn clear_maps(client_w: u32, client_h: u32) -> Result<LearningInfo, String> 
 #[tauri::command]
 pub fn apply_preset(client_w: u32, client_h: u32) -> Result<(), String> {
     let ui_mode = crate::settings::ui_mode();
-    let preset = crate::preset::for_size(client_w, client_h, ui_mode).ok_or_else(|| {
-        format!(
-            "no preset for {client_w}x{client_h}{}",
-            ui_mode.suffix()
-        )
-    })?;
+    let preset = crate::preset::for_size(client_w, client_h, ui_mode)
+        .ok_or_else(|| format!("no preset for {client_w}x{client_h}{}", ui_mode.suffix()))?;
     crate::profile::activate(client_w, client_h)?;
     crate::profile::update(|profile| {
         // Only take the boxes the preset actually defines. A preset carries no
@@ -804,7 +805,11 @@ pub(crate) fn log(message: &str) {
         return;
     };
     use std::io::Write;
-    let _ = writeln!(file, "{} {message}", chrono::Local::now().format("%H:%M:%S"));
+    let _ = writeln!(
+        file,
+        "{} {message}",
+        chrono::Local::now().format("%H:%M:%S")
+    );
 }
 
 /// A minimap label at full resolution, so the window can show what it is looking at.
@@ -918,12 +923,7 @@ pub fn map_line_regions(serial: u64) -> Result<Vec<Region>, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
     Ok(ocr::map_label_line_regions(&frame)
-        .map(|lines| {
-            lines
-                .into_iter()
-                .map(|(region, _)| region)
-                .collect()
-        })
+        .map(|lines| lines.into_iter().map(|(region, _)| region).collect())
         .unwrap_or_default())
 }
 
@@ -936,14 +936,8 @@ pub fn map_region(serial: u64) -> Result<Option<Region>, String> {
     if let Some(lines) = ocr::map_label_line_regions(&frame) {
         let left = lines.iter().map(|(region, _)| region.x).min();
         let top = lines.iter().map(|(region, _)| region.y).min();
-        let right = lines
-            .iter()
-            .map(|(region, _)| region.x + region.w)
-            .max();
-        let bottom = lines
-            .iter()
-            .map(|(region, _)| region.y + region.h)
-            .max();
+        let right = lines.iter().map(|(region, _)| region.x + region.w).max();
+        let bottom = lines.iter().map(|(region, _)| region.y + region.h).max();
         if let (Some(left), Some(top), Some(right), Some(bottom)) = (left, top, right, bottom) {
             return Ok(Some(Region {
                 x: left,

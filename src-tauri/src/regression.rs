@@ -186,7 +186,10 @@ fn load_cases() -> Vec<Case> {
     }
     if let Ok(state) = std::env::var("MSCOUT_STATE") {
         cases.retain(|case| case.minimap_state == state);
-        assert!(!cases.is_empty(), "MSCOUT_STATE={state:?} matched no fixture");
+        assert!(
+            !cases.is_empty(),
+            "MSCOUT_STATE={state:?} matched no fixture"
+        );
     }
     cases
 }
@@ -230,7 +233,10 @@ fn load_cases_in(root: &Path) -> Vec<Case> {
             panic!("{pair_key}: cannot read {}: {error}", meta_path.display())
         });
         let meta: Meta = serde_json::from_str(&text).unwrap_or_else(|error| {
-            panic!("{pair_key}: {} is not a complete manifest: {error}", meta_path.display())
+            panic!(
+                "{pair_key}: {} is not a complete manifest: {error}",
+                meta_path.display()
+            )
         });
 
         if meta.minimaps.is_empty() {
@@ -355,10 +361,7 @@ fn compose_frame(case: &Case) -> Frame {
         rgba,
     };
 
-    for (name, rect) in [
-        ("minimap", case.minimap_crop),
-        ("hud", case.meta.crops.hud),
-    ] {
+    for (name, rect) in [("minimap", case.minimap_crop), ("hud", case.meta.crops.hud)] {
         assert!(
             rect.fits(width, height),
             "{}",
@@ -382,7 +385,9 @@ fn expected_state(state: &str) -> Option<MinimapState> {
         "folded" => Some(MinimapState::Folded),
         // No widget on screen at all: nothing to detect.
         "hidden" => None,
-        other => panic!("unknown minimapState {other:?} — the manifest schema has three states plus \"hidden\""),
+        other => panic!(
+            "unknown minimapState {other:?} — the manifest schema has three states plus \"hidden\""
+        ),
     }
 }
 
@@ -407,7 +412,8 @@ fn fixture_corpus_is_complete() {
         // a state subdirectory below it.
         let expected_key = format!("{client_w}x{client_h}{}", mode.suffix());
         assert_eq!(
-            case.pair_key, expected_key,
+            case.pair_key,
+            expected_key,
             "fixture directory {:?} must be named like its preset ({expected_key})",
             case.dir.display()
         );
@@ -431,7 +437,10 @@ fn fixture_corpus_is_complete() {
         assert!(
             settings_path.is_file(),
             "{}",
-            case.label(&format!("settings.png is missing at {}", settings_path.display()))
+            case.label(&format!(
+                "settings.png is missing at {}",
+                settings_path.display()
+            ))
         );
 
         // Crop rects, and the PNGs that must match them pixel for pixel.
@@ -569,16 +578,58 @@ fn crop_bounds_check_rejects_rects_outside_the_client() {
     let (w, h) = (1920u32, 1080u32);
     let (wi, hi) = (w as i32, h as i32);
 
-    assert!(Rect { x: 19, y: 19, w: 226, h: 183 }.fits(w, h));
-    assert!(Rect { x: wi - 10, y: hi - 10, w: 10, h: 10 }.fits(w, h));
+    assert!(Rect {
+        x: 19,
+        y: 19,
+        w: 226,
+        h: 183
+    }
+    .fits(w, h));
+    assert!(Rect {
+        x: wi - 10,
+        y: hi - 10,
+        w: 10,
+        h: 10
+    }
+    .fits(w, h));
 
     for bad in [
-        Rect { x: -1, y: 0, w: 10, h: 10 },
-        Rect { x: 0, y: -1, w: 10, h: 10 },
-        Rect { x: wi - 9, y: 0, w: 10, h: 10 },
-        Rect { x: 0, y: hi - 9, w: 10, h: 10 },
-        Rect { x: 0, y: 0, w: 0, h: 10 },
-        Rect { x: 0, y: 0, w: 10, h: 0 },
+        Rect {
+            x: -1,
+            y: 0,
+            w: 10,
+            h: 10,
+        },
+        Rect {
+            x: 0,
+            y: -1,
+            w: 10,
+            h: 10,
+        },
+        Rect {
+            x: wi - 9,
+            y: 0,
+            w: 10,
+            h: 10,
+        },
+        Rect {
+            x: 0,
+            y: hi - 9,
+            w: 10,
+            h: 10,
+        },
+        Rect {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 10,
+        },
+        Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 0,
+        },
     ] {
         assert!(!bad.fits(w, h), "{bad:?} must not fit inside {w}x{h}");
     }
@@ -639,7 +690,7 @@ fn mscw_dir() -> PathBuf {
     PathBuf::from(
         std::env::var("MSCOUT_MSCW_DIR")
             .ok()
-            .or_else(|| crate::settings::mscw_dir())
+            .or_else(crate::settings::mscw_dir)
             .unwrap_or_else(|| {
                 panic!(
                     "no MSCW install: set MSCOUT_MSCW_DIR or pick the folder in the app \
@@ -681,10 +732,13 @@ fn read_case(case: &Case, mscw: &Path) -> Option<crate::engine::Readings> {
         .level
         .filter(Region::is_usable)
         .unwrap_or_else(|| panic!("{}: preset {key} has no level box", case.key));
-    let level_gray = ocr::crop_gray(&frame, level_region)
-        .unwrap_or_else(|| panic!("{}: level box {level_region:?} is outside the frame", case.key));
-    let (level, level_size) = crate::game_font::seed_level_atlas(&level_gray, mscw)
-        .unwrap_or_else(|error| panic!("{}: seeding the level atlas failed: {error}", case.key));
+    let (level, level_size, level_text) =
+        crate::game_font::seed_level_best(&frame, level_region, mscw)
+            .unwrap_or_else(|| panic!("{}: seeding the level atlas failed", case.key));
+    println!(
+        "{}: level seeded {:?} from {level_text:?}",
+        case.key, level_size
+    );
 
     // Name and job use the same Arial face, but the Default rendering is
     // anti-aliased and each crop exposes different glyphs; seed both and merge so
@@ -771,7 +825,10 @@ fn reads_every_fixture_from_empty_atlases() {
         println!("--- {} readings ---", case.key);
         println!("  exp_text   = {:?}", readings.exp_text);
         println!("  exp        = {}", readings.exp);
-        println!("  pct        = {:.2} (expected {:.2})", readings.pct, meta.pct);
+        println!(
+            "  pct        = {:.2} (expected {:.2})",
+            readings.pct, meta.pct
+        );
         println!(
             "  level      = {} (level_text {:?})",
             readings.lv, readings.level_text
@@ -862,7 +919,11 @@ fn reads_follow_the_manifest_minimap_state() {
                 assert_eq!(readings.map, "unknown", "{}: hidden map name", case.key);
             }
             "folded" => {
-                assert!(!readings.map_hidden, "{}: folded map reported hidden", case.key);
+                assert!(
+                    !readings.map_hidden,
+                    "{}: folded map reported hidden",
+                    case.key
+                );
                 assert_eq!(
                     readings.map,
                     format!("{}\n{}", meta.street, meta.map),
@@ -871,7 +932,11 @@ fn reads_follow_the_manifest_minimap_state() {
                 );
             }
             "expanded" => {
-                assert!(!readings.map_hidden, "{}: expanded map reported hidden", case.key);
+                assert!(
+                    !readings.map_hidden,
+                    "{}: expanded map reported hidden",
+                    case.key
+                );
                 assert_eq!(
                     readings.map,
                     format!("{}\n{}", meta.street, meta.map),
@@ -890,107 +955,109 @@ fn reads_follow_the_manifest_minimap_state() {
             other => panic!("{}: unknown minimapState {other:?}", case.key),
         }
     }
-    }
+}
 
-    /// Live confirmation: capture the running client and read it with the
-    /// preset for the app's current UI Size. The game must be at that size.
-    #[test]
-    #[ignore = "live: reads the running 1920x1080 client"]
-    fn reads_live_1920() {
-        let selector = crate::settings::WindowSelector {
-            title: "MapleStory".into(),
-            process: "MapleStory.exe".into(),
+/// Live confirmation: capture the running client and read it with the
+/// preset for the app's current UI Size. The game must be at that size.
+#[test]
+#[ignore = "live: reads the running 1920x1080 client"]
+fn reads_live_1920() {
+    let selector = crate::settings::WindowSelector {
+        title: "MapleStory".into(),
+        process: "MapleStory.exe".into(),
+    };
+    let window = crate::window_target::resolve_selector(&selector)
+        .expect("the MapleStory window is running");
+    let frame = crate::capture::client_frame(window.hwnd).expect("capture the client");
+    let mode = crate::settings::ui_mode();
+    println!(
+        "live frame {}x{}; app uiMode={mode:?}",
+        frame.width, frame.height
+    );
+    assert_eq!(
+        (frame.width, frame.height),
+        (1920, 1080),
+        "the game client is not 1920x1080"
+    );
+
+    let Some(preset) = crate::preset::for_size(1920, 1080, mode) else {
+        println!("no 1920x1080 preset for the live UI mode {mode:?}; skipping");
+        return;
+    };
+    let mscw = mscw_dir();
+
+    let exp_region = preset
+        .calibration
+        .exp
+        .filter(Region::is_usable)
+        .expect("EXP box");
+    let exp_gray = ocr::crop_gray(&frame, exp_region).expect("EXP crop");
+    let (exp_stored, exp_height) =
+        crate::game_font::seed_exp_atlas(&exp_gray, &mscw).expect("seed EXP");
+
+    let level_region = preset
+        .calibration
+        .level
+        .filter(Region::is_usable)
+        .expect("level box");
+    let (level_stored, level_size, _) =
+        crate::game_font::seed_level_best(&frame, level_region, &mscw).expect("seed level");
+
+    let mut identity: Option<Atlas> = None;
+    for region in [preset.calibration.job, preset.calibration.name] {
+        let Some(region) = region.filter(Region::is_usable) else {
+            continue;
         };
-        let window = crate::window_target::resolve_selector(&selector)
-            .expect("the MapleStory window is running");
-        let frame = crate::capture::client_frame(window.hwnd).expect("capture the client");
-        let mode = crate::settings::ui_mode();
-        println!(
-            "live frame {}x{}; app uiMode={mode:?}",
-            frame.width, frame.height
-        );
-        assert_eq!(
-            (frame.width, frame.height),
-            (1920, 1080),
-            "the game client is not 1920x1080"
-        );
-
-        let Some(preset) = crate::preset::for_size(1920, 1080, mode) else {
-            println!("no 1920x1080 preset for the live UI mode {mode:?}; skipping");
-            return;
+        let Some(gray) = ocr::crop_gray(&frame, region) else {
+            continue;
         };
-        let mscw = mscw_dir();
-
-        let exp_region = preset
-            .calibration
-            .exp
-            .filter(Region::is_usable)
-            .expect("EXP box");
-        let exp_gray = ocr::crop_gray(&frame, exp_region).expect("EXP crop");
-        let (exp_stored, exp_height) =
-            crate::game_font::seed_exp_atlas(&exp_gray, &mscw).expect("seed EXP");
-
-        let level_region = preset
-            .calibration
-            .level
-            .filter(Region::is_usable)
-            .expect("level box");
-        let level_gray = ocr::crop_gray(&frame, level_region).expect("level crop");
-        let (level_stored, level_size) =
-            crate::game_font::seed_level_atlas(&level_gray, &mscw).expect("seed level");
-
-        let mut identity: Option<Atlas> = None;
-        for region in [preset.calibration.job, preset.calibration.name] {
-            let Some(region) = region.filter(Region::is_usable) else {
-                continue;
-            };
-            let Some(gray) = ocr::crop_gray(&frame, region) else {
-                continue;
-            };
-            if let Some((stored, px)) = crate::font_seed::seed_identity(&gray) {
-                println!("identity seeded from {region:?} at {px}px");
-                let atlas = Atlas::from_settings(&stored);
-                match &mut identity {
-                    Some(combined) => combined.glyphs.extend(atlas.glyphs),
-                    None => identity = Some(atlas),
-                }
+        if let Some((stored, px)) = crate::font_seed::seed_identity(&gray) {
+            println!("identity seeded from {region:?} at {px}px");
+            let atlas = Atlas::from_settings(&stored);
+            match &mut identity {
+                Some(combined) => combined.glyphs.extend(atlas.glyphs),
+                None => identity = Some(atlas),
             }
         }
-        let identity = identity.expect("identity seed").to_settings();
-
-        let exp_atlas = Atlas::from_settings(&exp_stored);
-        let level_atlas = Atlas::from_settings(&level_stored);
-        let identity_atlas = Atlas::from_settings(&identity);
-        let readings = crate::engine::read_frame(
-            &frame,
-            &preset.calibration,
-            &exp_atlas,
-            &level_atlas,
-            &identity_atlas,
-            &preset.maps,
-            &preset.streets,
-            &preset.identities,
-        )
-        .expect("live read");
-        println!("live EXP height {exp_height}px, level size {level_size:?}");
-        println!("live readings {readings:?}");
     }
+    let identity = identity.expect("identity seed").to_settings();
 
-    #[test]
-    #[ignore = "live: prints the minimap detection on the running client"]
-    fn probe_live_minimap() {
-        let selector = crate::settings::WindowSelector {
-            title: "MapleStory".into(),
-            process: "MapleStory.exe".into(),
-        };
-        let window = crate::window_target::resolve_selector(&selector).expect("game window");
-        let frame = crate::capture::client_frame(window.hwnd).expect("capture");
-        println!("frame {}x{}", frame.width, frame.height);
-        println!("minimap: {:?}", ocr::detect_minimap(&frame));
-        if let Some(lines) = ocr::map_label_lines(&frame) {
-            println!(
-                "labels: {:?}",
-                lines.iter().map(|line| (line.w, line.h)).collect::<Vec<_>>()
-            );
-        }
+    let exp_atlas = Atlas::from_settings(&exp_stored);
+    let level_atlas = Atlas::from_settings(&level_stored);
+    let identity_atlas = Atlas::from_settings(&identity);
+    let readings = crate::engine::read_frame(
+        &frame,
+        &preset.calibration,
+        &exp_atlas,
+        &level_atlas,
+        &identity_atlas,
+        &preset.maps,
+        &preset.streets,
+        &preset.identities,
+    )
+    .expect("live read");
+    println!("live EXP height {exp_height}px, level size {level_size:?}");
+    println!("live readings {readings:?}");
+}
+
+#[test]
+#[ignore = "live: prints the minimap detection on the running client"]
+fn probe_live_minimap() {
+    let selector = crate::settings::WindowSelector {
+        title: "MapleStory".into(),
+        process: "MapleStory.exe".into(),
+    };
+    let window = crate::window_target::resolve_selector(&selector).expect("game window");
+    let frame = crate::capture::client_frame(window.hwnd).expect("capture");
+    println!("frame {}x{}", frame.width, frame.height);
+    println!("minimap: {:?}", ocr::detect_minimap(&frame));
+    if let Some(lines) = ocr::map_label_lines(&frame) {
+        println!(
+            "labels: {:?}",
+            lines
+                .iter()
+                .map(|line| (line.w, line.h))
+                .collect::<Vec<_>>()
+        );
     }
+}

@@ -100,7 +100,8 @@ fn process_name(pid: u32) -> String {
 
         let mut buffer = vec![0u16; MAX_PROCESS_PATH];
         let mut size = buffer.len() as u32;
-        let ok = QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut size);
+        let ok =
+            QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut size);
         let _ = CloseHandle(handle);
 
         if ok == 0 || size == 0 {
@@ -200,7 +201,10 @@ fn enumerate_windows() -> Vec<WindowInfo> {
     };
 
     unsafe {
-        EnumWindows(Some(enum_window), &mut context as *mut EnumContext as LPARAM);
+        EnumWindows(
+            Some(enum_window),
+            &mut context as *mut EnumContext as LPARAM,
+        );
     }
 
     context
@@ -343,7 +347,8 @@ pub fn set_target<R: Runtime>(
         return Err("a window title or process name is required".into());
     }
 
-    let window = resolve_selector(&selector).ok_or_else(|| "that window is not open".to_string())?;
+    let window =
+        resolve_selector(&selector).ok_or_else(|| "that window is not open".to_string())?;
     crate::settings::save_target(Some(&selector))?;
 
     *lock(&state.selector) = Some(selector.clone());
@@ -414,7 +419,10 @@ mod tests {
         let windows = enumerate_windows();
         println!("enumerated {} windows", windows.len());
         for window in windows.iter().take(5) {
-            println!("  {} [{}] {}x{}", window.title, window.process, window.client.w, window.client.h);
+            println!(
+                "  {} [{}] {}x{}",
+                window.title, window.process, window.client.w, window.client.h
+            );
         }
         assert!(!windows.is_empty(), "expected at least one titled window");
     }

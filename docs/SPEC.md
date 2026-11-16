@@ -4,7 +4,7 @@ A local, read-only companion overlay for **MapleStory Classic World**. It watche
 
 Target is Classic World specifically — not original MapleStory, not a pre-Big Bang private server. Formulas, EXP tables, map lists and level cap all come from Classic World data (cap 100, four jobs, 2nd job ceiling).
 
-**Implementation status (2026-11-15, v0.5.0):** WGC capture, calibration, HUD-atlas digit seeding, bitmap matching, map/name/job text and JSONL storage are implemented. 0.5.0 ships 1366×768 in all three UI sizes and 1920×1080 Ideal; 1920×1080 Default/Filtered are deferred. Remaining work is listed in [docs/ROADMAP.md](ROADMAP.md), rationale in [docs/DECISIONS.md](DECISIONS.md).
+**Implementation status (2026-11-16, 0.6.0 work):** WGC capture, calibration, HUD-atlas digit seeding, bitmap matching, map/name/job text and JSONL storage are implemented. 0.6.0 adds 1920×1080 Default and Filtered: both pairs are calibrated from shipped boxes and read the saved-frame corpus exactly, using the saturation-aware level key and Windows OCR fallbacks for the filtered identity/map label. 1366×768 remains supported in all three UI sizes, and 1920×1080 Ideal is unchanged. Remaining work is listed in [docs/ROADMAP.md](ROADMAP.md), rationale in [docs/DECISIONS.md](DECISIONS.md).
 
 ---
 
@@ -68,8 +68,7 @@ Compliance note: per Nexon's rules, botting is using a macro, third-party progra
 
 In:
 - Auto-read of the supported HUD: EXP, level, map/street, character name and job
-  (1366×768 in all three UI sizes and 1920×1080 Ideal; 1920×1080
-  Default/Filtered are deferred and fall back to calibration)
+  (1366×768 and 1920×1080 in Default, Ideal and Filtered)
 - Local sample storage
 - Live panel: current map, level, EXP %, 1-minute rate, 5-minute average, ETA, last-30-minute chart
 - ETA to next level on a 30-minute rate
@@ -95,7 +94,7 @@ Regions of interest (ROIs), stored as physical pixels relative to the game windo
 
 Calibration flow: show a frozen preview frame, player drags a box for each ROI, live parse feedback appears immediately ("Lv 17 · 10,105 EXP · 91.53% · Henesys"). The digit atlases are not typed in: the player points the app at the MSCW install and the client's own bitmap atlas is read at the rendered size. Typing the readout remains the fallback when the install cannot be found.
 
-Calibration is scoped to the **client size and UI Size**: each pair keeps its own profile (`data/profiles/<W>x<H>[@mode].json`), and the engine activates the profile matching the live window. Re-calibration is required for a pair that has none, or after a patch that moves the status bar; a resolution change switches profiles instead of invalidating them. The app must detect this situation (no profile, parse failure) rather than keep plotting. Calibration boxes ship as presets for 1366×768 in all three UI sizes and 1920×1080 Ideal; other pairs fall back to calibration. The digit atlases are seeded from the installed client, not shipped. See [PRESETS.md](PRESETS.md).
+Calibration is scoped to the **client size and UI Size**: each pair keeps its own profile (`data/profiles/<W>x<H>[@mode].json`), and the engine activates the profile matching the live window. Re-calibration is required for a pair that has none, or after a patch that moves the status bar; a resolution change switches profiles instead of invalidating them. The app must detect this situation (no profile, parse failure) rather than keep plotting. Calibration boxes ship as presets for 1366×768 and 1920×1080 in all three UI sizes; other pairs fall back to calibration. The digit atlases are seeded from the installed client, not shipped. See [PRESETS.md](PRESETS.md).
 
 ### 3.3 Cadence
 - One frame per second, cropped to the ROIs only.
@@ -107,25 +106,25 @@ Calibration is scoped to the **client size and UI Size**: each pair keeps its ow
 ## 4. Parsing
 
 ### 4.1 EXP
-- **Digits use bitmap matching, not general OCR.** The client draws them from baked HUD atlases, not a font. The atlas is seeded from `Data/UI/_Canvas/_Canvas_000.wz` at the rendered glyph height (5×7 at 1366 and 1920 Ideal; 1366 Default/Filtered render at their own sizes and are supported; the 1920 Default/Filtered pairs are deferred), so no per-character teaching is needed. Typing the readout remains a fallback if the install is unavailable.
+- **Digits use bitmap matching, not general OCR.** The client draws them from baked HUD atlases, not a font. The atlas is seeded from `Data/UI/_Canvas/_Canvas_000.wz` at the rendered glyph height (5×7 at 1366 and 1920 Ideal; the Default/Filtered renderings use their own sizes), so no per-character teaching is needed. The Filtered level additionally uses a saturation-aware white key so the coloured tile does not merge with a digit. Typing the readout remains a fallback if the install is unavailable.
 - Parse yields: level, absolute EXP within level, and percentage.
-- **Cross-check**: `percentage ≈ exp / exp_required(lv)`. If the two disagree by more than ~1 percentage point, the sample is treated as evidence against the level read (not the EXP read), and the level is reported unrecognised.
+- **Cross-check**: `percentage ≈ exp / exp_required(lv)`. A small difference (up to 1 percentage point) is a bad percentage read; the percentage is recomputed from the EXP and level and the sample is kept. A larger disagreement invalidates both the EXP and the level for that frame. Map/name/job are kept either way.
 - Level is read from its own box with its own atlas; the level digit is the EXP glyph widened to the rendered size. It is never derived from EXP and the percentage.
 
 ### 4.2 Name and job
 
-- **Arial 12 px, 1-bit GDI**, verified pixel-exact. The engine renders the Arial face from Windows at the measured crop height, stores a native glyph atlas (`identityAtlas`, `source: "font"`), and reads both lines as text. No per-character teaching is needed.
+- **Arial, 1-bit GDI at the measured crop height** (12 px at Ideal; the Default/Filtered renderings are larger and anti-aliased and use the same face plus Windows OCR fusion). The engine renders the face from Windows, stores a native glyph atlas (`identityAtlas`, `source: "font"`), and reads both lines as text. No per-character teaching is needed.
 - The one ambiguity at this size — `l` and `I` are the same 1 px bar — is resolved by case context: a mid-word bar in a mixed-case word is `l`.
 - The taught fingerprints remain as the exact fallback and for correcting a misread.
 
 ### 4.3 Map name
 
-- **Client map table, not segmented OCR.** The label is Arial Bold 12; the two lines are the client's own `mapName`/`streetName` strings in `String_000.wz/Map.img`. The reader renders every candidate name, filters by rendered width, and scores the whole line with a column-pattern DTW. A taught fingerprint still wins when it exists, and a taught letter atlas remains as a fallback for a name missing from the client table. Teaching is now only for corrections.
+- **Client map table, not segmented OCR.** The label is Arial Bold at the measured size (12 px at Ideal); the two lines are the client's own `mapName`/`streetName` strings in `String_000.wz/Map.img`. The reader renders every candidate name, filters by rendered width, and scores the whole line with a column-pattern DTW. A taught fingerprint still wins when it exists, and a taught letter atlas remains as a fallback for a name missing from the client table. Teaching is now only for corrections.
 - **The label is located, not boxed.** The minimap can be moved and resized by the player, so its panel is detected on every frame and the name crop is normalised to a fixed grid before matching. Moving or resizing the minimap therefore never requires re-teaching.
 - The game draws some names on two lines (`Hidden Street` / `1st Accompaniment <Bonus>`); the stored label keeps the newline and the overlay renders it the same way.
-- Recognition is exact-match oriented: an untaught or unrecognisable map reports `unknown` and is never guessed from partial similarity.
+- Known table names snap exact → suffix → fuzzy with a margin; Windows OCR reads the label union, and an exact OCR match beats the whole-line DTW. A name absent from the table is shown as the literal OCR line, and a one-line label has no street. An unreadable or ambiguous label reports `unknown` when no confident match exists. The DTW fallback can still mispick Roman-numeral siblings when OCR is absent or fuzzy (a known limitation).
 - Fingerprints are resolution- and UI-scale-specific; a new client size needs its own taught set.
-- Rationale and rejected alternatives: [docs/DECISIONS.md](DECISIONS.md) D5, D17.
+- Rationale and rejected alternatives: [docs/DECISIONS.md](DECISIONS.md) D23, D17.
 
 ---
 
@@ -185,7 +184,7 @@ eta = (exp_required(level) − exp_in_level) / rate_5m
 
 A frameless, always-on-top window composited by the OS. It is a picture first: **click-through by default**, so every click reaches the game.
 
-Collapsed state (default), roughly 280 × 96 px:
+Collapsed state (default), roughly 300 × 140 px:
 
 ```
 ┌──────────────────────────────────┐
@@ -197,7 +196,7 @@ Collapsed state (default), roughly 280 × 96 px:
 ```
 
 - Left dot is the capture state from §5: green reading, yellow degraded, red lost.
-- Map name truncates with an ellipsis. It never wraps — wrapping would resize the panel mid-grind.
+- Long map names wrap and the panel grows to fit; the full name is never ellipsized.
 - Level and percentage use tabular figures so updating digits do not shift the layout.
 - Thin EXP bar, because a percentage alone does not read at a glance.
 - 5-minute average rate and ETA are the two prominent numbers.
