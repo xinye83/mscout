@@ -84,3 +84,184 @@ pub fn load(mscw_dir: &Path) -> Result<Vec<MapEntry>, String> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game_font::open_wz;
+
+    fn mscw() -> PathBuf {
+        PathBuf::from(
+            std::env::var("MSCOUT_MSCW_DIR")
+                .ok()
+                .or_else(|| crate::settings::mscw_dir())
+                .expect("no MSCW dir; set MSCOUT_MSCW_DIR"),
+        )
+    }
+
+    const JOB_NAMES: &[&str] = &[
+        "Beginner", "Warrior", "Magician", "Bowman", "Thief", "Pirate", "Fighter", "Page",
+        "Spearman", "Cleric", "Hunter", "Crossbowman", "Assassin", "Bandit", "Brawler",
+        "Gunslinger", "Hero", "Paladin", "Dark Knight", "Arch Mage", "Bishop", "Bowmaster",
+        "Marksman", "Night Lord", "Shadower", "Buccaneer", "Corsair",
+    ];
+
+    fn scan_job_strings(root: &WzNodeArc, path: &str, depth: usize) {
+        if depth > 6 {
+            return;
+        }
+        if let Some(value) = string_at(root, path) {
+            let value = value.trim();
+            if JOB_NAMES.iter().any(|name| *name == value) {
+                println!("  JOB {path} = {value:?}");
+            }
+        }
+        for child in children(root, path) {
+            let next = if path.is_empty() {
+                child
+            } else {
+                format!("{path}/{child}")
+            };
+            scan_job_strings(root, &next, depth + 1);
+        }
+    }
+
+    #[test]
+    #[ignore = "diagnostic: searches the game data for job names"]
+    fn probe_string_jobs() {
+        let base = mscw();
+
+        for dir in [base.join("Data/String"), base.join("MSCW/Data/String")] {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_none_or(|extension| !extension.eq_ignore_ascii_case("wz"))
+                {
+                    continue;
+                }
+                let Ok(root) = open_wz(&path) else {
+                    continue;
+                };
+                let roots = children(&root, "");
+                println!("== {} root: {roots:?}", path.display());
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.eq_ignore_ascii_case("String_000.wz"))
+                {
+                    for top in [
+                        "StringTable.img",
+                        "StringTable_WZ2.img",
+                        "UI.img",
+                        "Etc.img",
+                        "NameChange.img",
+                        "Consume.img",
+                    ] {
+                        if roots.iter().any(|root_name| root_name == top) {
+                            println!("  scanning {top}");
+                            scan_job_strings(&root, top, 0);
+                        }
+                    }
+                }
+            }
+        }
+
+        for rel in [
+            "Data/Etc/Etc_000.wz",
+            "Data/Etc/Etc.wz",
+            "Data/UI/UI_000.wz",
+            "Data/UI/UI.wz",
+            "Data/Skill/Skill.wz",
+            "Data/Character/Character.wz",
+        ] {
+            let path = base.join(rel);
+            if !path.is_file() {
+                continue;
+            }
+            let Ok(root) = open_wz(&path) else {
+                continue;
+            };
+            let roots = children(&root, "");
+            println!("== {} root: {roots:?}", path.display());
+            for top in &roots {
+                scan_job_strings(&root, top, 0);
+            }
+        }
+
+        let etc000 = base.join("Data/Etc/Etc_000.wz");
+        if let Ok(root) = open_wz(&etc000) {
+            for top in ["MakeCharInfo.img", "FreeJobChange.img", "RecommendedSkill.img"] {
+                let entries = children(&root, top);
+                if entries.is_empty() {
+                    continue;
+                }
+                println!(
+                    "== {top} entries ({}): {:?}",
+                    entries.len(),
+                    &entries[..entries.len().min(40)]
+                );
+                for id in entries.iter().take(40) {
+                    let direct = string_at(&root, &format!("{top}/{id}"));
+                    let named = string_at(&root, &format!("{top}/{id}/name"));
+                    let sub = children(&root, &format!("{top}/{id}"));
+                    println!("    {id}: direct={direct:?} name={named:?} sub={sub:?}");
+                }
+            }
+        }
+
+        let etc = base.join("Data/Etc/Etc.wz");
+        if let Ok(root) = open_wz(&etc) {
+            let languages = children(&root, "Language");
+            println!("== Language entries ({}): {languages:?}", languages.len());
+            for language in languages.iter().take(2) {
+                let entries = children(&root, &format!("Language/{language}"));
+                println!(
+                    "    {language}: {} entries {:?}",
+                    entries.len(),
+                    &entries[..entries.len().min(40)]
+                );
+                for id in entries.iter().take(20) {
+                    let direct = string_at(&root, &format!("Language/{language}/{id}"));
+                    let named = string_at(&root, &format!("Language/{language}/{id}/name"));
+                    println!("      {id}: direct={direct:?} name={named:?}");
+                }
+            }
+        }
+
+        for dir in [base.join("Data"), base.join("MSCW/Data")] {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_none_or(|extension| !extension.eq_ignore_ascii_case("wz"))
+                {
+                    continue;
+                }
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default();
+                if !(name.eq_ignore_ascii_case("Etc.wz") || name.eq_ignore_ascii_case("UI.wz")) {
+                    continue;
+                }
+                let Ok(root) = open_wz(&path) else {
+                    continue;
+                };
+                let roots = children(&root, "");
+                println!("== {} root: {roots:?}", path.display());
+                for top in &roots {
+                    scan_job_strings(&root, top, 0);
+                }
+            }
+        }
+    }
+}

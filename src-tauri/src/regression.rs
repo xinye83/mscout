@@ -885,4 +885,87 @@ fn reads_follow_the_manifest_minimap_state() {
             other => panic!("{}: unknown minimapState {other:?}", case.key),
         }
     }
-}
+    }
+
+    /// Live confirmation: capture the running client and read it with the
+    /// 1920x1080 Ideal preset. The game must be at that size and UI Size.
+    #[test]
+    #[ignore = "live: reads the running 1920x1080 Ideal client"]
+    fn reads_live_1920_ideal() {
+        let selector = crate::settings::WindowSelector {
+            title: "MapleStory".into(),
+            process: "MapleStory.exe".into(),
+        };
+        let window = crate::window_target::resolve_selector(&selector)
+            .expect("the MapleStory window is running");
+        let frame = crate::capture::client_frame(window.hwnd).expect("capture the client");
+        println!(
+            "live frame {}x{}; app uiMode={:?}",
+            frame.width,
+            frame.height,
+            crate::settings::ui_mode()
+        );
+        assert_eq!(
+            (frame.width, frame.height),
+            (1920, 1080),
+            "the game client is not 1920x1080"
+        );
+
+        let preset = crate::preset::for_size(1920, 1080, UiMode::Ideal)
+            .expect("the 1920x1080 Ideal preset");
+        let mscw = mscw_dir();
+
+        let exp_region = preset
+            .calibration
+            .exp
+            .filter(Region::is_usable)
+            .expect("EXP box");
+        let exp_gray = ocr::crop_gray(&frame, exp_region).expect("EXP crop");
+        let (exp_stored, exp_height) =
+            crate::game_font::seed_exp_atlas(&exp_gray, &mscw).expect("seed EXP");
+
+        let level_region = preset
+            .calibration
+            .level
+            .filter(Region::is_usable)
+            .expect("level box");
+        let level_gray = ocr::crop_gray(&frame, level_region).expect("level crop");
+        let (level_stored, level_size) =
+            crate::game_font::seed_level_atlas(&level_gray, &mscw).expect("seed level");
+
+        let mut identity: Option<Atlas> = None;
+        for region in [preset.calibration.job, preset.calibration.name] {
+            let Some(region) = region.filter(Region::is_usable) else {
+                continue;
+            };
+            let Some(gray) = ocr::crop_gray(&frame, region) else {
+                continue;
+            };
+            if let Some((stored, px)) = crate::font_seed::seed_identity(&gray) {
+                println!("identity seeded from {region:?} at {px}px");
+                let atlas = Atlas::from_settings(&stored);
+                match &mut identity {
+                    Some(combined) => combined.glyphs.extend(atlas.glyphs),
+                    None => identity = Some(atlas),
+                }
+            }
+        }
+        let identity = identity.expect("identity seed").to_settings();
+
+        let exp_atlas = Atlas::from_settings(&exp_stored);
+        let level_atlas = Atlas::from_settings(&level_stored);
+        let identity_atlas = Atlas::from_settings(&identity);
+        let readings = crate::engine::read_frame(
+            &frame,
+            &preset.calibration,
+            &exp_atlas,
+            &level_atlas,
+            &identity_atlas,
+            &preset.maps,
+            &preset.streets,
+            &preset.identities,
+        )
+        .expect("live read");
+        println!("live EXP height {exp_height}px, level size {level_size:?}");
+        println!("live readings {readings:?}");
+    }
