@@ -66,6 +66,7 @@ Sample format and invariants are documented in [docs/DATA.md](docs/DATA.md).
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Current release, scheduled/deferred work, known limitations |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Decision log — why things are the way they are |
 | [docs/DATA.md](docs/DATA.md) | File formats, profiles, schema, invariants |
+| [docs/ACCURACY.md](docs/ACCURACY.md) | Measured accuracy of the tracked fixture corpus, with the commands and its limits |
 | [docs/TEXT_RENDERING.md](docs/TEXT_RENDERING.md) | Developer reference for HUD glyphs, fonts and text matching |
 | [docs/SHIPPING.md](docs/SHIPPING.md) | What the app ships vs what it reads from the client/Windows |
 | [docs/DEV.md](docs/DEV.md) | Environment gotchas, testing, layout |

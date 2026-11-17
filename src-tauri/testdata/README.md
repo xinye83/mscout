@@ -146,8 +146,11 @@ Field notes:
   level, to within the rounding of the displayed 2-dp percentage.
 - **`holdout`** (default `false`) marks the one frozen hold-out state; see
   [Frozen hold-out](#frozen-hold-out). It is only meaningful on a `minimap`
-  entry, and `exactly_one_frozen_holdout` fails the hermetic tier unless exactly
-  one image in the whole corpus sets it.
+  entry: a `holdout` flag on a `hud`/`settings`/`exp`/`map-label` entry is
+  rejected when the corpus loads, because the flag would otherwise be silently
+  dropped and the manifest would look reserved while nothing was.
+  `exactly_one_frozen_holdout` (hermetic tier) fails unless exactly one minimap
+  image in the whole corpus sets it, on the pinned case.
 
 ## Multi-state pairs
 
@@ -161,9 +164,12 @@ so it cannot corroborate them).
 ## Frozen hold-out
 
 One minimap state is the **frozen hold-out**, marked `"holdout": true` in its
-image entry: **`1920x1080@ideal`, `expanded`**, frozen on **2026-11-16**. Exactly
-one state may carry the flag — `exactly_one_frozen_holdout` (hermetic tier) fails
-on zero or on two.
+image entry: **`1920x1080@ideal`, `expanded`** (case key
+`1920x1080@ideal/expanded`), frozen on **2026-11-16**. Exactly one state may carry
+the flag — `exactly_one_frozen_holdout` (hermetic tier) fails on zero or on two,
+and fails if the flagged case is not that key. The key is pinned in the test, so
+moving the flag to a case that already passes does not move the reservation; it
+breaks the guard.
 
 The hold-out is not read differently; the readers run over it like every other
 case and `accuracy_report` (below) publishes its result. What it is *not* is an
@@ -271,8 +277,9 @@ Runs `fixture_corpus_is_complete` (every image indexed; required files; every
 crop in bounds and matching its PNG's size; `standalone` crops equal the whole
 image; `settingsDisplay.resolution`/`uiSize` agreeing with
 `clientW`/`clientH`/`uiMode`; `settings-panel.png` not blank),
-`exactly_one_frozen_holdout` (exactly one state carries `holdout`, checked on the
-unfiltered corpus so `MSCOUT_CASE` cannot narrow it away),
+`exactly_one_frozen_holdout` (exactly one state carries `holdout` and it is the
+pinned `1920x1080@ideal/expanded`, checked on the unfiltered corpus so
+`MSCOUT_CASE` cannot narrow it away),
 `minimap_state_matches_ground_truth` (`ocr::detect_minimap` names the captured
 state) and `settings_panel_is_evidence_only` (the settings crop is never composed
 into the frame, so no reader can see it). These need the repository only — the

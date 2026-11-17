@@ -19,7 +19,7 @@ and classifies the result against the manifest:
 
 | verdict | meaning |
 |---|---|
-| **exact** | every manifest field was reproduced: `expText`, `exp`, `pct` (±0.005), `level`, `name`, `job`, plus the map/street form the case's minimap state implies |
+| **exact** | every manifest field was reproduced: `expText`, `exp`, `pct` (±0.005), `level`, `name`, `job`, plus `map`/`map_hidden` as the case's minimap state implies — the `<street>\n<map>` label and not hidden for `expanded`/`folded`, `unknown` and hidden for `titlebar`, `unknown` and not hidden for `hidden` |
 | **rejected** | the reader (or its seeding) refused to produce a reading, e.g. `could not segment the EXP readout` |
 | **wrong** | a reading was produced and at least one field disagrees; the report prints which |
 | no preset | the pair has no preset, so there is nothing to read — counted separately, never as a pass |
@@ -32,17 +32,29 @@ an improvement cannot be manufactured by editing an expectation here.
 Covered by the counts: the 18 frame cases — 6 pairs × 3 minimap states
 (`expanded`, `titlebar`, `folded`).
 
-Not covered by the counts: the focused `exp`/`map-label` images in `1920x1080`
-(`hud-low-percent`, `exp-21865`, `exp-26487`, `exp-36818`, `minimap-tree-1`,
-`minimap-deep-valley`). They are validated hermetically and read by their own
-targeted tests, not by this report.
+Not covered by the counts: the focused `exp`/`map-label` images in
+`1920x1080@filtered` (`hud-low-percent`, `exp-21865`, `exp-26487`, `exp-36818`,
+`map-tree-1`, `map-deep-valley`). They are validated hermetically and read by
+their own targeted tests, not by this report.
 
 ## Measured counts — 2026-11-16
 
 ### Run 1 — app's MSCW setting available
 
+An expanded/folded map name is matched against the client table reached through
+the app's *saved* MSCW setting (`data/settings.json` → `mscwDir`), not through
+`MSCOUT_MSCW_DIR` (see [Corpus limits](#corpus-limits)). A debug build on this
+machine resolves the data directory to `<project root>/data`, and the worktree
+had no `settings.json`, so this run points `MSCOUT_DATA_DIR` at a throwaway
+directory holding only that one setting. The whole run is one block, so the
+command reproduces the table below on its own:
+
 ```powershell
-$env:MSCOUT_MSCW_DIR='D:\SteamLibrary\steamapps\common\MapleStory\MSCW'
+$env:MSCOUT_MSCW_DIR = 'D:\SteamLibrary\steamapps\common\MapleStory\MSCW'
+$data = Join-Path $env:TEMP 'mscout-accuracy-data'
+New-Item -ItemType Directory -Force -Path $data | Out-Null
+[System.IO.File]::WriteAllText("$data\settings.json", '{"mscwDir":"D:\\SteamLibrary\\steamapps\\common\\MapleStory\\MSCW"}')
+$env:MSCOUT_DATA_DIR = $data
 cargo test --manifest-path src-tauri/Cargo.toml --lib regression::accuracy_report -- --ignored --nocapture
 ```
 
@@ -64,20 +76,11 @@ hold-out : 1920x1080@ideal/expanded — exact
 
 Run 1 needed the app's saved MSCW setting as well as `MSCOUT_MSCW_DIR`, because an
 expanded/folded map name is matched against the client table reached through
-`data/settings.json` → `mscwDir` (see [Corpus limits](#corpus-limits)). On this
-machine a debug build resolves the data directory to `<project root>/data`, and the
-worktree had no `settings.json`, so the run pointed `MSCOUT_DATA_DIR` at a
-throwaway directory containing only that one setting:
-
-```powershell
-$data = Join-Path $env:TEMP 'mscout-accuracy-data'
-New-Item -ItemType Directory -Force -Path $data | Out-Null
-[System.IO.File]::WriteAllText("$data\settings.json", '{"mscwDir":"D:\\SteamLibrary\\steamapps\\common\\MapleStory\\MSCW"}')
-$env:MSCOUT_DATA_DIR = $data
-```
-
-Nothing in the repository, the tracked corpus, or the app's real settings store was
-written.
+`data/settings.json` → `mscwDir` (see [Corpus limits](#corpus-limits)); that is why
+the throwaway `data` directory is part of the command above. Nothing in the
+repository, the tracked corpus, or the app's real settings store was written. No
+`MSCOUT_CASE`/`MSCOUT_STATE` filter was set, so the report printed
+`filters : none (whole corpus)`.
 
 ### Run 2 — the same corpus with no saved MSCW setting
 
@@ -108,11 +111,15 @@ a fresh clone reproduces by default.
 
 ## The hold-out is retrospective
 
-One state is the frozen hold-out: **`1920x1080@ideal`, `expanded`**, marked
-`"holdout": true` in
+One state is the frozen hold-out: **`1920x1080@ideal`, `expanded`** (case key
+`1920x1080@ideal/expanded`), marked `"holdout": true` in
 [`../src-tauri/testdata/1920x1080@ideal/meta.json`](../src-tauri/testdata/1920x1080@ideal/meta.json)
 on 2026-11-16. `exactly_one_frozen_holdout` (hermetic tier) fails if the corpus has
-zero or more than one, and the accuracy report always names it.
+zero or more than one, and fails if the flagged case is not that key: the key is
+pinned in the test, so moving the flag to a state that already reads exact does not
+move the reservation, it breaks the guard. A `holdout` flag on any non-minimap
+image (`hud`, `settings`, `exp`, `map-label`) is rejected when the corpus loads
+instead of being silently ignored. The accuracy report always names the hold-out.
 
 **It was frozen after the fact, not before the work.** Every frame in this corpus
 was captured, cropped and labelled during the `0.5` → `0.6` work, and every one of
@@ -181,13 +188,19 @@ work, and this document says so on purpose.
 
 ## Reproducing
 
+The full Run 1 command — `MSCOUT_MSCW_DIR` plus the throwaway `data` directory
+that carries the app's MSCW setting — is in
+[Run 1](#run-1--apps-mscw-setting-available) above:
+
 ```powershell
 $env:MSCOUT_MSCW_DIR='D:\SteamLibrary\steamapps\common\MapleStory\MSCW'
 cargo test --manifest-path src-tauri/Cargo.toml --lib regression::accuracy_report -- --ignored --nocapture
 ```
 
-Add `MSCOUT_CASE=<pair>` (or `MSCOUT_CASE=<pair>/<state>`) and
-`MSCOUT_STATE=<expanded|titlebar|folded>` to narrow the report; the printed
-`filters` line records what was active so a narrowed run cannot be mistaken for a
-whole-corpus one. The hermetic tier is `cargo test --manifest-path src-tauri/Cargo.toml --lib`
+This short form is Run 2 unless a `data/settings.json` with `mscwDir` is present
+(set `MSCOUT_DATA_DIR` as in Run 1 for the 18/0/0 numbers). Add `MSCOUT_CASE=<pair>`
+(or `MSCOUT_CASE=<pair>/<state>`) and `MSCOUT_STATE=<expanded|titlebar|folded|hidden>`
+to narrow the report; the printed `filters` line records what was active so a
+narrowed run cannot be mistaken for a whole-corpus one. The hermetic tier is
+`cargo test --manifest-path src-tauri/Cargo.toml --lib`
 (no game install, no `MSCW` needed).

@@ -331,6 +331,21 @@ fn load_cases_in(root: &Path) -> Vec<Case> {
         let mut settings: Option<FixtureImage> = None;
         let mut minimaps: Vec<FixtureImage> = Vec::new();
         for image in &meta.images {
+            // The hold-out reservation names one *minimap state*. A `holdout` flag
+            // on a hud/settings/exp/map-label entry would parse fine and then be
+            // dropped — `Case` carries the flag from minimap variants only — so the
+            // manifest would look reserved while nothing was. Reject it instead.
+            if matches!(
+                image.kind.as_str(),
+                "hud" | "settings" | "exp" | "map-label"
+            ) {
+                assert!(
+                    !image.holdout,
+                    "{pair_key}: image {:?} is kind {:?} — only a minimap state can be \
+                     the frozen hold-out",
+                    image.id, image.kind
+                );
+            }
             match image.kind.as_str() {
                 "hud" => {
                     assert!(hud.is_none(), "{pair_key}: more than one hud image");
@@ -798,14 +813,21 @@ fn settings_panel_is_evidence_only() {
     }
 }
 
-/// Exactly one state in the corpus is the frozen hold-out, and it stays exactly
-/// one: a second hold-out would make "never tuned against" meaningless, and none
-/// would silently free the reserved case for tuning again.
+/// Exactly one state in the corpus is the frozen hold-out, it stays exactly one,
+/// and it is the **same** case: a second hold-out would make "never tuned against"
+/// meaningless, none would silently free the reserved case for tuning again, and a
+/// flag moved to a state that already reads exact would reserve nothing.
 ///
 /// Deliberately checks the **unfiltered** corpus, so `MSCOUT_CASE`/`MSCOUT_STATE`
 /// cannot narrow the run into a pass.
 #[test]
 fn exactly_one_frozen_holdout() {
+    /// The frozen case's identity, pinned here as well as in the docs: the
+    /// reservation is one specific state, not whichever state currently carries
+    /// the flag. `docs/ACCURACY.md` and `testdata/README.md` both name it, and
+    /// moving the flag is the one thing they forbid.
+    const FROZEN_HOLDOUT: &str = "1920x1080@ideal/expanded";
+
     let frozen: Vec<Case> = load_cases_in(&fixtures_dir())
         .into_iter()
         .filter(|case| case.holdout)
@@ -823,6 +845,13 @@ fn exactly_one_frozen_holdout() {
     );
 
     let case = &frozen[0];
+    assert_eq!(
+        case.key, FROZEN_HOLDOUT,
+        "the frozen hold-out must stay {FROZEN_HOLDOUT}, found {} — the reservation \
+         is pinned to that case, and moving the flag to another state would free it \
+         for tuning",
+        case.key
+    );
     // A hold-out has to be a real client state that a reader consumes, not a
     // focused crop or a state with nothing on screen.
     assert!(
@@ -931,8 +960,43 @@ fn a_fixture_directory_without_a_manifest_panics() {
     load_cases_in(&root.0);
 }
 
+/// The reservation names a *minimap state*. A `holdout` flag on any other kind
+/// parses fine and is then dropped — `Case` carries the flag from minimap variants
+/// only — which would leave a manifest looking reserved while nothing was. The
+/// loader must reject it instead of quietly reserving nothing.
+#[test]
+#[should_panic(expected = "only a minimap state can be the frozen hold-out")]
+fn a_holdout_flag_on_a_non_minimap_image_panics() {
+    let root = TempRoot::new("holdout-not-minimap");
+    let pair = root.0.join("1920x1080@ideal");
+    std::fs::create_dir_all(&pair).expect("create the fixture directory");
+    std::fs::write(
+        pair.join("meta.json"),
+        r#"{
+  "version": 2,
+  "clientW": 1920,
+  "clientH": 1080,
+  "uiMode": "ideal",
+  "name": "Euroblood",
+  "job": "Page",
+  "level": 35,
+  "expText": "123,044[70.63%]",
+  "exp": 123044,
+  "pct": 70.63,
+  "street": "Victoria Road",
+  "map": "East Rocky Mountain III",
+  "settingsDisplay": { "resolution": "1920 x 1080", "uiSize": "Ideal Ratio" },
+  "images": [
+    { "id": "hud-main", "kind": "hud", "holdout": true, "file": "hud-main.png", "source": "client", "crop": { "x": 560, "y": 1036, "w": 574, "h": 44 } }
+  ]
+}"#,
+    )
+    .expect("write the manifest");
+    load_cases_in(&root.0);
+}
+
 /// A throwaway corpus root under the system temp directory. Removed on drop, so
-/// the two `should_panic` guards clean up while unwinding.
+/// the `should_panic` guards clean up while unwinding.
 struct TempRoot(PathBuf);
 
 impl TempRoot {
@@ -1464,6 +1528,10 @@ fn accuracy_report() {
     let frozen_case = &frozen[0];
     let frozen_verdict = match scored.iter().find(|(key, _)| *key == frozen_case.key) {
         Some((_, verdict)) => verdict.summary(),
+        // Not a second case and not a duplicate read: the filters excluded the
+        // hold-out from the counted run, so this is its only read here. The line
+        // exists because the reservation is a corpus fact, not a property of this
+        // invocation.
         None => format!(
             "{} (not in this filtered run)",
             verdict(frozen_case, &mscw).summary()
