@@ -19,18 +19,26 @@
 //
 // The CHANGELOG is only written when --changelog is passed as well; with
 // --check the same flag merely verifies that a released section exists.
-// Nothing is ever promoted implicitly.
+// Nothing is ever promoted implicitly. The flag is idempotent: it promotes even
+// when every stored version already matches the argument.
 //
 // Edits are textual and in place: no lockfile is regenerated and no build tool
-// is invoked. Every edit is re-read and verified before it is written, and
-// JSON files are re-parsed and deep-compared against the original so a bad
-// match can never corrupt a file.
+// is invoked. A write is two-phase: every edited file is built in memory and
+// verified (re-located, line-compared, JSON re-parsed and deep-compared against
+// the original) before the first byte is written, so a failed validation leaves
+// the tree untouched instead of half bumped.
+//
+// Tests: node --test scripts/bump-version.test.mjs (npm run test:version-script).
+// They point the script at throwaway trees with MSCOUT_VERSION_ROOT, which is a
+// test hook only, not a user-facing option.
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const root = resolve(
+  process.env.MSCOUT_VERSION_ROOT ?? join(dirname(fileURLToPath(import.meta.url)), ".."),
+);
 
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const CHANGELOG = "CHANGELOG.md";
@@ -41,6 +49,10 @@ class UsageError extends Error {}
 // Text helpers
 // ---------------------------------------------------------------------------
 
+// The locators and the line/offset walks assume one line ending per file: a file
+// mixing CRLF and LF would make the computed offsets wrong. Every stored file is
+// uniform today, and verifyLines aborts the write if the line count changes, so
+// this is an assumption worth knowing rather than code worth carrying.
 function eolOf(text) {
   return text.includes("\r\n") ? "\r\n" : "\n";
 }
@@ -83,7 +95,7 @@ function applyEntries(text, entries, next) {
 // that they hit the intended key.
 function jsonLocator(text, where, pattern, path) {
   const match = pattern.exec(text);
-  if (!match) throw new Error(`could not find the ${where} version`);
+  if (!match) throw new Error(`could not find the ${where} in the expected shape`);
   const [, prefix, value] = match;
   const start = match.index + prefix.length;
   return {
@@ -233,15 +245,21 @@ function collect() {
   const entries = [];
   for (const target of FILES) {
     const text = readFile(target.file);
-    for (const entry of target.locate(text)) entries.push({ file: target.file, ...entry });
+    for (const entry of locateIn(target.file, text)) entries.push({ file: target.file, ...entry });
   }
   return entries;
 }
 
+// Locator failures name the file, so a reformatted lockfile is obvious without
+// having to reproduce the run.
 function locateIn(file, text) {
   const target = FILES.find((candidate) => candidate.file === file);
   if (!target) throw new Error(`no locator for ${file}`);
-  return target.locate(text);
+  try {
+    return target.locate(text);
+  } catch (error) {
+    throw new Error(`${file}: ${error.message}`);
+  }
 }
 
 // Every changed line must be one of the lines we meant to change: same line
@@ -269,10 +287,18 @@ function setPath(object, path, value) {
 
 // The edited document must differ from the original only where we meant it to:
 // parse both, apply the intended paths to a copy of the original, compare.
+function parseJson(file, text, which) {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${file}: the ${which} text is not valid JSON (${error.message})`);
+  }
+}
+
 function verifyJson(file, before, after, located, next) {
-  const expected = JSON.parse(before);
+  const expected = parseJson(file, before, "original");
   for (const entry of located) setPath(expected, entry.path, next);
-  const actual = JSON.parse(after);
+  const actual = parseJson(file, after, "edited");
   if (JSON.stringify(expected) !== JSON.stringify(actual)) {
     throw new Error(`${file}: edit did not match the parsed document; refusing to write`);
   }
@@ -326,10 +352,13 @@ function runCheck(target) {
     console.log(`${entries.length} version locations agree on ${expected}`);
     return 0;
   }
-  console.error(
-    `${drift} of ${entries.length} version locations disagree with ${expected}; ` +
-      `fix with: node scripts/bump-version.mjs ${expected}`,
-  );
+  // With an explicit target the argument may be the wrong half (a release tag
+  // that disagrees with a correct tree), so do not hand out a write command that
+  // would bump a branch to match a bad expectation.
+  const remedy = target
+    ? "the expectation came from the argument; drop it to check the files against each other"
+    : `fix with: node scripts/bump-version.mjs ${expected}`;
+  console.error(`${drift} of ${entries.length} version locations disagree with ${expected}; ${remedy}`);
   return 1;
 }
 
@@ -401,22 +430,30 @@ function runWrite(next, options) {
   // Only the locations that actually disagree are rewritten, so the same
   // command both bumps a release and repairs a single drifted file.
   const drifted = entries.filter((entry) => entry.value !== next);
-  if (drifted.length === 0) {
+  if (drifted.length === 0 && !options.changelog) {
     console.log(`every file is already at ${next}; nothing to write`);
     return 0;
   }
-  if (compareCore(next, current) < 0 && !options.force) {
+  if (drifted.length > 0 && compareCore(next, current) < 0 && !options.force) {
     console.error(
       `refusing to move backwards: ${current} -> ${next}. Re-run with --force if that is intended.`,
     );
     return 1;
   }
 
-  console.log(`${options.dryRun ? "dry run: " : ""}setting version ${next} (currently ${current})`);
+  console.log(
+    drifted.length === 0
+      ? `every file is already at ${next}`
+      : `${options.dryRun ? "dry run: " : ""}setting version ${next} (currently ${current})`,
+  );
 
+  // Phase 1: build and verify every edit in memory. Nothing is written until
+  // all of them pass, so a bad locator or an unparseable file aborts with the
+  // tree untouched instead of half bumped.
+  const writes = [];
   for (const target of FILES) {
     const before = readFile(target.file);
-    const located = target.locate(before);
+    const located = locateIn(target.file, before);
     const changed = located.filter((entry) => entry.value !== next);
     if (changed.length === 0) continue;
 
@@ -426,28 +463,39 @@ function runWrite(next, options) {
     for (const entry of changed) {
       console.log(`  ${target.file.padEnd(26)} ${entry.label.padEnd(26)} ${entry.value} -> ${next}`);
     }
-    if (!options.dryRun) writeFileSync(join(root, target.file), after);
+    writes.push({ file: target.file, after });
   }
 
+  // The CHANGELOG step runs whenever --changelog is passed, even when every
+  // version already matches, so promoting a release never needs a second run.
   if (!options.changelog) {
-    console.log(`CHANGELOG.md left alone; add --changelog to promote [Unreleased] to ${next}`);
+    if (writes.length > 0) {
+      console.log(`CHANGELOG.md left alone; add --changelog to promote [Unreleased] to ${next}`);
+    }
   } else {
     const before = readFile(CHANGELOG);
     const result = promoteChangelog(before, next);
     if (!result.promoted) {
       console.log(`CHANGELOG.md not promoted: ${result.reason}`);
     } else {
-      if (!options.dryRun) writeFileSync(join(root, CHANGELOG), result.text);
       console.log(`  ${CHANGELOG.padEnd(26)} ${"promoted [Unreleased]".padEnd(26)} -> ${next}`);
       if (result.reason) console.log(`  note: ${result.reason}`);
+      writes.push({ file: CHANGELOG, after: result.text });
     }
   }
 
+  if (writes.length === 0) {
+    console.log("nothing to write");
+    return 0;
+  }
+
+  // Phase 2: everything is verified, so write it all.
   if (options.dryRun) {
     console.log("dry run: no files were written");
-  } else {
-    console.log("next: review `git diff`, then run `node scripts/bump-version.mjs --check`");
+    return 0;
   }
+  for (const write of writes) writeFileSync(join(root, write.file), write.after);
+  console.log("next: review `git diff`, then run `node scripts/bump-version.mjs --check`");
   return 0;
 }
 
@@ -472,8 +520,9 @@ Options:
   --dry-run             with a version: print the edits, write nothing
   --force               allow writing a version lower than the current one
   --changelog           write mode: promote CHANGELOG [Unreleased] to the new
-                        version with today's date; check mode: require the
-                        changelog to have a section and link for the version
+                        version with today's date, even when the stored versions
+                        already match; check mode: require the changelog to have
+                        a section and link for the version
   -h, --help            show this text
 
 Files: ${FILES.map((target) => target.file).join(", ")}`;

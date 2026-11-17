@@ -11,6 +11,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   result, rejection reason, raw readout text, glyph candidates and map-line
   crops under `data/diagnostics/`; rejected probes now show their reason in the
   readout panel.
+- `scripts/bump-version.mjs` reads and writes every stored version
+  (`src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `package.json`,
+  `package-lock.json`, `src-tauri/tauri.conf.json`) from one place. `--check`
+  (`npm run version:check`) never writes and exits non-zero on drift; a write
+  needs an explicit version, previews with `--dry-run`, refuses a backwards move
+  without `--force`, and promotes `CHANGELOG.md` `[Unreleased]` only with
+  `--changelog`. Every edit is verified in memory before any file is written, so
+  a bad locator or malformed JSON aborts with the tree untouched instead of half
+  bumped, and `--changelog` still promotes when the stored versions already
+  match. `npm run test:version-script` covers the locators and the write path.
 
 ### Changed
 - The testdata corpus is now image-indexed (`meta.json` version 2). Every PNG in

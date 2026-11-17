@@ -9,6 +9,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "test:version-script": "node --test scripts/bump-version.test.mjs",
     "version:check": "node scripts/bump-version.mjs --check",
     "tauri": "tauri"
   },

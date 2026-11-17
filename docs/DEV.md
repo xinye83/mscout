@@ -33,6 +33,7 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 | `npx tsc --noEmit` | Frontend typecheck |
 | `node scripts/gen-mock.mjs` | Write mock samples into `data/samples/` |
 | `npm run version:check` | Check every stored version agrees (non-zero on drift) |
+| `npm run test:version-script` | Test the version bump/check script |
 
 ## Version bumping
 
@@ -51,19 +52,25 @@ One version is stored in five files. `scripts/bump-version.mjs` reads and writes
 node scripts/bump-version.mjs --check
 npm run version:check          # same thing
 
-# Check against a specific version (useful in CI on a release branch).
+# Check against a specific version (useful in CI on a release branch). Like
+# every --check run it only reports: it never writes and suggests no bump.
 node scripts/bump-version.mjs --check 0.7.0
 
 # Preview a bump, then apply it.
 node scripts/bump-version.mjs 0.7.0 --dry-run
 node scripts/bump-version.mjs 0.7.0
+
+# Same write, and promote the changelog section with it (opt-in).
+node scripts/bump-version.mjs 0.7.0 --changelog
 ```
 
 A write **requires** an explicit version argument: a bare `node scripts/bump-version.mjs` prints the usage and exits `2` without touching anything. `--check` never writes. Moving to a lower version is refused unless `--force` is passed.
 
-The `CHANGELOG.md` section is never promoted implicitly. Pass `--changelog` to a write to turn `## [Unreleased]` into `## [<version>] - <today>` and move the compare link; with `--check`, `--changelog` instead requires that a released section and link already exist for the version.
+The `CHANGELOG.md` section is never promoted implicitly. Pass `--changelog` to a write to turn `## [Unreleased]` into `## [<version>] - <today>` and move the compare link; with `--check`, `--changelog` instead requires that a released section and link already exist for the version. The write-mode flag is idempotent: it promotes even when every stored version already matches, so a release never needs a second run.
 
-Edits are textual and in place, and each one is re-read and verified before it is written (JSON files are re-parsed and deep-compared against the original). The script never runs `cargo` or `npm`, so no lockfile is regenerated: after a bump, review `git diff` and run `node scripts/bump-version.mjs --check`. If `cargo metadata` or `npm install` would rewrite the lock entries differently, that is a toolchain problem worth noticing, not something to paper over here.
+Edits are textual and in place. A write is two-phase: every edited file is built in memory and verified first — the locators must find the same entries holding the new value, the line count must be unchanged, only the version lines may differ, and JSON files are re-parsed and deep-compared against the original — and only then is anything written. A failed check therefore leaves every file untouched instead of half bumped. The script never runs `cargo` or `npm`, so no lockfile is regenerated: after a bump, review `git diff` and run `node scripts/bump-version.mjs --check`. If `cargo metadata` or `npm install` would rewrite the lock entries differently, that is a toolchain problem worth noticing, not something to paper over here.
+
+`node --test scripts/bump-version.test.mjs` (`npm run test:version-script`) covers the locators and the write path against throwaway trees in the temp directory; it points the script at them with `MSCOUT_VERSION_ROOT`, which exists for the tests only and is not a user-facing option.
 
 ## Running the built exe
 
@@ -89,7 +96,7 @@ Release binary is self-contained (frontend embedded). Useful environment variabl
 ```
 src/                 React UI (live panel, history, calibration, chart, rates, EXP table)
 src-tauri/src/       Rust: capture, OCR/matching, engine loop, profiles, window/tray/hotkeys
-scripts/             dev-only mock sample generator and the version bump/check script
+scripts/             dev-only mock sample generator, the version bump/check script and its tests
 data/                runtime data (gitignored): samples, settings, per-resolution profiles
 docs/                setup, presets, spec, roadmap, decisions, data format, dev notes, rendering research
 ```
