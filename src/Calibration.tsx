@@ -9,7 +9,9 @@ import type {
   LabelCrop,
   LearningInfo,
   MscwStatus,
+  Probe,
   ProfileSummary,
+  ReadProvenance,
   Readings,
   Region,
   TargetStatus,
@@ -58,6 +60,7 @@ const SOURCE_LABEL: Record<string, string> = {
   table: "stored table",
   dtw: "DTW match",
   literal: "OCR text, no table match",
+  glyphs: "minimap letter atlas",
   hidden: "minimap collapsed",
   none: "not read",
   unknown: "not recognised",
@@ -448,6 +451,12 @@ export default function Calibration() {
   const [probe, setProbe] = useState<Readings | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The backend's own rejection ("the EXP box is not set") and the provenance it
+  // gathered before giving up, so a rejected frame still explains itself.
+  const [probeRejected, setProbeRejected] = useState<string | null>(null);
+  const [probeProvenance, setProbeProvenance] = useState<ReadProvenance | null>(
+    null,
+  );
   const [probeError, setProbeError] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [activeProfile, setActiveProfile] = useState<ProfileSummary | null>(null);
@@ -462,19 +471,29 @@ export default function Calibration() {
 
   const bumpShapes = useCallback(() => setShapeReload((n) => n + 1), []);
 
-  // Read the frozen frame for the per-panel "Read:" lines. Best effort: a panel
-  // with no box or a rejected read simply shows "—".
-  const probeNow = useCallback(async (serial: number) => {
-    if (!serial) return;
-    const readings = await invoke<Readings>("parse_probe", { serial }).catch(
-      (cause) => {
-        setProbeError(String(cause));
-        return null;
-      },
-    );
-    if (readings) setProbeError(null);
-    setProbe(readings);
+  // Apply one probe result to the readout panels. A rejected frame keeps its
+  // provenance and reason, so the panels can show what was tried and why it stopped
+  // even though there are no readings to display.
+  const applyProbe = useCallback((result: Probe | null, commandError?: unknown) => {
+    setProbe(result?.readings ?? null);
+    setProbeProvenance(result?.provenance ?? null);
+    setProbeRejected(result?.rejected ?? null);
+    setProbeError(commandError ? String(commandError) : null);
   }, []);
+
+  // Read the frozen frame for the per-panel "Read:" lines. Best effort: a panel
+  // with no box or a rejected read simply shows "—" plus the backend's reason.
+  const probeNow = useCallback(
+    async (serial: number) => {
+      if (!serial) return;
+      try {
+        applyProbe(await invoke<Probe>("parse_probe", { serial }));
+      } catch (cause) {
+        applyProbe(null, cause);
+      }
+    },
+    [applyProbe],
+  );
 
   // The map is read by detection, so seed the preview from the detected line
   // regions rather than legacy saved boxes. Nothing is persisted here; a drawn box
@@ -617,14 +636,14 @@ export default function Calibration() {
         setRegions(cal);
         setLearning(info);
         setPreview(null);
-        setProbe(null);
+        applyProbe(null);
         setMessage(`UI size set to ${option.label}`);
         refreshProfiles();
       } catch (cause) {
         setError(String(cause));
       }
     },
-    [persist, preview, refreshProfiles, regions],
+    [applyProbe, persist, preview, refreshProfiles, regions],
   );
 
   const saveDiagnostic = useCallback(async () => {
@@ -644,7 +663,7 @@ export default function Calibration() {
   const freeze = useCallback(async () => {
     setError(null);
     setMessage(null);
-    setProbe(null);
+    applyProbe(null);
     try {
       const raw = await invoke<ArrayBuffer | number[]>("capture_preview");
       const bytes =
@@ -714,7 +733,7 @@ export default function Calibration() {
     } catch (cause) {
       setError(String(cause));
     }
-  }, [bumpShapes, probeNow, seedMapBox]);
+  }, [applyProbe, bumpShapes, probeNow, seedMapBox]);
 
   const seedNow = async () => {
     if (!preview) return;
@@ -990,13 +1009,13 @@ export default function Calibration() {
   const test = async () => {
     setError(null);
     setMessage(null);
-    setProbe(null);
+    applyProbe(null);
     try {
       await persist(regions);
-      const result = await invoke<Readings>("parse_probe", {
+      const result = await invoke<Probe>("parse_probe", {
         serial: preview?.serial ?? 0,
       });
-      setProbe(result);
+      applyProbe(result);
     } catch (cause) {
       setError(String(cause));
     }
@@ -1247,10 +1266,11 @@ export default function Calibration() {
     }
   };
 
-  /// Where this field's value came from. Absent from an older backend, which is why
-  /// the readout falls back to the bare value.
+  /// Where this field's value came from. The probe carries the provenance beside
+  /// the readings so a rejected frame has one too; absent from an older backend,
+  /// which is why the readout falls back to the bare value.
   const provenanceFor = (key: Readout): FieldProvenance | null => {
-    const provenance = probe?.provenance;
+    const provenance = probe?.provenance ?? probeProvenance;
     if (!provenance) return null;
     switch (key) {
       case "exp":
@@ -1512,8 +1532,10 @@ export default function Calibration() {
                         Why: {provenance.reason}
                       </p>
                     )}
-                    {probeError && (
-                      <p className="warn small">Rejected: {probeError}</p>
+                    {(probeRejected || probeError) && (
+                      <p className="warn small">
+                        Rejected: {probeRejected ?? probeError}
+                      </p>
                     )}
                     {key === "exp" && (
                       <>
@@ -1838,7 +1860,7 @@ export default function Calibration() {
           <span className="muted small probe">
             read ok · conf {probe.conf.toFixed(2)}
             {probe.provenance
-              ? ` · ${probe.provenance.durationMs.toFixed(1)} ms`
+              ? ` · ${(probe.provenance.durationMs ?? 0).toFixed(1)} ms`
               : ""}
           </span>
         )}

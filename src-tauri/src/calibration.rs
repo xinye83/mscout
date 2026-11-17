@@ -455,8 +455,21 @@ pub fn teach_identity(serial: u64, kind: String, label: String) -> Result<Learni
     Ok(learning_info(&settings::load_atlas()))
 }
 
+/// The calibration window's probe.
+///
+/// The provenance and the rejection reason travel beside the readings, so a frame
+/// that was rejected still shows which stage was tried and what stopped it. A
+/// rejected frame has no readings, which is why they are optional.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Probe {
+    pub readings: Option<Readings>,
+    pub provenance: ReadProvenance,
+    pub rejected: Option<String>,
+}
+
 #[tauri::command]
-pub fn parse_probe(serial: u64) -> Result<Readings, String> {
+pub fn parse_probe(serial: u64) -> Result<Probe, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
     let calibration = settings::load_calibration();
@@ -467,7 +480,7 @@ pub fn parse_probe(serial: u64) -> Result<Readings, String> {
     let exp_atlas = settings::load_atlas();
     let level_atlas = settings::load_level_atlas();
     let identity_atlas = settings::load_identity_atlas();
-    let mut readings = engine::read_frame(
+    let (readings, mut provenance, rejected) = match engine::read_frame_detailed(
         &frame,
         &calibration,
         &Atlas::from_settings(&exp_atlas),
@@ -476,15 +489,29 @@ pub fn parse_probe(serial: u64) -> Result<Readings, String> {
         &settings::load_maps(),
         &settings::load_streets(),
         &settings::load_identities(),
-    )?;
+    ) {
+        Ok(readings) => {
+            let provenance = readings.provenance.clone();
+            (Some(readings), provenance, None)
+        }
+        Err(failed) => {
+            let engine::RejectedRead { reason, provenance } = *failed;
+            (None, provenance, Some(reason))
+        }
+    };
     // The reader sees the glyph sets only; the window shows where each set came
-    // from, so stamp the stored origin beside the read.
-    readings.provenance.stamp_engines(
+    // from, so stamp the stored origin beside the read. A rejected frame is
+    // stamped too: that is the frame a support case asks about.
+    provenance.stamp_engines(
         &exp_atlas.source,
         &level_atlas.source,
         &identity_atlas.source,
     );
-    Ok(readings)
+    Ok(Probe {
+        readings,
+        provenance,
+        rejected,
+    })
 }
 
 /// Write a local, support-friendly snapshot of the current calibration read:
@@ -501,6 +528,16 @@ pub fn save_diagnostic(serial: u64) -> Result<String, String> {
     let level_atlas = settings::load_level_atlas();
     let identity_atlas = settings::load_identity_atlas();
     let started = std::time::Instant::now();
+    // Where the stored atlases came from, stamped on every arm below: the frame
+    // that failed to read is exactly the one where it matters whether the digits
+    // were `game`, `taught` or a stale preset.
+    let stamp = |provenance: &mut ReadProvenance| {
+        provenance.stamp_engines(
+            &exp_atlas.source,
+            &level_atlas.source,
+            &identity_atlas.source,
+        );
+    };
     let (readings, provenance, rejected) = if calibration.is_ready() {
         match engine::read_frame_detailed(
             &frame,
@@ -513,27 +550,31 @@ pub fn save_diagnostic(serial: u64) -> Result<String, String> {
             &settings::load_identities(),
         ) {
             Ok(mut readings) => {
-                readings.provenance.stamp_engines(
-                    &exp_atlas.source,
-                    &level_atlas.source,
-                    &identity_atlas.source,
-                );
+                stamp(&mut readings.provenance);
                 let provenance = serde_json::json!(readings.provenance);
                 (serde_json::json!(readings), provenance, None)
             }
             // A rejected frame is the one most worth having on disk, so keep the
             // reason and whatever provenance the read had gathered.
-            Err(failed) => (
-                serde_json::json!({ "error": failed.reason }),
-                serde_json::json!(failed.provenance),
-                Some(failed.reason),
-            ),
+            Err(failed) => {
+                let engine::RejectedRead {
+                    reason,
+                    mut provenance,
+                } = *failed;
+                stamp(&mut provenance);
+                (
+                    serde_json::json!({ "error": reason }),
+                    serde_json::json!(provenance),
+                    Some(reason),
+                )
+            }
         }
     } else {
-        let provenance = ReadProvenance {
+        let mut provenance = ReadProvenance {
             exp: FieldProvenance::rejected("the EXP box is not set, so nothing was read"),
             ..ReadProvenance::default()
         };
+        stamp(&mut provenance);
         (
             serde_json::json!({ "error": "save the EXP box first" }),
             serde_json::json!(provenance),
@@ -556,7 +597,9 @@ pub fn save_diagnostic(serial: u64) -> Result<String, String> {
         "version": 2,
         "capturedAt": chrono::Local::now().to_rfc3339(),
         "readMs": started.elapsed().as_secs_f64() * 1000.0,
-        "engine": "hud-atlas+map-table+dtw",
+        // The stage list, not an atlas origin: `provenance.*.engine` below answers
+        // "where did this stage's data come from", so the two are kept apart by name.
+        "stages": "hud-atlas+map-table+dtw",
         "frame": { "w": frame.width, "h": frame.height },
         "profile": crate::profile::active_key(),
         "uiMode": settings::ui_mode().id(),

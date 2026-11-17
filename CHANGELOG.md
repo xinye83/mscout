@@ -7,6 +7,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Added
+- Every reading and diagnostic now carries per-field **read provenance**:
+  `source` (the reader stage that answered — `atlas`, `font`, `fingerprint`,
+  `ocr`, `table`, `dtw`, `literal`, `glyphs`, `hidden`, `unknown`, `none`),
+  `engine` (`game` / `taught` / `font`, where that stage's data came from),
+  `reason` (why an empty field is empty) and the read's `durationMs`. A
+  `glyphs` source marks the learned minimap letter atlas, so a name it guessed
+  is no longer reported as OCR text or as the rendered-name DTW.
 - Calibration **Save diagnostic** writes a local JSON snapshot with the probe
   result, rejection reason, raw readout text, glyph candidates and map-line
   crops under `data/diagnostics/`; rejected probes now show their reason in the
@@ -21,6 +28,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   fixtures by manifest id.
 
 ### Fixed
+- A saved diagnostic for a **rejected** frame now records the atlas origin
+  (`game` / `taught` / preset) for EXP, level and name/job. It was stamped only
+  on a successful read, so the support file that exists to explain a rejection
+  could not say where the digits came from. The diagnostic's stage list is also
+  renamed `engine` → `stages`, so it no longer collides with the provenance's
+  `engine` meaning.
+- An unresolved map names the stage that gave up instead of one catch-all
+  sentence: a missing folded-minimap crop, a missing MSCW install, a folded
+  label that matched no client-table entry, and an expanded label with no text
+  each report their own `reason`.
+- The name/job provenance no longer blames a box that is set. A drawn-but-too-
+  small name box used to hide a usable job box, and a frame that seeded its own
+  per-line letters was reported as having "nothing to read with".
+- The Calibration readout now shows `Source:` and `Why:` for a **rejected**
+  frame, not only for the fields of an accepted one: the probe returns its
+  provenance and rejection reason beside the (absent) readings.
 - The map-table DTW fallback now resolves Roman-numeral siblings by counting the
   trailing `I` bars before comparing widths. This fixes `The Tree That Grew I`
   being read as `... III` when exact OCR is unavailable or fuzzy.

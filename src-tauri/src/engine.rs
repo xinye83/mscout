@@ -97,8 +97,8 @@ pub struct Sample {
 /// The reader stage that produced one field of a reading.
 ///
 /// The ids are part of the diagnostic format (`atlas`, `font`, `fingerprint`,
-/// `ocr`, `table`, `dtw`, `literal`, `hidden`, `unknown`, `none`), so a support file
-/// written by this build reads in an older one and vice versa.
+/// `ocr`, `table`, `dtw`, `literal`, `glyphs`, `hidden`, `unknown`, `none`), so a
+/// support file written by this build reads in an older one and vice versa.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReadSource {
@@ -117,12 +117,18 @@ pub enum ReadSource {
     Dtw,
     /// On-screen OCR text kept as it was read because no table entry matched it.
     Literal,
+    /// The learned minimap letter atlas read the label: its own text, or a taught
+    /// map name it was close enough to. Reported apart from `ocr` and `dtw` because
+    /// the label is 4-6 px tall and can be learned misaligned, so a name from this
+    /// stage is worth less than one Windows OCR confirmed.
+    Glyphs,
     /// Nothing to read: the minimap is collapsed to its title bar.
     Hidden,
-    /// The reader could not resolve this field.
+    /// No provenance was recorded for this field: a reading written by an older
+    /// build, or a stage that could not say which reader answered.
     #[default]
     Unknown,
-    /// The field was never read, because a check rejected it (or the frame) first.
+    /// No value was produced for this field; `reason` says which check stopped it.
     None,
 }
 
@@ -793,6 +799,12 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
     })
 }
 
+/// Read one frame, keeping only the rejection reason as a plain string.
+///
+/// Every runtime caller now wants the provenance beside the readings — the
+/// calibration probe and the saved diagnostic included — so the plain wrapper is
+/// used only by the regression harness and the capture tests.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn read_frame(
     frame: &Frame,
@@ -913,16 +925,11 @@ pub(crate) fn read_frame_detailed(
     // The minimap has three zoom states. Detection runs once and both the map and
     // street readers consume it, instead of each re-running panel detection.
     let minimap = ocr::detect_minimap(frame);
-    let MapRead {
-        name: map_name,
-        street,
-        hidden: map_hidden,
-        source: map_source,
-    } = match_map_and_street(frame, calibration, maps, streets, minimap);
-    provenance.map = map_provenance(map_source);
-    let map = match street {
-        Some(street) if map_name != "unknown" => format!("{street}\n{map_name}"),
-        _ => map_name,
+    let map_read = match_map_and_street(frame, calibration, maps, streets, minimap);
+    provenance.map = map_provenance(&map_read);
+    let map = match &map_read.street {
+        Some(street) if map_read.name != "unknown" => format!("{street}\n{}", map_read.name),
+        _ => map_read.name.clone(),
     };
 
     // Job and name can draw at different Arial sizes (the Filter Applied
@@ -955,7 +962,18 @@ pub(crate) fn read_frame_detailed(
         identities.job.as_ref(),
         IdentityKind::Job,
     );
-    provenance.identity = identity_provenance(&name, &job, calibration, identity_atlas);
+    // The atlas the read actually had: the profile's merged set, or the per-line
+    // seed, which is used only when the profile has none. Reporting on the profile
+    // atlas alone said "nothing to read with" for a frame that did seed letters and
+    // simply failed to read them.
+    let seeded_glyphs = name_atlas
+        .iter()
+        .chain(job_atlas.iter())
+        .any(|atlas| !atlas.glyphs.is_empty());
+    let has_glyphs = !identity_atlas.glyphs.is_empty() || seeded_glyphs;
+    let has_fingerprint = identities.name.is_some() || identities.job.is_some();
+    provenance.identity =
+        identity_provenance(&name, &job, calibration, has_glyphs, has_fingerprint);
 
     provenance.duration_ms = started.elapsed().as_secs_f64() * 1000.0;
     Ok(Readings {
@@ -975,7 +993,7 @@ pub(crate) fn read_frame_detailed(
         level_text,
         name: name.text,
         job: job.text,
-        map_hidden,
+        map_hidden: map_read.hidden,
         provenance,
     })
 }
@@ -1101,18 +1119,15 @@ struct IdentityRead {
 }
 
 /// The map's provenance entry: the stage that named the map, or why nothing did.
-fn map_provenance(source: ReadSource) -> FieldProvenance {
-    match source {
-        ReadSource::Hidden => FieldProvenance::unread(
-            ReadSource::Hidden,
-            "the minimap is collapsed — there is no map name on screen",
-        ),
-        ReadSource::Unknown => FieldProvenance::unread(
-            ReadSource::Unknown,
-            "no minimap label text and no matching map name",
-        ),
-        source => FieldProvenance::read(source),
+///
+/// The reason comes from the stage that gave up, so an `unknown` map says whether
+/// the label could not be cropped, the client table was not installed, or the
+/// label simply matched nothing — the same as EXP and level already report.
+fn map_provenance(read: &MapRead) -> FieldProvenance {
+    if let Some(reason) = &read.reason {
+        return FieldProvenance::unread(read.source, reason.clone());
     }
+    FieldProvenance::read(read.source)
 }
 
 /// Which stage answered for the name/job readout, and why neither line read when
@@ -1121,7 +1136,8 @@ fn identity_provenance(
     name: &IdentityRead,
     job: &IdentityRead,
     calibration: &Calibration,
-    atlas: &Atlas,
+    has_glyphs: bool,
+    has_fingerprint: bool,
 ) -> FieldProvenance {
     let source = match (name.source, job.source) {
         (ReadSource::Font, _) | (_, ReadSource::Font) => ReadSource::Font,
@@ -1131,16 +1147,21 @@ fn identity_provenance(
     if source != ReadSource::None {
         return FieldProvenance::read(source);
     }
+    // Each box is tested on its own: `Option::or` only falls through when `name` is
+    // unset, so a name box that is drawn but too small would hide a usable job box
+    // and blame the player for a box that is set.
     let has_box = calibration
         .name
-        .or(calibration.job)
         .filter(Region::is_usable)
+        .or(calibration.job.filter(Region::is_usable))
         .is_some();
     let reason = if !has_box {
         "no name/job box is set"
-    } else if atlas.glyphs.is_empty() {
+    } else if !has_glyphs && !has_fingerprint {
         "no name/job letters or fingerprint to read with"
     } else {
+        // Letters were available — the profile's atlas or the per-line seed — and a
+        // taught fingerprint too when one exists, so the lines simply did not read.
         "the name and job lines did not read"
     };
     FieldProvenance::rejected(reason)
@@ -1490,7 +1511,9 @@ fn match_map(
     }
 
     // No OCR (or no label): fall back to the learned glyph text. A near miss
-    // snaps to a name that was taught explicitly.
+    // snaps to a name that was taught explicitly. Both outcomes come from the
+    // learned letter atlas, so they are reported as `glyphs` — a support reader
+    // must not mistake them for OCR text or for the rendered-name DTW above.
     let map_atlas = Atlas::from_settings(&settings::load_map_atlas());
     if let Some(lines) = ocr::read_map_text(frame, &map_atlas) {
         // The map name is the bottom line; the street is matched separately.
@@ -1507,12 +1530,11 @@ fn match_map(
                 })
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
 
-            return match best {
-                Some((label, similarity)) if similarity >= MAP_SIMILARITY => {
-                    (label, ReadSource::Dtw)
-                }
-                _ => (text, ReadSource::Literal),
+            let name = match best {
+                Some((label, similarity)) if similarity >= MAP_SIMILARITY => label,
+                _ => text,
             };
+            return (name, ReadSource::Glyphs);
         }
     }
 
@@ -1548,22 +1570,27 @@ fn folded_label_hash(label: &ocr::Gray) -> u64 {
 }
 
 /// The minimap state's answer: the map name, the street line when the label has
-/// one, whether the minimap has no text at all, and which stage named the map.
+/// one, whether the minimap has no text at all, which stage named the map, and why
+/// no map was named when none was.
 #[derive(Clone, Debug)]
 struct MapRead {
     name: String,
     street: Option<String>,
     hidden: bool,
     source: ReadSource,
+    /// The stage's own reason for an unnamed map, carried into the provenance the
+    /// same way `LevelRead::reason` is.
+    reason: Option<String>,
 }
 
 impl MapRead {
-    fn unknown(source: ReadSource) -> Self {
+    fn unknown(reason: impl Into<String>) -> Self {
         Self {
             name: "unknown".into(),
             street: None,
             hidden: false,
-            source,
+            source: ReadSource::Unknown,
+            reason: Some(reason.into()),
         }
     }
 }
@@ -1586,14 +1613,15 @@ fn match_map_and_street(
             street: None,
             hidden: true,
             source: ReadSource::Hidden,
+            reason: Some("the minimap is collapsed — there is no map name on screen".into()),
         },
         Some(ocr::MinimapState::Folded) => {
             let Some(minimap) = minimap.as_ref() else {
-                return MapRead::unknown(ReadSource::Unknown);
+                return MapRead::unknown("no minimap was detected");
             };
             let Some(label) = ocr::folded_label(frame, minimap) else {
                 log_once("folded minimap: no label crop");
-                return MapRead::unknown(ReadSource::Unknown);
+                return MapRead::unknown("the folded minimap label could not be cropped");
             };
             let cache_key = folded_label_hash(&label);
             if let Ok(guard) = MAP_CACHE.lock() {
@@ -1610,6 +1638,7 @@ fn match_map_and_street(
                     street: Some(street),
                     hidden: false,
                     source: ReadSource::Ocr,
+                    reason: None,
                 };
                 if let Ok(mut guard) = MAP_CACHE.lock() {
                     *guard = Some((cache_key, read.clone()));
@@ -1617,7 +1646,9 @@ fn match_map_and_street(
                 return read;
             }
             let Some(dir) = settings::mscw_dir() else {
-                return MapRead::unknown(ReadSource::Unknown);
+                return MapRead::unknown(
+                    "no MSCW client directory, so the map table cannot be read",
+                );
             };
             let mut best: Option<((String, String), f64)> = None;
             for px in LABEL_SIZES {
@@ -1644,6 +1675,7 @@ fn match_map_and_street(
                         street: Some(street),
                         hidden: false,
                         source: ReadSource::Dtw,
+                        reason: None,
                     };
                     if let Ok(mut guard) = MAP_CACHE.lock() {
                         *guard = Some((cache_key, read.clone()));
@@ -1652,7 +1684,7 @@ fn match_map_and_street(
                 }
                 None => {
                     log_once("folded minimap: label did not match the client table");
-                    MapRead::unknown(ReadSource::Unknown)
+                    MapRead::unknown("the folded map label did not match the client table")
                 }
             }
         }
@@ -1685,6 +1717,11 @@ fn match_map_and_street(
                 }
             }
             let read = MapRead {
+                reason: if map_name == "unknown" {
+                    Some("no minimap label text and no matching map name".into())
+                } else {
+                    None
+                },
                 name: map_name,
                 street,
                 hidden: false,
@@ -2282,6 +2319,7 @@ mod tests {
             (ReadSource::Table, "table"),
             (ReadSource::Dtw, "dtw"),
             (ReadSource::Literal, "literal"),
+            (ReadSource::Glyphs, "glyphs"),
             (ReadSource::Hidden, "hidden"),
             (ReadSource::Unknown, "unknown"),
             (ReadSource::None, "none"),
@@ -2346,13 +2384,30 @@ mod tests {
 
     #[test]
     fn map_provenance_carries_the_source_and_the_reason() {
-        let hidden = map_provenance(ReadSource::Hidden);
+        // A collapsed minimap is not a miss: there is nothing on screen to read.
+        let hidden = map_provenance(&MapRead {
+            name: "unknown".into(),
+            street: None,
+            hidden: true,
+            source: ReadSource::Hidden,
+            reason: Some("the minimap is collapsed — there is no map name on screen".into()),
+        });
         assert_eq!(hidden.source, ReadSource::Hidden);
-        assert!(hidden.reason.is_some());
+        assert_eq!(
+            hidden.reason.as_deref(),
+            Some("the minimap is collapsed — there is no map name on screen")
+        );
 
-        let unknown = map_provenance(ReadSource::Unknown);
-        assert_eq!(unknown.source, ReadSource::Unknown);
-        assert!(unknown.reason.is_some());
+        // An unresolved map names the stage that gave up, instead of one sentence
+        // that covers a missing crop, a missing client table and a non-match alike.
+        let folded = map_provenance(&MapRead::unknown(
+            "the folded map label did not match the client table",
+        ));
+        assert_eq!(folded.source, ReadSource::Unknown);
+        assert_eq!(
+            folded.reason.as_deref(),
+            Some("the folded map label did not match the client table")
+        );
 
         // A named map is not a rejection, so it carries no reason.
         for source in [
@@ -2360,11 +2415,71 @@ mod tests {
             ReadSource::Table,
             ReadSource::Dtw,
             ReadSource::Literal,
+            ReadSource::Glyphs,
         ] {
-            let entry = map_provenance(source);
+            let entry = map_provenance(&MapRead {
+                name: "Perion".into(),
+                street: None,
+                hidden: false,
+                source,
+                reason: None,
+            });
             assert_eq!(entry.source, source);
             assert_eq!(entry.reason, None);
         }
+    }
+
+    #[test]
+    fn identity_provenance_blames_the_right_missing_piece() {
+        let unread = || IdentityRead {
+            text: None,
+            source: ReadSource::None,
+        };
+        let tiny = Region {
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+        };
+        let real = Region {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 12,
+        };
+
+        // A name box that is drawn but too small must not hide a usable job box.
+        let calibration = Calibration {
+            name: Some(tiny),
+            job: Some(real),
+            ..Calibration::default()
+        };
+        let letters_but_no_read =
+            identity_provenance(&unread(), &unread(), &calibration, true, false);
+        assert_eq!(letters_but_no_read.source, ReadSource::None);
+        assert_eq!(
+            letters_but_no_read.reason.as_deref(),
+            Some("the name and job lines did not read"),
+            "a set job box must not be reported as missing"
+        );
+
+        // The per-line seed counted as letters, so "nothing to read with" is wrong.
+        let nothing_at_all = identity_provenance(&unread(), &unread(), &calibration, false, false);
+        assert_eq!(
+            nothing_at_all.reason.as_deref(),
+            Some("no name/job letters or fingerprint to read with")
+        );
+
+        // A taught fingerprint alone is still something to read with.
+        let fingerprint_only = identity_provenance(&unread(), &unread(), &calibration, false, true);
+        assert_eq!(
+            fingerprint_only.reason.as_deref(),
+            Some("the name and job lines did not read")
+        );
+
+        // Neither box is set at all.
+        let no_box = identity_provenance(&unread(), &unread(), &Calibration::default(), true, true);
+        assert_eq!(no_box.reason.as_deref(), Some("no name/job box is set"));
     }
 
     #[test]

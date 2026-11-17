@@ -69,6 +69,7 @@ export type ReadSource =
   | "table"
   | "dtw"
   | "literal"
+  | "glyphs"
   | "hidden"
   | "unknown"
   | "none";
@@ -80,7 +81,7 @@ export type FieldProvenance = {
    * Where that stage's data came from: "game" or "taught" for a digit atlas,
    * "font" or "taught" for the identity atlas, empty otherwise.
    */
-  engine: string;
+  engine?: string;
   /** The reader's own reason for an empty field. */
   reason?: string | null;
 };
@@ -92,7 +93,18 @@ export type ReadProvenance = {
   map: FieldProvenance;
   identity: FieldProvenance;
   /** Wall-clock duration of the read, in milliseconds. */
-  durationMs: number;
+  durationMs?: number;
+};
+
+/**
+ * The calibration window's probe. The provenance and the rejection reason come
+ * back beside the readings, so a rejected frame can still show which stage was
+ * tried and why it stopped.
+ */
+export type Probe = {
+  readings?: Readings | null;
+  provenance?: ReadProvenance;
+  rejected?: string | null;
 };
 
 export type Readings = {
