@@ -724,14 +724,13 @@ pub struct Atlas {
     pub glyphs: Vec<Glyph>,
 }
 
-/// The best and worst reading of one shape: what the atlas thinks it is, and what
-/// else it very nearly is.
+/// What the atlas thinks one shape is, and what else it very nearly is.
 #[derive(Clone, Copy, Debug)]
 struct Ranked {
     ch: char,
     distance: f64,
     /// The closest *different* allowed character, and how far away it is.
-    /// `char::MAX` / `f64::MAX` when no other character is allowed here.
+    /// `'?'` / `f64::MAX` when no other character is allowed here.
     rival: char,
     rival_distance: f64,
 }
@@ -753,6 +752,19 @@ impl Ranked {
             self.rival_distance - self.distance
         )
     }
+}
+
+/// How the two halves of a split shape are matched.
+///
+/// The readouts refuse a half whose runner-up explains it as well as the winner:
+/// a guessed digit changes the number the player sees. Ordinary text keeps the
+/// plain nearest glyph, because a name or job letter is anti-aliased at a size the
+/// Filtered digits' margin was never calibrated on, and the identity reader
+/// cross-checks the finished string against the profile.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SplitPolicy {
+    Readout,
+    Text,
 }
 
 impl Atlas {
@@ -946,6 +958,14 @@ impl Atlas {
             .map(|ranked| (ranked.ch, ranked.distance))
     }
 
+    /// Nearest glyph whose character is one of `allowed`, or `None` when even the
+    /// closest of them is too far to trust. No runner-up veto: this is the
+    /// ordinary-text matcher, which never had one.
+    fn match_segment_nearest(&self, segment: &Segment, allowed: &str) -> Option<(char, f64)> {
+        self.match_ranked(segment, allowed, MATCH_THRESHOLD)
+            .map(|ranked| (ranked.ch, ranked.distance))
+    }
+
     /// The two nearest allowed characters for a shape, or `None` when the closest
     /// allowed glyph is further than `tolerance`.
     ///
@@ -1054,7 +1074,7 @@ impl Atlas {
             // is only worth taking when it explains the shape better than the single
             // glyph that was vetoed above: cutting a tied digit in half would be
             // another way of guessing.
-            if let Some(parts) = self.split_segment(&segment, allowed) {
+            if let Some(parts) = self.split_segment(&segment, allowed, SplitPolicy::Readout) {
                 let total: f64 = parts.iter().map(|(_, _, best)| best).sum();
                 if single_best.map_or(true, |best| total < best) {
                     for (sub, ch, best) in parts {
@@ -1101,17 +1121,27 @@ impl Atlas {
         Ok(out)
     }
 
-    /// Cut a wide shape into two touching glyphs and match both halves.
-    fn split_segment(&self, segment: &Segment, allowed: &str) -> Option<Vec<(Segment, char, f64)>> {
+    /// Cut a wide shape into two touching glyphs and match both halves, under
+    /// `policy`.
+    fn split_segment(
+        &self,
+        segment: &Segment,
+        allowed: &str,
+        policy: SplitPolicy,
+    ) -> Option<Vec<(Segment, char, f64)>> {
         if segment.w < 9 {
             return None;
         }
+        let accept = |sub: &Segment, allowed: &str| match policy {
+            SplitPolicy::Readout => self.match_segment_within(sub, allowed),
+            SplitPolicy::Text => self.match_segment_nearest(sub, allowed),
+        };
         type SplitMatch = (Segment, char, f64);
         let mut best: Option<(f64, Vec<SplitMatch>)> = None;
         for cut in 3..=segment.w.saturating_sub(3) {
             let left = split_part(segment, 0, cut);
             let right = split_part(segment, cut, segment.w - cut);
-            let Some((left_ch, left_distance)) = self.match_segment_within(&left, allowed) else {
+            let Some((left_ch, left_distance)) = accept(&left, allowed) else {
                 continue;
             };
             let right_allowed = match left_ch {
@@ -1119,8 +1149,7 @@ impl Atlas {
                 '%' => "]",
                 _ => allowed,
             };
-            let Some((right_ch, right_distance)) = self.match_segment_within(&right, right_allowed)
-            else {
+            let Some((right_ch, right_distance)) = accept(&right, right_allowed) else {
                 continue;
             };
             let total = left_distance + right_distance;
@@ -1196,7 +1225,8 @@ impl Atlas {
                 // Anti-aliased text at Default sizes lets adjacent letters touch.
                 // Split the shape and match both halves against the whole set.
                 let allowed = all_chars.get_or_insert_with(|| self.learned());
-                let Some(parts) = self.split_segment(&segment, allowed.as_str()) else {
+                let Some(parts) = self.split_segment(&segment, allowed.as_str(), SplitPolicy::Text)
+                else {
                     continue;
                 };
                 for (sub, ch, best) in parts {
@@ -1482,7 +1512,7 @@ impl Atlas {
             }
 
             if hits.is_empty() {
-                if let Some(parts) = self.split_segment(&segment, DIGITS) {
+                if let Some(parts) = self.split_segment(&segment, DIGITS, SplitPolicy::Readout) {
                     let total: f64 = parts.iter().map(|(_, _, best)| best).sum();
                     if single_best.map_or(true, |best| total < best) {
                         for (_, ch, best) in parts {
@@ -1592,6 +1622,14 @@ fn validate_readout(text: &str) -> Result<(), String> {
     }
     if close + 1 != text.len() {
         return Err(format!("'{text}' has characters after its ']'"));
+    }
+    // Nothing may sit between the '%' and the ']': the percentage slice below
+    // stops at the '%', so `91.53%x`, `91.53%%` and `91.53%1` would otherwise
+    // all validate as a readout whose percentage was never drawn.
+    if percent_at + 1 != close {
+        return Err(format!(
+            "'{text}' has characters between its '%' and its ']'"
+        ));
     }
     if text[open + 1..close]
         .chars()
@@ -3009,6 +3047,141 @@ mod tests {
     }
 
     #[test]
+    fn ambiguity_margin_sits_where_the_corpus_measured_it() {
+        // The harness cannot express a gap under 3.3 through the atlas (one cleared
+        // pixel of a 7x11 shape is 255/77), which is the regime the rule operates
+        // in, so the boundary is pinned on the numbers the margin was chosen from.
+        let ranked = |distance: f64, rival_distance: f64| Ranked {
+            ch: '3',
+            distance,
+            rival: '8',
+            rival_distance,
+        };
+
+        // Reads the corpus keeps: the 36,818 `3` is 31.6 with its `8` at 33.4
+        // (1.8 apart) and its `9` is 24.3 with a `0` at 26.5 (2.2 apart).
+        assert!(!ranked(31.6, 33.4).ambiguous());
+        assert!(!ranked(24.3, 26.5).ambiguous());
+        // The 26,487 `13.58%` `3` is 30.8 with its `8` at 31.6: 0.8 apart, the tie
+        // the rule refuses.
+        assert!(ranked(30.8, 31.6).ambiguous());
+        // The boundary is the margin itself: exactly `AMBIGUITY_MARGIN` apart is
+        // still a read, anything under it is a tie.
+        assert_eq!(AMBIGUITY_MARGIN, 1.0);
+        assert!(!ranked(30.0, 31.0).ambiguous());
+        assert!(ranked(30.0, 30.999).ambiguous());
+    }
+
+    /// Two 7x11 digits drawn as one wide shape with no blank column at the seam, so
+    /// the segmenter keeps them together and only a split can read them.
+    fn touching_pair() -> Vec<u8> {
+        let mut wide = with_holes(&readout_base(), 10, 0);
+        wide.extend_from_slice(&with_holes(&readout_base(), 12, 5));
+        wide
+    }
+
+    /// [`draw_readout`] for a line whose shapes are not all the same size.
+    fn draw_shapes(shapes: &[(&[u8], usize, usize)]) -> Gray {
+        const GAP: usize = 2;
+        let width = shapes.iter().map(|(_, w, _)| w + GAP).sum::<usize>() + GAP;
+        let height = shapes.iter().map(|(_, _, h)| *h).max().unwrap_or(0) + 4;
+        let mut gray = canvas(width, height);
+        let mut x0 = GAP;
+        for (shape, w, h) in shapes {
+            for y in 0..*h {
+                for x in 0..*w {
+                    if shape[y * w + x] > 0 {
+                        gray.px[(y + 2) * width + x0 + x] = 230;
+                    }
+                }
+            }
+            x0 += w + GAP;
+        }
+        gray
+    }
+
+    /// The one wide shape of [`touching_pair`], as the segmenter sees it.
+    fn wide_pair() -> Segment {
+        let mut found = segments(&draw_shapes(&[(&touching_pair(), 14, 11)]));
+        assert_eq!(found.len(), 1, "the pair must not segment apart: {found:?}");
+        found.remove(0)
+    }
+
+    #[test]
+    fn a_touching_pair_splits_when_it_explains_the_shape_better() {
+        // The strict step is vetoed — two characters explain the wide shape the same
+        // way, a few points from it — and the split into the two digits explains it
+        // exactly, so the split is taken: a vetoed single glyph must not cost the
+        // digits the shape is made of.
+        let (mut atlas, font) = readout_font("3[]%");
+        let wide = wide_pair();
+        let (w, h) = (wide.w, wide.h);
+        let (left, right) = (split_part(&wide, 0, 7), split_part(&wide, 7, w - 7));
+        atlas.learn_glyph('1', left.mask.clone(), 7, h);
+        atlas.learn_glyph('2', right.mask.clone(), w - 7, h);
+        let tied = with_holes(&wide.mask, 2, 3);
+        atlas.learn_glyph('6', tied.clone(), w, h);
+        atlas.learn_glyph('9', tied, w, h);
+
+        // The tie is real: both characters are the same distance from the shape, and
+        // close enough for the strict step to find them at all.
+        let ranked = atlas
+            .match_ranked(&wide, "0123456789,[", MATCH_THRESHOLD)
+            .expect("the tie is inside the strict threshold");
+        assert!(ranked.ambiguous(), "{ranked:?}");
+        assert_eq!(ranked.distance, ranked.rival_distance, "{ranked:?}");
+
+        let parts = atlas
+            .split_segment(&wide, "0123456789,[", SplitPolicy::Readout)
+            .expect("the touching pair splits");
+        assert_eq!(parts.iter().map(|(_, ch, _)| *ch).collect::<String>(), "12");
+        let total: f64 = parts.iter().map(|(_, _, best)| best).sum();
+        assert!(
+            total < ranked.distance,
+            "the split explains the shape better: {total} vs {}",
+            ranked.distance
+        );
+
+        let gray = draw_shapes(&[
+            (&wide.mask, w as usize, h as usize),
+            (&font_shape(&font, '['), 7, 11),
+            (&font_shape(&font, '3'), 7, 11),
+            (&font_shape(&font, '%'), 7, 11),
+            (&font_shape(&font, ']'), 7, 11),
+        ]);
+        let (text, _) = atlas.recognize_readout(&gray).expect("split read");
+        assert_eq!(text, "12[3%]");
+    }
+
+    #[test]
+    fn a_touching_pair_is_refused_when_the_vetoed_glyph_explains_it_as_well() {
+        // The other side of the same rule. Here two characters explain the wide shape
+        // exactly, so the split explains it no better than the single reading:
+        // cutting the shape in half would be a second guess, and the level is rejected
+        // instead of read as two digits.
+        let mut atlas = Atlas::default();
+        let wide = wide_pair();
+        let (w, h) = (wide.w, wide.h);
+        let (left, right) = (split_part(&wide, 0, 7), split_part(&wide, 7, w - 7));
+        atlas.learn_glyph('1', left.mask.clone(), 7, h);
+        atlas.learn_glyph('2', right.mask.clone(), w - 7, h);
+        atlas.learn_glyph('6', wide.mask.clone(), w, h);
+        atlas.learn_glyph('9', wide.mask.clone(), w, h);
+
+        assert!(
+            atlas
+                .split_segment(&wide, "0123456789", SplitPolicy::Readout)
+                .is_some(),
+            "the halves themselves still read"
+        );
+
+        let error = atlas
+            .read_digit_shapes(vec![wide])
+            .expect_err("a tie is not a level");
+        assert!(error.contains("too close to tell apart"), "{error}");
+    }
+
+    #[test]
     fn readout_rejects_a_missing_closing_bracket() {
         // A clipped box: the percentage and its `[` are drawn, the `]` is not.
         // Synthesising the bracket (or returning the truncated text) would report a
@@ -3113,6 +3286,10 @@ mod tests {
             "10,105 91.53%]",  // no opening bracket
             "10,105[91.53]%",  // bracket closed before the percent
             "10,105[91.53%]x", // trailing characters
+            "10,105[91.53%x]", // characters between the '%' and the ']'
+            "10,105[91.53%%]", // a second '%' after the percentage
+            "10,105[91.53%1]", // a digit between the '%' and the ']'
+            "10,105[91[.53%]", // a second opening bracket
             "[91.53%]",        // no EXP number
             "10,105[]",        // no percentage
             "10,105[91..53%]", // two periods
