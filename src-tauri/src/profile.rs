@@ -136,6 +136,22 @@ fn parse_profile(text: &str) -> Option<Profile> {
     Some(profile)
 }
 
+/// The read half of [`load_for_mode`]: parse a profile file and keep it only if
+/// it is for `client_w`×`client_h`, with the *file name*'s UI mode forced on it.
+///
+/// Split out from the disk half so the upgrade fixtures can exercise the code
+/// that actually runs on load without needing a data root.
+fn parse_for_mode(text: &str, client_w: u32, client_h: u32, ui_mode: UiMode) -> Option<Profile> {
+    let mut profile = parse_profile(text)?;
+    if profile.client_w != client_w || profile.client_h != client_h {
+        return None;
+    }
+    // The filename is authoritative: sets written before UI Size was tracked
+    // carry no `uiMode` field but still belong to their file's mode.
+    profile.ui_mode = ui_mode;
+    Some(profile)
+}
+
 /// The set for the client size under the UI Size currently selected.
 pub fn load(client_w: u32, client_h: u32) -> Option<Profile> {
     load_for_mode(client_w, client_h, settings::ui_mode())
@@ -144,14 +160,7 @@ pub fn load(client_w: u32, client_h: u32) -> Option<Profile> {
 pub fn load_for_mode(client_w: u32, client_h: u32, ui_mode: UiMode) -> Option<Profile> {
     let path = path_for(client_w, client_h, ui_mode).ok()?;
     let text = std::fs::read_to_string(path).ok()?;
-    let mut profile = parse_profile(&text)?;
-    if profile.client_w != client_w || profile.client_h != client_h {
-        return None;
-    }
-    // The filename is authoritative: sets written before UI Size was tracked
-    // carry no `uiMode` field but still belong to their file's mode.
-    profile.ui_mode = ui_mode;
-    Some(profile)
+    parse_for_mode(&text, client_w, client_h, ui_mode)
 }
 
 pub fn save(profile: &Profile) -> Result<(), String> {
@@ -430,12 +439,23 @@ mod tests {
     // Per-release upgrade fixtures.
     //
     // The fixtures live in `tests/fixtures/upgrade/`, outside `testdata/`, so
-    // the regression frame walker can never mistake them for image pairs. They
-    // are covered parse-only: nothing here writes to `data/profiles/` or calls
-    // `migrate_legacy`, so a real player's store is never read or touched.
+    // the regression frame walker can never mistake them for image pairs. Each
+    // one is reconstructed from the `Profile` struct a tagged release wrote, not
+    // captured from a player, so the hex payloads are synthetic patterns. They
+    // are covered without touching a store: nothing here writes to
+    // `data/profiles/` or calls `migrate_legacy`.
     // -----------------------------------------------------------------------
 
-    /// The release-shaped profiles kept with the crate.
+    /// The release-shaped profiles kept with the crate, and the UI mode each
+    /// file name encodes.
+    const UPGRADE_FIXTURES: [(&str, UiMode); 4] = [
+        ("0.1.0-1366x768.json", UiMode::Default),
+        ("0.2.0-1920x1200@ideal.json", UiMode::Ideal),
+        ("0.5.0-1920x1080@filtered.json", UiMode::Filtered),
+        ("0.6.0-1366x768.json", UiMode::Default),
+    ];
+
+    /// The directory the release-shaped profiles are kept in.
     fn upgrade_fixtures() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/upgrade")
     }
@@ -447,9 +467,21 @@ mod tests {
 
     /// The profile file name a fixture stands in for: the release prefix only
     /// records which release wrote it, so everything after the first `-` is the
-    /// name the file has in `data/profiles/`.
-    fn profile_file_name(name: &str) -> &str {
-        name.split_once('-').map(|(_, rest)| rest).unwrap_or(name)
+    /// name the file has in `data/profiles/`. The prefix has to be a release
+    /// number, so a label that itself contains a dash cannot quietly shift the
+    /// name the fixture claims to stand in for.
+    fn profile_file_name(fixture: &str) -> &str {
+        let (release, name) = fixture
+            .split_once('-')
+            .unwrap_or_else(|| panic!("{fixture} has no release prefix"));
+        assert!(
+            release.split('.').count() == 3
+                && release
+                    .split('.')
+                    .all(|part| !part.is_empty() && part.parse::<u32>().is_ok()),
+            "{fixture}: the prefix before the first '-' must be MAJOR.MINOR.PATCH"
+        );
+        name
     }
 
     /// The UI mode a profile file name encodes: the bare `<W>x<H>` name is the
@@ -463,15 +495,41 @@ mod tests {
             .unwrap_or(UiMode::Default)
     }
 
-    /// Parse a fixture the way `load_for_mode` does once the file has been read:
-    /// `parse_profile` decides whether the file is usable, then the *filename*
-    /// decides the UI mode whatever the JSON says. The disk half of
-    /// `load_for_mode` is deliberately not exercised — it would need a data root.
-    fn load_fixture(name: &str) -> Profile {
-        let mut profile = parse_profile(&fixture_text(name))
-            .unwrap_or_else(|| panic!("upgrade fixture {name} does not parse"));
-        profile.ui_mode = mode_from_file_name(name);
-        profile
+    /// The client size a profile file name encodes, e.g. `1366x768@ideal.json`.
+    fn client_size_from_file_name(name: &str) -> (u32, u32) {
+        let key = name.trim_end_matches(".json");
+        let key = key
+            .strip_suffix(mode_from_file_name(name).suffix())
+            .unwrap_or(key);
+        let (width, height) = key
+            .split_once('x')
+            .unwrap_or_else(|| panic!("{name} does not encode a client size"));
+        (
+            width
+                .parse()
+                .unwrap_or_else(|_| panic!("{name}: bad client width")),
+            height
+                .parse()
+                .unwrap_or_else(|_| panic!("{name}: bad client height")),
+        )
+    }
+
+    /// Load a fixture through the code that runs on load: `parse_for_mode`, with
+    /// the client size and the UI mode read out of the file name exactly as
+    /// `load_for_mode` reads them. The disk half of `load_for_mode` is
+    /// deliberately not exercised — it would need a data root — but the size
+    /// check and the filename-authoritative override are the production lines,
+    /// not a copy of them.
+    fn load_fixture(fixture: &str) -> Profile {
+        let name = profile_file_name(fixture);
+        let (client_w, client_h) = client_size_from_file_name(name);
+        parse_for_mode(
+            &fixture_text(fixture),
+            client_w,
+            client_h,
+            mode_from_file_name(name),
+        )
+        .unwrap_or_else(|| panic!("upgrade fixture {fixture} does not load"))
     }
 
     fn glyphs(atlas: &Atlas) -> Vec<(String, u32, u32, String)> {
@@ -482,8 +540,29 @@ mod tests {
             .collect()
     }
 
-    /// The upgrade fixtures must stay out of the frame corpus, and the set must
-    /// cover every release the profile format changed in.
+    /// The atlas fields a load-then-save cycle must not rewrite, besides the
+    /// glyphs themselves.
+    fn atlas_meta(atlas: &Atlas) -> (u32, String, u32, u32) {
+        (
+            atlas.format,
+            atlas.source.clone(),
+            atlas.cell_w,
+            atlas.cell_h,
+        )
+    }
+
+    /// Every atlas of a profile, in a stable order, with a label for messages.
+    fn atlases(profile: &Profile) -> [(&'static str, &Atlas); 4] {
+        [
+            ("atlas", &profile.atlas),
+            ("mapAtlas", &profile.map_atlas),
+            ("levelAtlas", &profile.level_atlas),
+            ("identityAtlas", &profile.identity_atlas),
+        ]
+    }
+
+    /// The upgrade fixtures must stay out of the frame corpus, and the directory
+    /// must hold exactly the set the rest of these tests iterate.
     #[test]
     fn upgrade_fixtures_stay_out_of_the_frame_corpus() {
         let dir = upgrade_fixtures();
@@ -505,19 +584,17 @@ mod tests {
             .filter(|name| name.ends_with(".json"))
             .collect();
         names.sort();
-        assert_eq!(
-            names,
-            [
-                "0.1.0-1366x768.json",
-                "0.5.0-1920x1080@filtered.json",
-                "0.6.0-1366x768.json",
-            ]
-        );
+        let mut expected: Vec<String> = UPGRADE_FIXTURES
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect();
+        expected.sort();
+        assert_eq!(names, expected);
     }
 
     /// The pre-UI-Size profile: no `uiMode`, no per-readout atlases, no street
-    /// box, legacy 12x16 `cell` glyphs, and a key a later release dropped. It has
-    /// to parse with the new fields defaulted and its data unchanged.
+    /// box, legacy 12x16 `cell` glyphs, and one unknown key. It has to parse with
+    /// the new fields defaulted and its data unchanged.
     #[test]
     fn pre_ui_size_profile_keeps_its_data_and_defaults() {
         let name = "0.1.0-1366x768.json";
@@ -526,9 +603,11 @@ mod tests {
             !text.contains("\"uiMode\""),
             "the pre-UI-Size fixture must not carry a uiMode key"
         );
+        // No release ever wrote a profile key of this name; it is here only to
+        // prove unknown keys are ignored instead of failing the file.
         assert!(
-            text.contains("\"reviewQueue\""),
-            "the fixture should keep a key a later release dropped"
+            text.contains("\"obsoleteKey\""),
+            "the fixture should keep an unknown key"
         );
 
         let profile = load_fixture(name);
@@ -649,8 +728,65 @@ mod tests {
         assert_eq!(summary.job.as_deref(), Some("Page"));
     }
 
+    /// The 0.2.0 file is the realistic upgrade path: the release that first wrote
+    /// `uiMode` still stored atlas glyphs as 12x16 `cell`s, so this shape carries
+    /// both risk areas at once. `levelAtlas`, `identityAtlas` and the split street
+    /// box came later and have to default instead of failing the file.
+    #[test]
+    fn ui_mode_release_carries_legacy_cells_and_defaults() {
+        let name = "0.2.0-1920x1200@ideal.json";
+        let value: serde_json::Value =
+            serde_json::from_str(&fixture_text(name)).expect("the 0.2.0 fixture is JSON");
+        for key in ["levelAtlas", "identityAtlas", "streets"] {
+            assert!(value.get(key).is_none(), "0.2.0 never wrote {key}");
+        }
+
+        let profile = load_fixture(name);
+        assert_eq!((profile.client_w, profile.client_h), (1920, 1200));
+        assert_eq!(profile.ui_mode, UiMode::Ideal);
+        assert_eq!(profile.key(), "1920x1200@ideal");
+        assert_eq!(profile.calibration.street, None);
+        assert!(profile.is_calibrated());
+
+        // Both atlases are the legacy shape: cells only, no native bitmap.
+        assert_eq!(profile.atlas.glyphs.len(), 3);
+        assert_eq!(profile.map_atlas.glyphs.len(), 1);
+        for atlas in [&profile.atlas, &profile.map_atlas] {
+            assert_eq!(atlas.format, 0);
+            assert_eq!(atlas.source, "");
+            assert_eq!((atlas.cell_w, atlas.cell_h), (12, 16));
+            for glyph in &atlas.glyphs {
+                assert!(glyph.bitmap.is_empty(), "{}: no native bitmap", glyph.ch);
+                assert_eq!(
+                    glyph.cell.len(),
+                    crate::ocr::CELL_W * crate::ocr::CELL_H * 2,
+                    "{}: cell size",
+                    glyph.ch
+                );
+            }
+        }
+
+        // Fields added after 0.2.0 default instead of failing the file.
+        assert!(profile.level_atlas.glyphs.is_empty());
+        assert!(profile.identity_atlas.glyphs.is_empty());
+        assert!(profile.streets.is_empty());
+        assert_eq!(profile.maps.len(), 1);
+        assert_eq!(profile.maps[0].label, "Victoria Road\nKerning City");
+        assert_eq!(
+            profile
+                .identities
+                .name
+                .as_ref()
+                .map(|item| item.label.as_str()),
+            Some("Furoh")
+        );
+    }
+
     /// The 0.5.0 file is one an editor or PowerShell `Set-Content` left with a
-    /// UTF-8 BOM; it must still parse, and its own `uiMode` is stale.
+    /// UTF-8 BOM; it must still load. Its own `uiMode` is stale — the pair was
+    /// hand-copied from the Default set, so the stored mode and the file name
+    /// disagree. (A 0.5.0 save always wrote the two in agreement, so only a
+    /// hand-edited file can look like this; the guard is still worth pinning.)
     #[test]
     fn bom_prefixed_release_profile_parses() {
         let name = "0.5.0-1920x1080@filtered.json";
@@ -660,14 +796,13 @@ mod tests {
             "the 0.5.0 fixture must carry a BOM"
         );
 
-        let mut profile = parse_profile(&text).expect("a BOM-prefixed profile parses");
-        assert_eq!(profile.client_w, 1920);
-        assert_eq!(profile.client_h, 1080);
-        // Stored mode says Default — a copy taken from the Default pair — while
-        // the file name says Filtered. The raw parse reports the stored value;
-        // the load path then overrides it from the file name.
-        assert_eq!(profile.ui_mode, UiMode::Default);
-        profile.ui_mode = mode_from_file_name(name);
+        // The raw parse reports the stored value; the load path overrides it from
+        // the file name.
+        let stored = parse_profile(&text).expect("a BOM-prefixed profile parses");
+        assert_eq!((stored.client_w, stored.client_h), (1920, 1080));
+        assert_eq!(stored.ui_mode, UiMode::Default);
+
+        let profile = load_fixture(name);
         assert_eq!(profile.ui_mode, UiMode::Filtered);
         assert_eq!(profile.key(), "1920x1080@filtered");
 
@@ -704,34 +839,48 @@ mod tests {
 
     /// The file name decides the UI mode, not the `uiMode` field: the bare name
     /// is Default, `@filtered` and `@ideal` are the others, and `path_for` writes
-    /// exactly the name each fixture stands in for.
+    /// exactly the name each fixture stands in for. Every assertion goes through
+    /// `parse_for_mode`, the code `load_for_mode` runs after reading the file, so
+    /// dropping or reordering the override there fails this test.
     #[test]
     fn file_name_is_authoritative_for_ui_mode() {
-        for (name, expected) in [
-            ("0.1.0-1366x768.json", UiMode::Default),
-            ("0.5.0-1920x1080@filtered.json", UiMode::Filtered),
-            ("0.6.0-1366x768.json", UiMode::Default),
-        ] {
-            assert_eq!(mode_from_file_name(name), expected, "{name}");
+        for (fixture, expected) in UPGRADE_FIXTURES {
+            let name = profile_file_name(fixture);
+            let (client_w, client_h) = client_size_from_file_name(name);
+            let text = fixture_text(fixture);
+            assert_eq!(mode_from_file_name(name), expected, "{fixture}");
 
             // What the load path keeps: whatever the file stored, the mode the
             // file name encodes is the one reported.
-            let profile = load_fixture(name);
-            assert_eq!(profile.ui_mode, expected, "{name}");
+            let profile = parse_for_mode(&text, client_w, client_h, expected)
+                .unwrap_or_else(|| panic!("{fixture} does not load"));
+            assert_eq!(profile.ui_mode, expected, "{fixture}");
             assert_eq!(
-                profile.key(),
-                profile_file_name(name).trim_end_matches(".json"),
-                "{name}"
+                (profile.client_w, profile.client_h),
+                (client_w, client_h),
+                "{fixture}"
+            );
+            assert_eq!(profile.key(), name.trim_end_matches(".json"), "{fixture}");
+
+            // The read path refuses a file that is not for the size its name
+            // claims, whatever the file itself stores.
+            assert!(
+                parse_for_mode(&text, client_w + 1, client_h, expected).is_none(),
+                "{fixture}: a client-width mismatch must not load"
+            );
+            assert!(
+                parse_for_mode(&text, client_w, client_h + 1, expected).is_none(),
+                "{fixture}: a client-height mismatch must not load"
             );
 
             // `path_for` writes exactly the name each fixture stands in for, so
             // the suffix and the stored mode can never disagree on disk.
-            let saved_name = path_for(profile.client_w, profile.client_h, expected)
+            let saved_name = path_for(client_w, client_h, expected)
                 .expect("a profile path")
                 .file_name()
                 .map(|file| file.to_string_lossy().into_owned())
                 .expect("a profile file name");
-            assert_eq!(saved_name, profile_file_name(name), "{name}");
+            assert_eq!(saved_name, name, "{fixture}");
         }
     }
 
@@ -783,18 +932,70 @@ mod tests {
         }
     }
 
-    /// A save cycle after the upgrade must not rewrite the stored data. The one
-    /// exception is the legacy `cell`, which is read-only and never written back.
+    /// "Parse and migrate": the legacy `cell` glyphs are only usable because
+    /// `ocr::Atlas::from_settings` decodes them into native bitmaps, and the save
+    /// path then writes `format: 2` and drops the read-only cells. Both release
+    /// shapes that carry cells go through it, and no glyph may decode to an empty
+    /// shape (a cell whose length no longer matches `CELL_LEN` degrades to zeros).
+    #[test]
+    fn legacy_cell_glyphs_migrate_to_native_bitmaps() {
+        for fixture in ["0.1.0-1366x768.json", "0.2.0-1920x1200@ideal.json"] {
+            let profile = load_fixture(fixture);
+            for (label, atlas) in atlases(&profile) {
+                if atlas.glyphs.is_empty() {
+                    continue;
+                }
+                let migrated = crate::ocr::Atlas::from_settings(atlas);
+                assert_eq!(
+                    migrated.glyphs.len(),
+                    atlas.glyphs.len(),
+                    "{fixture}/{label}: every legacy cell decoded"
+                );
+                for glyph in &migrated.glyphs {
+                    assert_eq!(
+                        glyph.bitmap.len(),
+                        glyph.w as usize * glyph.h as usize,
+                        "{fixture}/{label}: {} bitmap size",
+                        glyph.ch
+                    );
+                    assert!(
+                        glyph.bitmap.iter().any(|value| *value != 0),
+                        "{fixture}/{label}: {} decoded to an empty shape",
+                        glyph.ch
+                    );
+                }
+
+                // What the next save writes: native bitmaps, no cells.
+                let back = migrated.to_settings();
+                assert_eq!(back.format, 2, "{fixture}/{label}");
+                assert_eq!(back.glyphs.len(), atlas.glyphs.len(), "{fixture}/{label}");
+                for glyph in &back.glyphs {
+                    assert!(
+                        glyph.cell.is_empty(),
+                        "{fixture}/{label}: {} kept a cell",
+                        glyph.ch
+                    );
+                    assert_eq!(
+                        glyph.bitmap.len(),
+                        glyph.w as usize * glyph.h as usize * 2,
+                        "{fixture}/{label}: {} bitmap hex",
+                        glyph.ch
+                    );
+                }
+            }
+        }
+    }
+
+    /// A save cycle after the upgrade must not rewrite the stored data — neither
+    /// the glyphs nor the atlas metadata (`format`, `source`, `cellW`, `cellH`)
+    /// that tells the reader what those glyphs are. The one exception is the
+    /// legacy `cell`, which is read-only and never written back.
     #[test]
     fn upgrading_a_profile_does_not_rewrite_its_data() {
-        for name in [
-            "0.1.0-1366x768.json",
-            "0.5.0-1920x1080@filtered.json",
-            "0.6.0-1366x768.json",
-        ] {
-            let profile = load_fixture(name);
+        for (fixture, _) in UPGRADE_FIXTURES {
+            let profile = load_fixture(fixture);
             let saved = serde_json::to_string(&profile).expect("a loaded profile serializes");
-            let reloaded = parse_profile(&saved).unwrap_or_else(|| panic!("{name} reparses"));
+            let reloaded = parse_profile(&saved).unwrap_or_else(|| panic!("{fixture} reparses"));
 
             let before = serde_json::to_value(&profile).expect("profile to value");
             let after = serde_json::to_value(&reloaded).expect("profile to value");
@@ -807,33 +1008,34 @@ mod tests {
                 "streets",
                 "identities",
             ] {
-                assert_eq!(before[key], after[key], "{name}: {key} changed on a save");
+                assert_eq!(
+                    before[key], after[key],
+                    "{fixture}: {key} changed on a save"
+                );
             }
-            assert_eq!(glyphs(&reloaded.atlas), glyphs(&profile.atlas), "{name}");
-            assert_eq!(
-                glyphs(&reloaded.map_atlas),
-                glyphs(&profile.map_atlas),
-                "{name}"
-            );
-            assert_eq!(
-                glyphs(&reloaded.level_atlas),
-                glyphs(&profile.level_atlas),
-                "{name}"
-            );
-            assert_eq!(
-                glyphs(&reloaded.identity_atlas),
-                glyphs(&profile.identity_atlas),
-                "{name}"
-            );
-            assert_eq!(reloaded.key(), profile.key(), "{name}");
+            for ((label, before), (_, after)) in
+                atlases(&profile).into_iter().zip(atlases(&reloaded))
+            {
+                assert_eq!(
+                    atlas_meta(after),
+                    atlas_meta(before),
+                    "{fixture}/{label}: atlas metadata changed on a save"
+                );
+                assert_eq!(
+                    glyphs(after),
+                    glyphs(before),
+                    "{fixture}/{label}: glyphs changed on a save"
+                );
+            }
+            assert_eq!(reloaded.key(), profile.key(), "{fixture}");
             assert_eq!(
                 reloaded.summary().glyphs,
                 profile.summary().glyphs,
-                "{name}"
+                "{fixture}"
             );
             assert!(
                 !saved.contains("\"cell\""),
-                "{name}: the read-only legacy cell must not be written back"
+                "{fixture}: the read-only legacy cell must not be written back"
             );
         }
     }

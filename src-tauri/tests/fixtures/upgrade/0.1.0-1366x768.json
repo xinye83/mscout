@@ -81,7 +81,7 @@
       "pixels": "ffffffffffff00ffffffffff"
     }
   },
-  "reviewQueue": [
+  "obsoleteKey": [
     {
       "frame": "2026-11-12T09-41-02",
       "reason": "exp out of range"

@@ -85,15 +85,18 @@ A resolution that has never been calibrated activates as an empty profile and re
 
 ### Upgrade fixtures
 
-Every release that added a readout changed the profile shape, so compatibility is checked against real per-release files in `src-tauri/tests/fixtures/upgrade/`:
+The `Profile` struct of each release that changed the shape is reconstructed into a sample file under `src-tauri/tests/fixtures/upgrade/`. These are **schema samples, not captures**: only the fields that release wrote are present, and the hex payloads are synthetic repeating patterns, so no player's profile is committed.
 
 | Fixture | Shape |
 |---|---|
-| `0.1.0-1366x768.json` | Pre-UI-Size: bare name, no `uiMode`, no per-readout atlases and no street box, legacy 12×16 `cell` glyphs, plus a `reviewQueue` key a later release dropped |
-| `0.5.0-1920x1080@filtered.json` | 0.5.0: `uiMode`, the EXP/map/level/identity atlases, native bitmaps and taught streets — written with a UTF-8 BOM and a stale `uiMode` |
+| `0.1.0-1366x768.json` | Pre-UI-Size: bare name, no `uiMode`, no per-readout atlases and no street box, legacy 12×16 `cell` glyphs, plus an `obsoleteKey` entry that no release ever wrote (it proves unknown keys are ignored) |
+| `0.2.0-1920x1200@ideal.json` | 0.2.0: `uiMode` and `mapAtlas` added, glyphs still legacy 12×16 `cell`s |
+| `0.5.0-1920x1080@filtered.json` | 0.5.0: the EXP/map/level/identity atlases, native bitmaps and taught streets — written with a UTF-8 BOM, and its `uiMode` hand-copied from the Default pair so the stored mode and the file name disagree |
 | `0.6.0-1366x768.json` | The current shape, with every field 0.6.0 writes |
 
-The tests parse these files only: they never call `migrate_legacy` and never write `data/profiles/`, so a real store is not touched. They assert that a key a later release dropped is ignored, that a field added later defaults instead of failing the file, that calibration boxes, atlases, taught maps/streets and name/job fingerprints survive a load-then-save cycle unchanged, and that the **file name** decides the UI mode rather than the stored `uiMode`. The legacy `cell` payload is read-only and is never written back. The fixtures sit outside `testdata/`, so the regression frame walker can never read them as image pairs.
+Coverage is by shape, not by release: `0.3.0` (`levelAtlas` + `street`) and `0.4.0` (`identityAtlas` + `format: 2`) have no file of their own — the 0.5.0 sample carries their fields, and the older samples assert that a field added later defaults instead of failing the file. `0.5.0` and `0.6.0` share one schema, so the 0.6.0 file adds the current build's shape rather than a new one. A 0.5.0 save always wrote `uiMode` matching the file name, so that stale value is a hand-edited edge case rather than something the release produced.
+
+The tests read these files through the load path — `parse_for_mode`, the size check and the filename-authoritative `uiMode` that `load_for_mode` runs after reading the file — and never call `migrate_legacy` or write `data/profiles/`, so a real store is not touched. They assert that an unknown key is ignored, that calibration boxes, atlases (including `format`, `source` and `cellW`/`cellH`), taught maps/streets and name/job fingerprints survive a load-then-save cycle unchanged, and that the **file name** decides the UI mode rather than the stored `uiMode`. The legacy `cell` payloads are read-only: one test runs them through `ocr::Atlas::from_settings` into native bitmaps and back, and asserts the saved form is `format: 2` with no cells. The fixtures sit outside `testdata/`, so the regression frame walker can never read them as image pairs.
 
 ## Settings — `data/settings.json`
 
