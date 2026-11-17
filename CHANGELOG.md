@@ -38,6 +38,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   unchanged.
 
 ### Changed
+- The EXP and level readers are runner-up aware: a digit whose closest other
+  character is within 1.0 of the winner is refused (`too close to tell apart`)
+  instead of guessed, so the Filtered `26,487[13.58%]` HUD is rejected rather
+  than read as the plausible `26,467`. A shape no matching step can explain is a
+  hole: junk beside the readout is still ignored, but a hole between two read
+  digits rejects the read instead of dropping a digit, and the level read no
+  longer turns `35` into `5`. Ordinary name/job text keeps the plain
+  nearest-glyph matcher, split step included.
 - The testdata corpus is now image-indexed (`meta.json` version 2). Every PNG in
   a `WxH@mode` directory has an entry with its kind, source, crop and ground
   truth; `hud.png`/`settings.png` are now `hud-main.png`/`settings-panel.png`,
@@ -66,6 +74,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - The Calibration readout now shows `Source:` and `Why:` for a **rejected**
   frame, not only for the fields of an accepted one: the probe returns its
   provenance and rejection reason beside the (absent) readings.
+- The EXP readout is validated against its own bracket grammar: a missing,
+  duplicate or out-of-order `[`/`]`, trailing characters, and anything between
+  the `%` and the `]` (`91.53%1`, `91.53%%`, `91.53%x`) are rejections rather
+  than repairs. No bracket is ever synthesised.
 - The map-table DTW fallback now resolves Roman-numeral siblings by counting the
   trailing `I` bars before comparing widths. This fixes `The Tree That Grew I`
   being read as `... III` when exact OCR is unavailable or fuzzy.

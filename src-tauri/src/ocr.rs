@@ -16,6 +16,21 @@ const TEXT_MATCH_THRESHOLD: f64 = 65.0;
 /// readout glyph is safe to accept here. A shape past this tolerance is still
 /// reported as unknown.
 const READOUT_TOLERANCE: f64 = TEXT_MATCH_THRESHOLD;
+/// How much closer the winning character has to be than the closest *different*
+/// character before a readout glyph is trusted.
+///
+/// Measured against the live Filtered corpus, because a *correct* digit can have a
+/// rival this close: the `36,818` readout's `3` measures 31.6 with its `8` at 33.4
+/// (1.8 apart) and its `9` measures 24.3 with a `0` at 26.5 (2.2). A margin wider
+/// than that starts rejecting readouts the reader gets exactly today, so the
+/// margin only guards the genuine tie. When two characters explain a shape equally
+/// well the shape is not a reading, and the readout is rejected instead of guessed.
+///
+/// This does not repair every Filtered near miss: the `26,487` fixture still draws
+/// an `8` that matches its `6` at 9.9 with its own `8` at 23.7, far outside any
+/// margin that leaves the reads above intact. Its `13.58%` `3` does tie (30.8 with
+/// an `8` at 31.6), which is what the runner-up rule can and does refuse.
+const AMBIGUITY_MARGIN: f64 = 1.0;
 const MIN_GLYPH_PIXELS: usize = 1;
 /// How far a sample may slide within its cell when matching (sub-pixel drift).
 const SHIFT_SEARCH: i32 = 1;
@@ -709,6 +724,49 @@ pub struct Atlas {
     pub glyphs: Vec<Glyph>,
 }
 
+/// What the atlas thinks one shape is, and what else it very nearly is.
+#[derive(Clone, Copy, Debug)]
+struct Ranked {
+    ch: char,
+    distance: f64,
+    /// The closest *different* allowed character, and how far away it is.
+    /// `'?'` / `f64::MAX` when no other character is allowed here.
+    rival: char,
+    rival_distance: f64,
+}
+
+impl Ranked {
+    /// True when a different character is close enough that the winner is a guess.
+    fn ambiguous(self) -> bool {
+        self.rival_distance - self.distance < AMBIGUITY_MARGIN
+    }
+
+    /// Why the shape was not read, for the rejection the caller reports.
+    fn refusal(self) -> String {
+        format!(
+            "'{}' ({:.1}) and '{}' ({:.1}) are {:.1} apart — too close to tell apart",
+            self.ch,
+            self.distance,
+            self.rival,
+            self.rival_distance,
+            self.rival_distance - self.distance
+        )
+    }
+}
+
+/// How the two halves of a split shape are matched.
+///
+/// The readouts refuse a half whose runner-up explains it as well as the winner:
+/// a guessed digit changes the number the player sees. Ordinary text keeps the
+/// plain nearest glyph, because a name or job letter is anti-aliased at a size the
+/// Filtered digits' margin was never calibrated on, and the identity reader
+/// cross-checks the finished string against the profile.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SplitPolicy {
+    Readout,
+    Text,
+}
+
 impl Atlas {
     pub fn from_settings(atlas: &crate::settings::Atlas) -> Self {
         let mut glyphs = Vec::new();
@@ -892,31 +950,28 @@ impl Atlas {
     }
 
     /// Nearest glyph whose character is one of `allowed`, or `None` when even the
-    /// closest of them is too far to trust.
+    /// closest of them is too far to trust, or when a different allowed character
+    /// is within [`AMBIGUITY_MARGIN`] of it.
     fn match_segment_within(&self, segment: &Segment, allowed: &str) -> Option<(char, f64)> {
-        let mut best: Option<(char, f64)> = None;
-        for glyph in &self.glyphs {
-            if !allowed.contains(glyph.ch) {
-                continue;
-            }
-            let distance = self.distance_to(segment, glyph);
-            if best.map_or(true, |(_, closest)| distance < closest) {
-                best = Some((glyph.ch, distance));
-            }
-        }
-
-        best.filter(|(_, distance)| *distance <= MATCH_THRESHOLD)
+        self.match_ranked(segment, allowed, MATCH_THRESHOLD)
+            .filter(|ranked| !ranked.ambiguous())
+            .map(|ranked| (ranked.ch, ranked.distance))
     }
 
-    /// Like [`Atlas::match_segment_within`], but accepts the closest readout
-    /// glyph up to [`READOUT_TOLERANCE`]. The Filtered digits are genuinely
-    /// ambiguous (the live `3` measures 31 against a nearby runner-up), and the
-    /// engine rejects an EXP that does not fit its level and percentage.
-    fn match_segment_within_tolerant(
-        &self,
-        segment: &Segment,
-        allowed: &str,
-    ) -> Option<(char, f64)> {
+    /// Nearest glyph whose character is one of `allowed`, or `None` when even the
+    /// closest of them is too far to trust. No runner-up veto: this is the
+    /// ordinary-text matcher, which never had one.
+    fn match_segment_nearest(&self, segment: &Segment, allowed: &str) -> Option<(char, f64)> {
+        self.match_ranked(segment, allowed, MATCH_THRESHOLD)
+            .map(|ranked| (ranked.ch, ranked.distance))
+    }
+
+    /// The two nearest allowed characters for a shape, or `None` when the closest
+    /// allowed glyph is further than `tolerance`.
+    ///
+    /// The runner-up is the closest *different* character: another shape of the
+    /// same character is a rendering variant, not a competing reading.
+    fn match_ranked(&self, segment: &Segment, allowed: &str, tolerance: f64) -> Option<Ranked> {
         let mut best: Option<(char, f64)> = None;
         for glyph in &self.glyphs {
             if !allowed.contains(glyph.ch) {
@@ -927,35 +982,74 @@ impl Atlas {
                 best = Some((glyph.ch, distance));
             }
         }
-        best.filter(|(_, distance)| *distance <= READOUT_TOLERANCE)
+
+        let (ch, distance) = best?;
+        if distance > tolerance {
+            return None;
+        }
+
+        let mut rival = ('?', f64::MAX);
+        for glyph in &self.glyphs {
+            if glyph.ch == ch || !allowed.contains(glyph.ch) {
+                continue;
+            }
+            let distance = self.distance_to(segment, glyph);
+            if distance < rival.1 {
+                rival = (glyph.ch, distance);
+            }
+        }
+
+        Some(Ranked {
+            ch,
+            distance,
+            rival: rival.0,
+            rival_distance: rival.1,
+        })
     }
 
     /// Read an EXP-style readout — a number, then a bracketed percentage — using
     /// the shape of the readout to restrict what each position may contain. The
     /// closing bracket is only a candidate once the percentage has started, which
     /// is what stops a `1` (the same narrow bar) being read as one.
-    fn readout_matches(&self, found: Vec<Segment>) -> Vec<(Segment, char, f64)> {
+    ///
+    /// The order of attempts is deliberate: the strict glyph, then the
+    /// punctuation the grammar implies, then a touching pair split in two, then
+    /// the tolerant near miss.
+    ///
+    /// A shape none of those explains is a hole. A hole beside the readout is junk
+    /// the box happened to catch (the `EXP` label, a panel rule) and is ignored;
+    /// a hole *inside* the readout would silently drop a digit, so it rejects the
+    /// read instead of returning a shorter, plausible number.
+    fn readout_matches(&self, found: Vec<Segment>) -> Result<Vec<(Segment, char, f64)>, String> {
         const NUMBER: &str = "0123456789,[";
         const PERCENT: &str = "0123456789.%";
         const CLOSE: &str = "]";
 
-        let mut out = Vec::new();
+        let mut out: Vec<(Segment, char, f64)> = Vec::new();
+        // Unread shapes and why, kept until the end: whether a hole is inside the
+        // readout is only known once the last shape has been placed.
+        let mut unread: Vec<(i32, String)> = Vec::new();
         let mut stage = 0usize;
+
         for segment in found {
             let allowed = match stage {
                 0 => NUMBER,
                 1 => PERCENT,
                 _ => CLOSE,
             };
+            let mut refusal: Option<String> = None;
+            // The distance of the single-glyph candidate the runner-up vetoed, if
+            // the strict step found one. Used to judge a split below.
+            let mut single_best: Option<f64> = None;
 
-            if let Some((ch, best)) = self.match_segment_within(&segment, allowed) {
-                if ch == '[' {
-                    stage = 1;
-                } else if ch == '%' {
-                    stage = 2;
+            if let Some(ranked) = self.match_ranked(&segment, allowed, MATCH_THRESHOLD) {
+                if !ranked.ambiguous() {
+                    stage = advance_stage(stage, ranked.ch);
+                    out.push((segment, ranked.ch, ranked.distance));
+                    continue;
                 }
-                out.push((segment, ch, best));
-                continue;
+                refusal = Some(ranked.refusal());
+                single_best = Some(ranked.distance);
             }
 
             // A tiny shape in a punctuation slot cannot be a digit at this font
@@ -976,45 +1070,78 @@ impl Atlas {
             }
 
             // A wide shape can be two touching glyphs (the 1920 Default `2`+`7`);
-            // try every cut and keep the pair that explains the pixels best.
-            if let Some(parts) = self.split_segment(&segment, allowed) {
-                for (sub, ch, best) in parts {
-                    if ch == '[' {
-                        stage = 1;
-                    } else if ch == '%' {
-                        stage = 2;
+            // try every cut and keep the pair that explains the pixels best. A split
+            // is only worth taking when it explains the shape better than the single
+            // glyph that was vetoed above: cutting a tied digit in half would be
+            // another way of guessing.
+            if let Some(parts) = self.split_segment(&segment, allowed, SplitPolicy::Readout) {
+                let total: f64 = parts.iter().map(|(_, _, best)| best).sum();
+                if single_best.map_or(true, |best| total < best) {
+                    for (sub, ch, best) in parts {
+                        stage = advance_stage(stage, ch);
+                        out.push((sub, ch, best));
                     }
-                    out.push((sub, ch, best));
+                    continue;
                 }
-                continue;
             }
 
             // A single glyph that is just past the strict threshold (the live
             // Filtered `3` measures 31). Try this after splitting so a touching
             // pair is not mistaken for one wide digit.
-            if let Some((ch, best)) = self.match_segment_within_tolerant(&segment, allowed) {
-                if ch == '[' {
-                    stage = 1;
-                } else if ch == '%' {
-                    stage = 2;
+            if let Some(ranked) = self.match_ranked(&segment, allowed, READOUT_TOLERANCE) {
+                if !ranked.ambiguous() {
+                    stage = advance_stage(stage, ranked.ch);
+                    out.push((segment, ranked.ch, ranked.distance));
+                    continue;
                 }
-                out.push((segment, ch, best));
+                refusal.get_or_insert_with(|| ranked.refusal());
+            }
+
+            unread.push((
+                segment.x,
+                refusal.unwrap_or_else(|| "no glyph in the atlas matches it".into()),
+            ));
+        }
+
+        // A hole *between* two read glyphs is a dropped digit. Outside that span it
+        // is the junk the box always could catch — the `EXP` label to its left, a
+        // panel rule to its right — which is why an edge shape may still be ignored.
+        let span = out
+            .first()
+            .zip(out.last())
+            .map(|(first, last)| (first.0.x, last.0.x));
+        if let Some((left, right)) = span {
+            if let Some((x, refusal)) = unread.iter().find(|(x, _)| *x > left && *x < right) {
+                return Err(format!(
+                    "the EXP readout has a shape at x={x} that cannot be read: {refusal}"
+                ));
             }
         }
-        out
+
+        Ok(out)
     }
 
-    /// Cut a wide shape into two touching glyphs and match both halves.
-    fn split_segment(&self, segment: &Segment, allowed: &str) -> Option<Vec<(Segment, char, f64)>> {
+    /// Cut a wide shape into two touching glyphs and match both halves, under
+    /// `policy`.
+    fn split_segment(
+        &self,
+        segment: &Segment,
+        allowed: &str,
+        policy: SplitPolicy,
+    ) -> Option<Vec<(Segment, char, f64)>> {
         if segment.w < 9 {
             return None;
         }
+        let accept = |sub: &Segment, allowed: &str| match policy {
+            SplitPolicy::Readout => self.match_segment_within(sub, allowed),
+            SplitPolicy::Text => self.match_segment_nearest(sub, allowed),
+        };
         type SplitMatch = (Segment, char, f64);
         let mut best: Option<(f64, Vec<SplitMatch>)> = None;
         for cut in 3..=segment.w.saturating_sub(3) {
             let left = split_part(segment, 0, cut);
             let right = split_part(segment, cut, segment.w - cut);
-            let Some((left_ch, left_distance)) = self.match_segment_within(&left, allowed) else {
+            let Some((left_ch, left_distance)) = accept(&left, allowed) else {
                 continue;
             };
             let right_allowed = match left_ch {
@@ -1022,8 +1149,7 @@ impl Atlas {
                 '%' => "]",
                 _ => allowed,
             };
-            let Some((right_ch, right_distance)) = self.match_segment_within(&right, right_allowed)
-            else {
+            let Some((right_ch, right_distance)) = accept(&right, right_allowed) else {
                 continue;
             };
             let total = left_distance + right_distance;
@@ -1048,7 +1174,7 @@ impl Atlas {
             return Err("no glyphs learned yet".into());
         }
 
-        let matches = self.readout_matches(segments(gray));
+        let matches = self.readout_matches(segments(gray))?;
         if matches.is_empty() {
             return Err("nothing recognizable in the box — learn the digits".into());
         }
@@ -1059,6 +1185,11 @@ impl Atlas {
             text.push(*ch);
             confidence += (1.0 - best / 255.0).max(0.0);
         }
+
+        // The brackets are part of the readout, not decoration: a crop with no `[`
+        // or `]` is a different (or clipped) box, and inventing one would invent a
+        // digit position that was never drawn.
+        validate_readout(&text)?;
 
         Ok((text, confidence / matches.len() as f64))
     }
@@ -1094,7 +1225,8 @@ impl Atlas {
                 // Anti-aliased text at Default sizes lets adjacent letters touch.
                 // Split the shape and match both halves against the whole set.
                 let allowed = all_chars.get_or_insert_with(|| self.learned());
-                let Some(parts) = self.split_segment(&segment, allowed.as_str()) else {
+                let Some(parts) = self.split_segment(&segment, allowed.as_str(), SplitPolicy::Text)
+                else {
                     continue;
                 };
                 for (sub, ch, best) in parts {
@@ -1354,9 +1486,11 @@ impl Atlas {
     }
 
     /// Read a digits-only readout (the level) with the same ordered fallback as
-    /// the EXP readout: strict glyph, split a touching pair, then accept a
-    /// clear near miss. The EXP path adds punctuation inference on top; the
-    /// level box has no punctuation.
+    /// the EXP readout: strict glyph, split a touching pair, then accept a clear
+    /// near miss. The level box has no punctuation and nothing else drawn inside
+    /// it, so a shape none of those explains is a failed read: dropping it would
+    /// turn `35` into a level of `5`, a plausible wrong number rather than a
+    /// rejection.
     fn read_digit_shapes(&self, found: Vec<Segment>) -> Result<(String, f64), String> {
         const DIGITS: &str = "0123456789";
         let mut text = String::with_capacity(found.len());
@@ -1365,14 +1499,45 @@ impl Atlas {
 
         for segment in found {
             let mut hits: Vec<(char, f64)> = Vec::new();
-            if let Some((ch, best)) = self.match_segment_within(&segment, DIGITS) {
-                hits.push((ch, best));
-            } else if let Some(parts) = self.split_segment(&segment, DIGITS) {
-                for (_, ch, best) in parts {
-                    hits.push((ch, best));
+            let mut refusal: Option<String> = None;
+            let mut single_best: Option<f64> = None;
+
+            if let Some(ranked) = self.match_ranked(&segment, DIGITS, MATCH_THRESHOLD) {
+                if !ranked.ambiguous() {
+                    hits.push((ranked.ch, ranked.distance));
+                } else {
+                    refusal = Some(ranked.refusal());
+                    single_best = Some(ranked.distance);
                 }
-            } else if let Some((ch, best)) = self.match_segment_within_tolerant(&segment, DIGITS) {
-                hits.push((ch, best));
+            }
+
+            if hits.is_empty() {
+                if let Some(parts) = self.split_segment(&segment, DIGITS, SplitPolicy::Readout) {
+                    let total: f64 = parts.iter().map(|(_, _, best)| best).sum();
+                    if single_best.map_or(true, |best| total < best) {
+                        for (_, ch, best) in parts {
+                            hits.push((ch, best));
+                        }
+                    }
+                }
+            }
+
+            if hits.is_empty() {
+                if let Some(ranked) = self.match_ranked(&segment, DIGITS, READOUT_TOLERANCE) {
+                    if !ranked.ambiguous() {
+                        hits.push((ranked.ch, ranked.distance));
+                    } else {
+                        refusal.get_or_insert_with(|| ranked.refusal());
+                    }
+                }
+            }
+
+            if hits.is_empty() {
+                let reason = refusal.unwrap_or_else(|| "no glyph in the atlas matches it".into());
+                return Err(format!(
+                    "the level readout has a shape at x={} that cannot be read: {reason}",
+                    segment.x
+                ));
             }
 
             for (ch, best) in hits {
@@ -1420,7 +1585,102 @@ impl Atlas {
     }
 }
 
+/// The readout stage the grammar is in after reading `ch`: the number, the
+/// percentage between the brackets, or the closing bracket.
+fn advance_stage(stage: usize, ch: char) -> usize {
+    match ch {
+        '[' => 1,
+        '%' => 2,
+        _ => stage,
+    }
+}
+
+/// Check that a read EXP readout is structurally complete: a number
+/// (`digits` and thousands `,`), then `[`, then `digits[.digits]`, then `%`, then
+/// `]` as the last character. Nothing else, in that order, exactly once.
+///
+/// `readout_matches` already restricts each position by stage, but it judges one
+/// shape at a time: a dropped bracket, or a `]` that came out before the `%`,
+/// still left a string that looked like a value. This is the readout's own
+/// grammar applied to the finished text, so a readout that is missing a bracket
+/// is rejected rather than repaired — synthesising one would invent a digit
+/// position the client never drew.
+fn validate_readout(text: &str) -> Result<(), String> {
+    let open = text
+        .find('[')
+        .ok_or_else(|| format!("'{text}' has no '[' — not a complete EXP readout"))?;
+    let percent_at = text[open..]
+        .find('%')
+        .map(|index| open + index)
+        .ok_or_else(|| format!("'{text}' has no '%' — not a complete EXP readout"))?;
+    let close = text
+        .rfind(']')
+        .ok_or_else(|| format!("'{text}' has no ']' — not a complete EXP readout"))?;
+
+    if close < percent_at {
+        return Err(format!("'{text}' closes the bracket before its '%'"));
+    }
+    if close + 1 != text.len() {
+        return Err(format!("'{text}' has characters after its ']'"));
+    }
+    // Nothing may sit between the '%' and the ']': the percentage slice below
+    // stops at the '%', so `91.53%x`, `91.53%%` and `91.53%1` would otherwise
+    // all validate as a readout whose percentage was never drawn.
+    if percent_at + 1 != close {
+        return Err(format!(
+            "'{text}' has characters between its '%' and its ']'"
+        ));
+    }
+    if text[open + 1..close]
+        .chars()
+        .any(|ch| ch == '[' || ch == ']')
+    {
+        return Err(format!("'{text}' has more than one bracket pair"));
+    }
+    if text[..open]
+        .chars()
+        .any(|ch| ch == '[' || ch == ']' || ch == '%')
+    {
+        return Err(format!("'{text}' has a bracket or '%' before its '['"));
+    }
+
+    let number = &text[..open];
+    if number.is_empty() {
+        return Err(format!("'{text}' has no EXP number before its '['"));
+    }
+    if !number.chars().all(|ch| ch.is_ascii_digit() || ch == ',') {
+        return Err(format!(
+            "'{text}' has a character that is not a digit or ',' in its EXP number"
+        ));
+    }
+    if number.starts_with(',') || number.ends_with(',') || number.contains(",,") {
+        return Err(format!("'{text}' has a misplaced ',' in its EXP number"));
+    }
+
+    let percent = &text[open + 1..percent_at];
+    if percent.is_empty() {
+        return Err(format!("'{text}' has no percentage between '[' and '%'"));
+    }
+    if !percent.chars().all(|ch| ch.is_ascii_digit() || ch == '.') {
+        return Err(format!(
+            "'{text}' has a character that is not a digit or '.' in its percentage"
+        ));
+    }
+    if percent.matches('.').count() > 1 || percent.starts_with('.') || percent.ends_with('.') {
+        return Err(format!("'{text}' has a misplaced '.' in its percentage"));
+    }
+
+    Ok(())
+}
+
 pub fn parse_exp_text(text: &str) -> Option<(i64, f64)> {
+    // A readout without both brackets is not one: the reader rejects those, and
+    // nothing downstream should quietly accept the same string.
+    let open = text.find('[')?;
+    if !text[open..].contains(']') {
+        return None;
+    }
+
     let percent_at = text.find('%')?;
     let before = &text[..percent_at];
     let start = before
@@ -2585,14 +2845,16 @@ mod tests {
     fn readout_accepts_a_near_miss_digit() {
         let (atlas, segment) = near_miss_digit();
         assert!(atlas.match_segment_within(&segment, "38").is_none());
-        let (ch, distance) = atlas
-            .match_segment_within_tolerant(&segment, "38")
+        let ranked = atlas
+            .match_ranked(&segment, "38", READOUT_TOLERANCE)
             .expect("near miss");
-        assert_eq!(ch, '3');
+        assert_eq!(ranked.ch, '3');
         assert!(
-            distance > MATCH_THRESHOLD && distance <= READOUT_TOLERANCE,
-            "{distance}"
+            ranked.distance > MATCH_THRESHOLD && ranked.distance <= READOUT_TOLERANCE,
+            "{ranked:?}"
         );
+        // Past the strict threshold, but nothing else is close: this is a read.
+        assert!(!ranked.ambiguous(), "{ranked:?}");
     }
 
     #[test]
@@ -2601,6 +2863,442 @@ mod tests {
         let (text, confidence) = atlas.read_digit_shapes(vec![segment]).expect("level read");
         assert_eq!(text, "3");
         assert!(confidence > 0.7);
+    }
+
+    /// A deterministic 7x11 ink shape, the size the Filtered EXP digits are drawn
+    /// at. High-frequency on purpose: a one-pixel shift changes many pixels, so the
+    /// aligned comparison is always the best one.
+    fn readout_base() -> Vec<u8> {
+        (0..7 * 11)
+            .map(|index| {
+                if (index % 7 + index / 7) % 3 != 0 {
+                    255
+                } else {
+                    0
+                }
+            })
+            .collect()
+    }
+
+    /// The bracket family: the complement of [`readout_base`] at the same size, so a
+    /// synthetic bracket and a synthetic digit are as far apart as the real ones
+    /// are. Without that, a shape the current stage does not allow can quietly match
+    /// the neighbouring character inside the tolerance and the test proves nothing.
+    fn readout_bracket_base() -> Vec<u8> {
+        (0..7 * 11)
+            .map(|index| {
+                if (index % 7 + index / 7) % 3 == 0 {
+                    255
+                } else {
+                    0
+                }
+            })
+            .collect()
+    }
+
+    /// `base` with `count` more ink pixels cleared, starting after `seed`. One
+    /// cleared pixel of a `w*h` shape is `255/(w*h)` of the native distance, so a
+    /// test can put a glyph a chosen distance from a shape — and two glyphs built
+    /// with the same arguments are exactly the same distance from it.
+    fn with_holes(base: &[u8], count: usize, seed: usize) -> Vec<u8> {
+        let mut out = base.to_vec();
+        let mut left = count;
+        let mut index = seed % base.len();
+        while left > 0 {
+            index = (index + 1) % base.len();
+            if out[index] == 255 {
+                out[index] = 0;
+                left -= 1;
+            }
+        }
+        out
+    }
+
+    /// An atlas of 7x11 characters, one shape each: exact for its own position and,
+    /// for the digits, far enough from a bare [`readout_base`] shape that only the
+    /// glyphs a test adds itself can be candidates for one.
+    fn readout_font(chars: &str) -> (Atlas, Vec<(char, Vec<u8>)>) {
+        let mut atlas = Atlas::default();
+        let mut shapes = Vec::new();
+        for (index, ch) in chars.chars().enumerate() {
+            let bracket = ch == '[' || ch == ']';
+            let (base, holes) = if bracket {
+                (readout_bracket_base(), 2 + (index % 2) * 2)
+            } else {
+                (readout_base(), 10 + index * 2)
+            };
+            // Few holes, spread by the seed: enough to be a distinct shape, few
+            // enough that no column of the stamped bitmap loses its ink and the
+            // segmenter cuts it in two.
+            let bitmap = with_holes(&base, holes, index * 5);
+            atlas.learn_glyph(ch, bitmap.clone(), 7, 11);
+            shapes.push((ch, bitmap));
+        }
+        (atlas, shapes)
+    }
+
+    fn font_shape(shapes: &[(char, Vec<u8>)], ch: char) -> Vec<u8> {
+        shapes
+            .iter()
+            .find(|(font_ch, _)| *font_ch == ch)
+            .unwrap_or_else(|| panic!("no shape for {ch}"))
+            .1
+            .clone()
+    }
+
+    /// The shapes drawn as one readout line: left to right with a blank column
+    /// between them, like the client's glyph run.
+    fn draw_readout(shapes: &[Vec<u8>], w: usize, h: usize) -> Gray {
+        const GAP: usize = 2;
+        let width = (w + GAP) * shapes.len() + GAP;
+        let mut gray = canvas(width, h + 4);
+        for (index, shape) in shapes.iter().enumerate() {
+            let x0 = GAP + index * (w + GAP);
+            for y in 0..h {
+                for x in 0..w {
+                    if shape[y * w + x] > 0 {
+                        gray.px[(y + 2) * width + x0 + x] = 230;
+                    }
+                }
+            }
+        }
+        gray
+    }
+
+    #[test]
+    fn readout_rejects_a_digit_two_characters_explain_equally() {
+        // The Filtered `8` of the 26,487 HUD is drawn in a shape the seeded atlas
+        // does not hold: its `6` and `9` are both near misses of it, a point or two
+        // apart. Taking the closer of the two is what turned the readout into the
+        // perfectly plausible `26,467`.
+        let (mut atlas, font) = readout_font("1[%]");
+        let base = readout_base();
+        let tied = with_holes(&base, 2, 3);
+        atlas.learn_glyph('6', tied.clone(), 7, 11);
+        atlas.learn_glyph('9', tied, 7, 11);
+        atlas.learn_glyph('8', with_holes(&base, 12, 4), 7, 11);
+
+        let drawn = vec![
+            font_shape(&font, '1'),
+            font_shape(&font, '['),
+            base,
+            font_shape(&font, '%'),
+            font_shape(&font, ']'),
+        ];
+        let gray = draw_readout(&drawn, 7, 11);
+
+        // The tie is real, not an artefact of the threshold: both characters are the
+        // same distance from the shape.
+        let mut found = segments(&gray);
+        let digit = found.remove(2);
+        let ranked = atlas
+            .match_ranked(&digit, "0123456789", READOUT_TOLERANCE)
+            .expect("candidates");
+        assert!(ranked.ambiguous(), "{ranked:?}");
+        assert_eq!(ranked.distance, ranked.rival_distance, "{ranked:?}");
+
+        let error = atlas
+            .recognize_readout(&gray)
+            .expect_err("a tie is not a read");
+        assert!(error.contains("too close to tell apart"), "{error}");
+    }
+
+    #[test]
+    fn readout_rejects_a_near_miss_its_rival_also_explains() {
+        // The other half of the Filtered problem: the live `3` is drawn past the
+        // strict threshold (it measures 31) and its `8` is barely further away. Two
+        // characters that explain a near miss equally well are not a read either —
+        // the tolerant step has to refuse it.
+        let (mut atlas, font) = readout_font("[]%");
+        let base = readout_base();
+        // The EXP number is exact for its own position and too far from a
+        // Filtered-shaped digit to compete inside the percentage, so the only
+        // candidates there are the tied pair.
+        let number = with_holes(&base, 26, 11);
+        atlas.learn_glyph('7', number.clone(), 7, 11);
+        let near = with_holes(&base, 12, 6);
+        atlas.learn_glyph('3', near.clone(), 7, 11);
+        atlas.learn_glyph('8', near, 7, 11);
+
+        let drawn = vec![
+            number,
+            font_shape(&font, '['),
+            base,
+            font_shape(&font, '%'),
+            font_shape(&font, ']'),
+        ];
+        let gray = draw_readout(&drawn, 7, 11);
+
+        let mut found = segments(&gray);
+        let digit = found.remove(2);
+        let ranked = atlas
+            .match_ranked(&digit, "0123456789", READOUT_TOLERANCE)
+            .expect("candidates");
+        assert!(
+            ranked.distance > MATCH_THRESHOLD,
+            "the strict step must not accept it: {ranked:?}"
+        );
+        assert!(ranked.ambiguous(), "{ranked:?}");
+
+        let error = atlas
+            .recognize_readout(&gray)
+            .expect_err("a tie is not a read");
+        assert!(error.contains("too close to tell apart"), "{error}");
+    }
+
+    #[test]
+    fn ambiguity_margin_sits_where_the_corpus_measured_it() {
+        // The harness cannot express a gap under 3.3 through the atlas (one cleared
+        // pixel of a 7x11 shape is 255/77), which is the regime the rule operates
+        // in, so the boundary is pinned on the numbers the margin was chosen from.
+        let ranked = |distance: f64, rival_distance: f64| Ranked {
+            ch: '3',
+            distance,
+            rival: '8',
+            rival_distance,
+        };
+
+        // Reads the corpus keeps: the 36,818 `3` is 31.6 with its `8` at 33.4
+        // (1.8 apart) and its `9` is 24.3 with a `0` at 26.5 (2.2 apart).
+        assert!(!ranked(31.6, 33.4).ambiguous());
+        assert!(!ranked(24.3, 26.5).ambiguous());
+        // The 26,487 `13.58%` `3` is 30.8 with its `8` at 31.6: 0.8 apart, the tie
+        // the rule refuses.
+        assert!(ranked(30.8, 31.6).ambiguous());
+        // The boundary is the margin itself: exactly `AMBIGUITY_MARGIN` apart is
+        // still a read, anything under it is a tie.
+        assert_eq!(AMBIGUITY_MARGIN, 1.0);
+        assert!(!ranked(30.0, 31.0).ambiguous());
+        assert!(ranked(30.0, 30.999).ambiguous());
+    }
+
+    /// Two 7x11 digits drawn as one wide shape with no blank column at the seam, so
+    /// the segmenter keeps them together and only a split can read them.
+    fn touching_pair() -> Vec<u8> {
+        let mut wide = with_holes(&readout_base(), 10, 0);
+        wide.extend_from_slice(&with_holes(&readout_base(), 12, 5));
+        wide
+    }
+
+    /// [`draw_readout`] for a line whose shapes are not all the same size.
+    fn draw_shapes(shapes: &[(&[u8], usize, usize)]) -> Gray {
+        const GAP: usize = 2;
+        let width = shapes.iter().map(|(_, w, _)| w + GAP).sum::<usize>() + GAP;
+        let height = shapes.iter().map(|(_, _, h)| *h).max().unwrap_or(0) + 4;
+        let mut gray = canvas(width, height);
+        let mut x0 = GAP;
+        for (shape, w, h) in shapes {
+            for y in 0..*h {
+                for x in 0..*w {
+                    if shape[y * w + x] > 0 {
+                        gray.px[(y + 2) * width + x0 + x] = 230;
+                    }
+                }
+            }
+            x0 += w + GAP;
+        }
+        gray
+    }
+
+    /// The one wide shape of [`touching_pair`], as the segmenter sees it.
+    fn wide_pair() -> Segment {
+        let mut found = segments(&draw_shapes(&[(&touching_pair(), 14, 11)]));
+        assert_eq!(found.len(), 1, "the pair must not segment apart: {found:?}");
+        found.remove(0)
+    }
+
+    #[test]
+    fn a_touching_pair_splits_when_it_explains_the_shape_better() {
+        // The strict step is vetoed — two characters explain the wide shape the same
+        // way, a few points from it — and the split into the two digits explains it
+        // exactly, so the split is taken: a vetoed single glyph must not cost the
+        // digits the shape is made of.
+        let (mut atlas, font) = readout_font("3[]%");
+        let wide = wide_pair();
+        let (w, h) = (wide.w, wide.h);
+        let (left, right) = (split_part(&wide, 0, 7), split_part(&wide, 7, w - 7));
+        atlas.learn_glyph('1', left.mask.clone(), 7, h);
+        atlas.learn_glyph('2', right.mask.clone(), w - 7, h);
+        let tied = with_holes(&wide.mask, 2, 3);
+        atlas.learn_glyph('6', tied.clone(), w, h);
+        atlas.learn_glyph('9', tied, w, h);
+
+        // The tie is real: both characters are the same distance from the shape, and
+        // close enough for the strict step to find them at all.
+        let ranked = atlas
+            .match_ranked(&wide, "0123456789,[", MATCH_THRESHOLD)
+            .expect("the tie is inside the strict threshold");
+        assert!(ranked.ambiguous(), "{ranked:?}");
+        assert_eq!(ranked.distance, ranked.rival_distance, "{ranked:?}");
+
+        let parts = atlas
+            .split_segment(&wide, "0123456789,[", SplitPolicy::Readout)
+            .expect("the touching pair splits");
+        assert_eq!(parts.iter().map(|(_, ch, _)| *ch).collect::<String>(), "12");
+        let total: f64 = parts.iter().map(|(_, _, best)| best).sum();
+        assert!(
+            total < ranked.distance,
+            "the split explains the shape better: {total} vs {}",
+            ranked.distance
+        );
+
+        let gray = draw_shapes(&[
+            (&wide.mask, w as usize, h as usize),
+            (&font_shape(&font, '['), 7, 11),
+            (&font_shape(&font, '3'), 7, 11),
+            (&font_shape(&font, '%'), 7, 11),
+            (&font_shape(&font, ']'), 7, 11),
+        ]);
+        let (text, _) = atlas.recognize_readout(&gray).expect("split read");
+        assert_eq!(text, "12[3%]");
+    }
+
+    #[test]
+    fn a_touching_pair_is_refused_when_the_vetoed_glyph_explains_it_as_well() {
+        // The other side of the same rule. Here two characters explain the wide shape
+        // exactly, so the split explains it no better than the single reading:
+        // cutting the shape in half would be a second guess, and the level is rejected
+        // instead of read as two digits.
+        let mut atlas = Atlas::default();
+        let wide = wide_pair();
+        let (w, h) = (wide.w, wide.h);
+        let (left, right) = (split_part(&wide, 0, 7), split_part(&wide, 7, w - 7));
+        atlas.learn_glyph('1', left.mask.clone(), 7, h);
+        atlas.learn_glyph('2', right.mask.clone(), w - 7, h);
+        atlas.learn_glyph('6', wide.mask.clone(), w, h);
+        atlas.learn_glyph('9', wide.mask.clone(), w, h);
+
+        assert!(
+            atlas
+                .split_segment(&wide, "0123456789", SplitPolicy::Readout)
+                .is_some(),
+            "the halves themselves still read"
+        );
+
+        let error = atlas
+            .read_digit_shapes(vec![wide])
+            .expect_err("a tie is not a level");
+        assert!(error.contains("too close to tell apart"), "{error}");
+    }
+
+    #[test]
+    fn readout_rejects_a_missing_closing_bracket() {
+        // A clipped box: the percentage and its `[` are drawn, the `]` is not.
+        // Synthesising the bracket (or returning the truncated text) would report a
+        // readout the client never drew.
+        let (atlas, font) = readout_font("12[%]");
+        let drawn = vec![
+            font_shape(&font, '1'),
+            font_shape(&font, '2'),
+            font_shape(&font, '['),
+            font_shape(&font, '%'),
+        ];
+        let gray = draw_readout(&drawn, 7, 11);
+
+        let error = atlas
+            .recognize_readout(&gray)
+            .expect_err("a readout without its ']' is not a read");
+        assert!(error.contains("']'"), "{error}");
+    }
+
+    #[test]
+    fn readout_rejects_a_bracket_where_a_digit_belongs() {
+        // "12[3]%" would drop the `]` out of order if the stage were a hint rather
+        // than a grammar: the bracket has to be refused at the percentage stage, and
+        // the readout with it, instead of silently reading `12[3%`.
+        let (atlas, font) = readout_font("123[%]");
+        let drawn = vec![
+            font_shape(&font, '1'),
+            font_shape(&font, '2'),
+            font_shape(&font, '['),
+            font_shape(&font, '3'),
+            font_shape(&font, ']'),
+            font_shape(&font, '%'),
+        ];
+        let gray = draw_readout(&drawn, 7, 11);
+
+        let error = atlas
+            .recognize_readout(&gray)
+            .expect_err("a bracket inside the percentage is not a read");
+        assert!(error.contains("cannot be read"), "{error}");
+    }
+
+    /// A 7x11 shape nothing in the readout font can match: horizontal bars, so no
+    /// column is blank (the segmenter would cut it in two) and every glyph is far
+    /// more than [`READOUT_TOLERANCE`] away.
+    fn readout_junk() -> Vec<u8> {
+        (0..7 * 11)
+            .map(|index| if (index / 7) % 2 == 0 { 255 } else { 0 })
+            .collect()
+    }
+
+    #[test]
+    fn readout_ignores_junk_beside_the_readout_but_not_inside_it() {
+        // A box drawn by hand also catches the `EXP` label on its left. That junk is
+        // dropped, exactly as before, while a shape the reader cannot explain
+        // *between* two read glyphs is a lost digit and rejects the read.
+        let (atlas, font) = readout_font("123[]%");
+        let junk = readout_junk();
+        let mut drawn = vec![junk.clone()];
+        for ch in "12[3%]".chars() {
+            drawn.push(font_shape(&font, ch));
+        }
+        let gray = draw_readout(&drawn, 7, 11);
+        assert_eq!(
+            atlas.recognize_readout(&gray).map(|(text, _)| text),
+            Ok("12[3%]".to_string())
+        );
+
+        let mut holed = Vec::new();
+        for (index, ch) in "12[3%]".chars().enumerate() {
+            if index == 4 {
+                holed.push(junk.clone());
+            }
+            holed.push(font_shape(&font, ch));
+        }
+        let gray = draw_readout(&holed, 7, 11);
+        let error = atlas
+            .recognize_readout(&gray)
+            .expect_err("a hole inside the readout is a dropped digit");
+        assert!(error.contains("cannot be read"), "{error}");
+    }
+
+    #[test]
+    fn level_read_rejects_a_dropped_digit() {
+        // `35` with the `3` unreadable must not come back as a level of `5`: that
+        // parses, fits the profile and puts a wrong level on the overlay.
+        let (atlas, font) = readout_font("35");
+        let gray = draw_readout(&[readout_junk(), font_shape(&font, '5')], 7, 11);
+        let found = segments(&gray);
+        let error = atlas
+            .read_digit_shapes(found)
+            .expect_err("a level with a dropped digit is not a read");
+        assert!(error.contains("cannot be read"), "{error}");
+    }
+
+    #[test]
+    fn readout_structure_is_the_exp_grammar() {
+        for text in ["10,105[91.53%]", "0[0.00%]", "1,234,567[100%]", "1[2%]"] {
+            assert_eq!(validate_readout(text), Ok(()), "{text}");
+        }
+        for text in [
+            "10,105[91.53%",   // no closing bracket
+            "10,105 91.53%]",  // no opening bracket
+            "10,105[91.53]%",  // bracket closed before the percent
+            "10,105[91.53%]x", // trailing characters
+            "10,105[91.53%x]", // characters between the '%' and the ']'
+            "10,105[91.53%%]", // a second '%' after the percentage
+            "10,105[91.53%1]", // a digit between the '%' and the ']'
+            "10,105[91[.53%]", // a second opening bracket
+            "[91.53%]",        // no EXP number
+            "10,105[]",        // no percentage
+            "10,105[91..53%]", // two periods
+            "10,105[91.53%]]", // a second closing bracket
+            "10,105,91.53%]",  // a comma in the percentage
+            ",105[91.53%]",    // a leading comma
+        ] {
+            assert!(validate_readout(text).is_err(), "{text} should be rejected");
+        }
     }
 
     #[test]
@@ -2771,6 +3469,10 @@ mod tests {
         assert_eq!(parse_exp_text("10,105 [91.53%]"), Some((10_105, 91.53)));
         assert_eq!(parse_exp_text("0 [0.00%]"), Some((0, 0.0)));
         assert_eq!(parse_exp_text("1,234,567[100%]"), Some((1_234_567, 100.0)));
+        // No brackets, no readout: the reader rejects those, and parsing must not
+        // accept a string the reader would never produce.
+        assert_eq!(parse_exp_text("10,105 91.53%"), None);
+        assert_eq!(parse_exp_text("10,105[91.53%"), None);
         assert_eq!(parse_exp_text("no numbers"), None);
     }
 
@@ -2829,7 +3531,6 @@ mod tests {
             "the two digits survive; the tile does not"
         );
     }
-
     #[test]
     fn folded_bar_wins_over_a_scenery_titlebar_fallback() {
         // A real folded bar at the top-left and a slightly larger scenery badge
