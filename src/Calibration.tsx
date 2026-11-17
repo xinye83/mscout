@@ -4,11 +4,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   Calibration,
+  FieldProvenance,
   GlyphGuess,
   LabelCrop,
   LearningInfo,
   MscwStatus,
+  Probe,
   ProfileSummary,
+  ReadProvenance,
   Readings,
   Region,
   TargetStatus,
@@ -45,6 +48,29 @@ const DRAW_LABEL: Record<Readout, string> = {
 /// A box the reader can actually use (matches `Region::is_usable` on the backend).
 function usable(region: Region | null): region is Region {
   return region !== null && region.w > 1 && region.h > 1;
+}
+
+/// Plain-English names for the reader stages the backend reports. An id this build
+/// does not know is shown as it arrived, so a newer backend still displays.
+const SOURCE_LABEL: Record<string, string> = {
+  atlas: "digit atlas",
+  font: "Arial text",
+  fingerprint: "taught fingerprint",
+  ocr: "OCR text",
+  table: "stored table",
+  dtw: "DTW match",
+  literal: "OCR text, no table match",
+  glyphs: "minimap letter atlas",
+  hidden: "minimap collapsed",
+  none: "not read",
+  unknown: "not recognised",
+};
+
+/// "digit atlas · game": the stage that read the field, then where its data came
+/// from (`game`, `taught`, a font seed).
+function sourceText(entry: FieldProvenance): string {
+  const stage = SOURCE_LABEL[entry.source] ?? entry.source;
+  return entry.engine ? `${stage} · ${entry.engine}` : stage;
 }
 
 function hexBytes(hex: string): Uint8Array {
@@ -425,6 +451,12 @@ export default function Calibration() {
   const [probe, setProbe] = useState<Readings | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The backend's own rejection ("the EXP box is not set") and the provenance it
+  // gathered before giving up, so a rejected frame still explains itself.
+  const [probeRejected, setProbeRejected] = useState<string | null>(null);
+  const [probeProvenance, setProbeProvenance] = useState<ReadProvenance | null>(
+    null,
+  );
   const [probeError, setProbeError] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [activeProfile, setActiveProfile] = useState<ProfileSummary | null>(null);
@@ -439,19 +471,29 @@ export default function Calibration() {
 
   const bumpShapes = useCallback(() => setShapeReload((n) => n + 1), []);
 
-  // Read the frozen frame for the per-panel "Read:" lines. Best effort: a panel
-  // with no box or a rejected read simply shows "—".
-  const probeNow = useCallback(async (serial: number) => {
-    if (!serial) return;
-    const readings = await invoke<Readings>("parse_probe", { serial }).catch(
-      (cause) => {
-        setProbeError(String(cause));
-        return null;
-      },
-    );
-    if (readings) setProbeError(null);
-    setProbe(readings);
+  // Apply one probe result to the readout panels. A rejected frame keeps its
+  // provenance and reason, so the panels can show what was tried and why it stopped
+  // even though there are no readings to display.
+  const applyProbe = useCallback((result: Probe | null, commandError?: unknown) => {
+    setProbe(result?.readings ?? null);
+    setProbeProvenance(result?.provenance ?? null);
+    setProbeRejected(result?.rejected ?? null);
+    setProbeError(commandError ? String(commandError) : null);
   }, []);
+
+  // Read the frozen frame for the per-panel "Read:" lines. Best effort: a panel
+  // with no box or a rejected read simply shows "—" plus the backend's reason.
+  const probeNow = useCallback(
+    async (serial: number) => {
+      if (!serial) return;
+      try {
+        applyProbe(await invoke<Probe>("parse_probe", { serial }));
+      } catch (cause) {
+        applyProbe(null, cause);
+      }
+    },
+    [applyProbe],
+  );
 
   // The map is read by detection, so seed the preview from the detected line
   // regions rather than legacy saved boxes. Nothing is persisted here; a drawn box
@@ -594,14 +636,14 @@ export default function Calibration() {
         setRegions(cal);
         setLearning(info);
         setPreview(null);
-        setProbe(null);
+        applyProbe(null);
         setMessage(`UI size set to ${option.label}`);
         refreshProfiles();
       } catch (cause) {
         setError(String(cause));
       }
     },
-    [persist, preview, refreshProfiles, regions],
+    [applyProbe, persist, preview, refreshProfiles, regions],
   );
 
   const saveDiagnostic = useCallback(async () => {
@@ -621,7 +663,7 @@ export default function Calibration() {
   const freeze = useCallback(async () => {
     setError(null);
     setMessage(null);
-    setProbe(null);
+    applyProbe(null);
     try {
       const raw = await invoke<ArrayBuffer | number[]>("capture_preview");
       const bytes =
@@ -691,7 +733,7 @@ export default function Calibration() {
     } catch (cause) {
       setError(String(cause));
     }
-  }, [bumpShapes, probeNow, seedMapBox]);
+  }, [applyProbe, bumpShapes, probeNow, seedMapBox]);
 
   const seedNow = async () => {
     if (!preview) return;
@@ -967,13 +1009,13 @@ export default function Calibration() {
   const test = async () => {
     setError(null);
     setMessage(null);
-    setProbe(null);
+    applyProbe(null);
     try {
       await persist(regions);
-      const result = await invoke<Readings>("parse_probe", {
+      const result = await invoke<Probe>("parse_probe", {
         serial: preview?.serial ?? 0,
       });
-      setProbe(result);
+      applyProbe(result);
     } catch (cause) {
       setError(String(cause));
     }
@@ -1224,6 +1266,26 @@ export default function Calibration() {
     }
   };
 
+  /// Where this field's value came from. The probe carries the provenance beside
+  /// the readings so a rejected frame has one too; absent from an older backend,
+  /// which is why the readout falls back to the bare value.
+  const provenanceFor = (key: Readout): FieldProvenance | null => {
+    const provenance = probe?.provenance ?? probeProvenance;
+    if (!provenance) return null;
+    switch (key) {
+      case "exp":
+        return provenance.exp;
+      case "level":
+        return provenance.level;
+      case "map":
+        return provenance.map;
+      case "identity":
+        return provenance.identity;
+      default:
+        return null;
+    }
+  };
+
   const liveMode = uiModes.find((option) => option.active)?.id ?? "default";
   const liveModeLabel = uiModes.find((option) => option.active)?.label ?? "—";
   const liveSize = client ? `${client.w}x${client.h}` : null;
@@ -1296,7 +1358,7 @@ export default function Calibration() {
           <button
             className="ghost"
             disabled={!preview}
-            title="Save a local JSON diagnostic with raw reads, glyph candidates and map crops"
+            title="Save a local JSON diagnostic with raw reads, glyph candidates, map crops and where each field came from"
             onClick={() => void saveDiagnostic()}
           >
             Save diagnostic
@@ -1407,6 +1469,7 @@ export default function Calibration() {
         <div className="cal-readouts">
           {READOUTS.map((readout) => {
             const key = readout.key;
+            const provenance = provenanceFor(key);
             return (
               <section
                 key={key}
@@ -1459,8 +1522,20 @@ export default function Calibration() {
                     <p className="readout-read muted small">
                       Read: {readValue(key) ?? "—"}
                     </p>
-                    {probeError && (
-                      <p className="warn small">Rejected: {probeError}</p>
+                    {provenance && (
+                      <p className="readout-source muted small">
+                        Source: {sourceText(provenance)}
+                      </p>
+                    )}
+                    {provenance?.reason && (
+                      <p className="readout-reason warn small">
+                        Why: {provenance.reason}
+                      </p>
+                    )}
+                    {(probeRejected || probeError) && (
+                      <p className="warn small">
+                        Rejected: {probeRejected ?? probeError}
+                      </p>
                     )}
                     {key === "exp" && (
                       <>
@@ -1784,6 +1859,9 @@ export default function Calibration() {
         {probe && (
           <span className="muted small probe">
             read ok · conf {probe.conf.toFixed(2)}
+            {probe.provenance
+              ? ` · ${(probe.provenance.durationMs ?? 0).toFixed(1)} ms`
+              : ""}
           </span>
         )}
       </footer>
