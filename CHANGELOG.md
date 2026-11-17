@@ -21,6 +21,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   a bad locator or malformed JSON aborts with the tree untouched instead of half
   bumped, and `--changelog` still promotes when the stored versions already
   match. `npm run test:version-script` covers the locators and the write path.
+- Per-release profile upgrade fixtures (`0.1.0`, `0.2.0`, `0.5.0`, `0.6.0`)
+  reconstructed from the tagged `Profile` structs, so an upgrade is checked
+  against older shapes instead of only the current one. They pin that old files
+  still parse with newer fields defaulted, that the file name decides the UI
+  mode, that legacy 12×16 `cell` glyphs still migrate to native bitmaps, and
+  that a load-then-save cycle leaves calibration, atlas metadata (`format`,
+  `source`, `cellW`/`cellH`), taught maps/streets and name/job fingerprints
+  unchanged.
 
 ### Changed
 - The testdata corpus is now image-indexed (`meta.json` version 2). Every PNG in
@@ -29,6 +37,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   focused EXP and map-label fixtures are indexed alongside the frame images, and
   the regression walker fails on any unindexed PNG. Targeted tests resolve
   fixtures by manifest id.
+- `profile::load_for_mode` now delegates the read half to a small
+  `parse_for_mode` helper (size check plus the filename-authoritative
+  `uiMode`), so the upgrade-fixture tests exercise the production read path
+  instead of a copy of it.
 
 ### Fixed
 - The map-table DTW fallback now resolves Roman-numeral siblings by counting the
