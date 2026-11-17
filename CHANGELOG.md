@@ -36,6 +36,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   that a load-then-save cycle leaves calibration, atlas metadata (`format`,
   `source`, `cellW`/`cellH`), taught maps/streets and name/job fingerprints
   unchanged.
+- Hold-out accuracy reporting for the tracked fixture corpus. `accuracy_report`
+  (ignored, client tier) reads every frame case the way the gate does and prints
+  one `exact` / `rejected` / `wrong` verdict per case, the per-pair counts and the
+  frozen hold-out line, without asserting the counts. `1920x1080@ideal/expanded`
+  is the frozen hold-out (`"holdout": true` in its manifest), pinned by the
+  hermetic `exactly_one_frozen_holdout`. `docs/ACCURACY.md` publishes both
+  2026-11-16 runs with the commands: 18 exact with the app's saved MSCW setting,
+  6 exact / 12 wrong (`map "unknown"`) without it, plus the corpus limits and the
+  retrospective-holdout caveat.
 
 ### Changed
 - The EXP and level readers are runner-up aware: a digit whose closest other
@@ -56,6 +65,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `parse_for_mode` helper (size check plus the filename-authoritative
   `uiMode`), so the upgrade-fixture tests exercise the production read path
   instead of a copy of it.
+- The frozen hold-out is pinned to its case key: `exactly_one_frozen_holdout`
+  now fails when the flag moves off `1920x1080@ideal/expanded`, not only when the
+  number of flagged states changes, so the reservation cannot be transferred to a
+  case that already reads exact. A `holdout` flag on a non-minimap image (`hud`,
+  `settings`, `exp`, `map-label`) is rejected when the corpus loads instead of
+  being silently dropped.
 
 ### Fixed
 - A saved diagnostic for a **rejected** frame now records the atlas origin

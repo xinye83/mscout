@@ -14,14 +14,22 @@
 //!   detection and the "settings panel is evidence only" invariant. They need
 //!   nothing but the repository.
 //! * **Client-dependent** (`--ignored`): the full read. Seeding glyphs and labels
-//!   needs the installed client (`MSCW`) and the Windows Arial face.
+//!   needs the installed client (`MSCW`) and the Windows Arial face. This tier
+//!   also carries `accuracy_report`, which scores every case **exact /
+//!   rejected / wrong** against its manifest so the corpus reports its accuracy
+//!   instead of only asserting it.
+//!
+//! Exactly one minimap state is flagged `holdout` in its manifest: the frozen
+//! hold-out. It was frozen retrospectively (see `testdata/README.md`), so it is
+//! *not* historically independent of the tuning that came before it — but from
+//! now on it is read and reported, never tuned against.
 //!
 //! Nothing here skips a fixture. A case that is missing a file, whose crop lies
 //! outside the client, or whose manifest disagrees with its pixels panics with
 //! the case name in the message — a corpus that silently shrinks is a gate that
 //! silently stops gating.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -103,6 +111,12 @@ pub(crate) struct FixtureImage {
     pub(crate) street: Option<String>,
     #[serde(default)]
     pub(crate) map: Option<String>,
+    /// Frozen hold-out. Exactly one minimap image in the whole corpus carries
+    /// this flag; `exactly_one_frozen_holdout` enforces that. A hold-out case is
+    /// read and reported like any other, but it is not input to tuning: it was
+    /// frozen on 2026-11-16 and must stay untouched.
+    #[serde(default)]
+    pub(crate) holdout: bool,
 }
 
 impl FixtureImage {
@@ -149,6 +163,8 @@ struct Case {
     hud_file: String,
     hud_crop: Rect,
     settings_crop: Rect,
+    /// True when this state is the frozen hold-out (see `FixtureImage::holdout`).
+    holdout: bool,
     meta: Meta,
 }
 
@@ -315,6 +331,21 @@ fn load_cases_in(root: &Path) -> Vec<Case> {
         let mut settings: Option<FixtureImage> = None;
         let mut minimaps: Vec<FixtureImage> = Vec::new();
         for image in &meta.images {
+            // The hold-out reservation names one *minimap state*. A `holdout` flag
+            // on a hud/settings/exp/map-label entry would parse fine and then be
+            // dropped — `Case` carries the flag from minimap variants only — so the
+            // manifest would look reserved while nothing was. Reject it instead.
+            if matches!(
+                image.kind.as_str(),
+                "hud" | "settings" | "exp" | "map-label"
+            ) {
+                assert!(
+                    !image.holdout,
+                    "{pair_key}: image {:?} is kind {:?} — only a minimap state can be \
+                     the frozen hold-out",
+                    image.id, image.kind
+                );
+            }
             match image.kind.as_str() {
                 "hud" => {
                     assert!(hud.is_none(), "{pair_key}: more than one hud image");
@@ -357,6 +388,7 @@ fn load_cases_in(root: &Path) -> Vec<Case> {
                 hud_file: hud.file.clone(),
                 hud_crop: hud.crop,
                 settings_crop: settings.crop,
+                holdout: variant.holdout,
                 meta: meta.clone(),
             });
         }
@@ -781,6 +813,64 @@ fn settings_panel_is_evidence_only() {
     }
 }
 
+/// Exactly one state in the corpus is the frozen hold-out, it stays exactly one,
+/// and it is the **same** case: a second hold-out would make "never tuned against"
+/// meaningless, none would silently free the reserved case for tuning again, and a
+/// flag moved to a state that already reads exact would reserve nothing.
+///
+/// Deliberately checks the **unfiltered** corpus, so `MSCOUT_CASE`/`MSCOUT_STATE`
+/// cannot narrow the run into a pass.
+#[test]
+fn exactly_one_frozen_holdout() {
+    /// The frozen case's identity, pinned here as well as in the docs: the
+    /// reservation is one specific state, not whichever state currently carries
+    /// the flag. `docs/ACCURACY.md` and `testdata/README.md` both name it, and
+    /// moving the flag is the one thing they forbid.
+    const FROZEN_HOLDOUT: &str = "1920x1080@ideal/expanded";
+
+    let frozen: Vec<Case> = load_cases_in(&fixtures_dir())
+        .into_iter()
+        .filter(|case| case.holdout)
+        .collect();
+    assert_eq!(
+        frozen.len(),
+        1,
+        "exactly one fixture state must be the frozen hold-out; found {}: {}",
+        frozen.len(),
+        frozen
+            .iter()
+            .map(|case| case.key.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    let case = &frozen[0];
+    assert_eq!(
+        case.key, FROZEN_HOLDOUT,
+        "the frozen hold-out must stay {FROZEN_HOLDOUT}, found {} — the reservation \
+         is pinned to that case, and moving the flag to another state would free it \
+         for tuning",
+        case.key
+    );
+    // A hold-out has to be a real client state that a reader consumes, not a
+    // focused crop or a state with nothing on screen.
+    assert!(
+        case.minimap_state == "expanded"
+            || case.minimap_state == "folded"
+            || case.minimap_state == "titlebar",
+        "{}: the frozen hold-out must be a read minimap state, not {:?}",
+        case.key,
+        case.minimap_state
+    );
+    println!(
+        "frozen hold-out: {} ({}x{} {})",
+        case.key,
+        case.meta.client_w,
+        case.meta.client_h,
+        case.mode().id()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The gate's own guards: bounds checking and the refusal to skip.
 // ---------------------------------------------------------------------------
@@ -870,8 +960,43 @@ fn a_fixture_directory_without_a_manifest_panics() {
     load_cases_in(&root.0);
 }
 
+/// The reservation names a *minimap state*. A `holdout` flag on any other kind
+/// parses fine and is then dropped — `Case` carries the flag from minimap variants
+/// only — which would leave a manifest looking reserved while nothing was. The
+/// loader must reject it instead of quietly reserving nothing.
+#[test]
+#[should_panic(expected = "only a minimap state can be the frozen hold-out")]
+fn a_holdout_flag_on_a_non_minimap_image_panics() {
+    let root = TempRoot::new("holdout-not-minimap");
+    let pair = root.0.join("1920x1080@ideal");
+    std::fs::create_dir_all(&pair).expect("create the fixture directory");
+    std::fs::write(
+        pair.join("meta.json"),
+        r#"{
+  "version": 2,
+  "clientW": 1920,
+  "clientH": 1080,
+  "uiMode": "ideal",
+  "name": "Euroblood",
+  "job": "Page",
+  "level": 35,
+  "expText": "123,044[70.63%]",
+  "exp": 123044,
+  "pct": 70.63,
+  "street": "Victoria Road",
+  "map": "East Rocky Mountain III",
+  "settingsDisplay": { "resolution": "1920 x 1080", "uiSize": "Ideal Ratio" },
+  "images": [
+    { "id": "hud-main", "kind": "hud", "holdout": true, "file": "hud-main.png", "source": "client", "crop": { "x": 560, "y": 1036, "w": 574, "h": 44 } }
+  ]
+}"#,
+    )
+    .expect("write the manifest");
+    load_cases_in(&root.0);
+}
+
 /// A throwaway corpus root under the system temp directory. Removed on drop, so
-/// the two `should_panic` guards clean up while unwinding.
+/// the `should_panic` guards clean up while unwinding.
 struct TempRoot(PathBuf);
 
 impl TempRoot {
@@ -917,7 +1042,11 @@ fn mscw_dir() -> PathBuf {
 
 /// Read one fixture the way a fresh install does: seed every atlas from the
 /// frame itself (never from a saved profile) and run the production reader.
-fn read_case(case: &Case, mscw: &Path) -> Option<crate::engine::Readings> {
+///
+/// `Ok(None)` means the pair has no shipped preset, so there is nothing to read.
+/// `Err` is the reader (or its seeding) refusing to produce a reading — the
+/// *rejected* class in `accuracy_report`.
+fn attempt_read(case: &Case, mscw: &Path) -> Result<Option<crate::engine::Readings>, String> {
     let (client_w, client_h) = case.client_size();
     let mode = case.mode();
     let key = format!("{client_w}x{client_h}{}", mode.suffix());
@@ -927,7 +1056,7 @@ fn read_case(case: &Case, mscw: &Path) -> Option<crate::engine::Readings> {
             "{}: no shipped preset for {key} — unsupported pair, skipping",
             case.key
         );
-        return None;
+        return Ok(None);
     };
 
     let frame = compose_frame(case);
@@ -936,20 +1065,20 @@ fn read_case(case: &Case, mscw: &Path) -> Option<crate::engine::Readings> {
         .calibration
         .exp
         .filter(Region::is_usable)
-        .unwrap_or_else(|| panic!("{}: preset {key} has no EXP box", case.key));
+        .ok_or_else(|| format!("preset {key} has no EXP box"))?;
     let exp_gray = ocr::crop_gray(&frame, exp_region)
-        .unwrap_or_else(|| panic!("{}: EXP box {exp_region:?} is outside the frame", case.key));
+        .ok_or_else(|| format!("EXP box {exp_region:?} is outside the frame"))?;
     let (exp, exp_height) = crate::game_font::seed_exp_atlas(&exp_gray, mscw)
-        .unwrap_or_else(|error| panic!("{}: seeding the EXP atlas failed: {error}", case.key));
+        .map_err(|error| format!("seeding the EXP atlas failed: {error}"))?;
 
     let level_region = preset
         .calibration
         .level
         .filter(Region::is_usable)
-        .unwrap_or_else(|| panic!("{}: preset {key} has no level box", case.key));
+        .ok_or_else(|| format!("preset {key} has no level box"))?;
     let (level, level_size, level_text) =
         crate::game_font::seed_level_best(&frame, level_region, mscw)
-            .unwrap_or_else(|| panic!("{}: seeding the level atlas failed", case.key));
+            .ok_or_else(|| "seeding the level atlas failed".to_string())?;
     println!(
         "{}: level seeded {:?} from {level_text:?}",
         case.key, level_size
@@ -976,12 +1105,7 @@ fn read_case(case: &Case, mscw: &Path) -> Option<crate::engine::Readings> {
         }
     }
     let identity = identity
-        .unwrap_or_else(|| {
-            panic!(
-                "{}: could not seed the name/job atlas from any identity box",
-                case.key
-            )
-        })
+        .ok_or_else(|| "could not seed the name/job atlas from any identity box".to_string())?
         .to_settings();
 
     println!(
@@ -1009,10 +1133,16 @@ fn read_case(case: &Case, mscw: &Path) -> Option<crate::engine::Readings> {
         &preset.streets,
         &preset.identities,
     )
-    .unwrap_or_else(|error| panic!("{}: read_frame failed: {error}", case.key));
+    .map_err(|error| format!("read_frame failed: {error}"))?;
 
     println!("{}: {readings:?}", case.key);
-    Some(readings)
+    Ok(Some(readings))
+}
+
+/// `attempt_read`, but a rejection panics: this is what the two gate tests use,
+/// so a fixture the reader cannot read fails the gate rather than being scored.
+fn read_case(case: &Case, mscw: &Path) -> Option<crate::engine::Readings> {
+    attempt_read(case, mscw).unwrap_or_else(|error| panic!("{}: {error}", case.key))
 }
 
 /// The full regression: every fixture, read from empty atlases, asserted against
@@ -1170,6 +1300,251 @@ fn reads_follow_the_manifest_minimap_state() {
             other => panic!("{}: unknown minimapState {other:?}", case.key),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Accuracy reporting: the same reads, scored instead of asserted.
+// ---------------------------------------------------------------------------
+
+/// The map/map_hidden expectation for a case's minimap state: the union of what
+/// `reads_every_fixture_from_empty_atlases` and
+/// `reads_follow_the_manifest_minimap_state` assert.
+fn expected_map(case: &Case) -> (String, bool) {
+    let meta = &case.meta;
+    match case.minimap_state.as_str() {
+        "expanded" | "folded" => (format!("{}\n{}", meta.street, meta.map), false),
+        "titlebar" => ("unknown".to_string(), true),
+        "hidden" => ("unknown".to_string(), false),
+        other => panic!("{}: unknown minimapState {other:?}", case.key),
+    }
+}
+
+/// Every field of `readings` that disagrees with the manifest, as
+/// `Field actual != expected`. Empty means the case read exactly.
+fn field_mismatches(case: &Case, readings: &crate::engine::Readings) -> Vec<String> {
+    let meta = &case.meta;
+    let mut fields = Vec::new();
+    if readings.exp_text != meta.exp_text {
+        fields.push(format!(
+            "exp_text {:?} != {:?}",
+            readings.exp_text, meta.exp_text
+        ));
+    }
+    if readings.exp != meta.exp {
+        fields.push(format!("exp {} != {}", readings.exp, meta.exp));
+    }
+    if (readings.pct - meta.pct).abs() >= 0.005 {
+        fields.push(format!("pct {:.2} != {:.2}", readings.pct, meta.pct));
+    }
+    if readings.lv != meta.level {
+        fields.push(format!("level {} != {}", readings.lv, meta.level));
+    }
+    if readings.name.as_deref() != Some(meta.name.as_str()) {
+        fields.push(format!("name {:?} != {:?}", readings.name, meta.name));
+    }
+    if readings.job.as_deref() != Some(meta.job.as_str()) {
+        fields.push(format!("job {:?} != {:?}", readings.job, meta.job));
+    }
+    let (expected_map, expected_hidden) = expected_map(case);
+    if readings.map != expected_map {
+        fields.push(format!("map {:?} != {:?}", readings.map, expected_map));
+    }
+    if readings.map_hidden != expected_hidden {
+        fields.push(format!(
+            "map_hidden {} != {expected_hidden}",
+            readings.map_hidden
+        ));
+    }
+    fields
+}
+
+/// What one case did when it was read and scored. The three counts the report
+/// publishes are `Exact`, `Rejected` and `Wrong`; the other two classes exist so
+/// nothing can be dropped from the report.
+enum Verdict {
+    /// No shipped preset for the pair: there is nothing to read. Never a pass.
+    NoPreset,
+    /// The reader (or its seeding) refused to produce a reading.
+    Rejected(String),
+    /// A reading was produced but at least one field disagrees with the manifest.
+    Wrong(Vec<String>),
+    /// Every field agrees with the manifest.
+    Exact,
+}
+
+impl Verdict {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::NoPreset => "no-preset",
+            Self::Rejected(_) => "rejected",
+            Self::Wrong(_) => "wrong",
+            Self::Exact => "exact",
+        }
+    }
+
+    fn detail(&self) -> String {
+        match self {
+            Self::NoPreset | Self::Exact => String::new(),
+            Self::Rejected(reason) => reason.clone(),
+            Self::Wrong(fields) => fields.join("; "),
+        }
+    }
+
+    /// `label`, then `detail` when there is one: what the hold-out line prints.
+    fn summary(&self) -> String {
+        match self.detail() {
+            detail if detail.is_empty() => self.label().to_string(),
+            detail => format!("{} {detail}", self.label()),
+        }
+    }
+}
+
+/// Score one case: `attempt_read` plus the manifest comparison, without
+/// asserting anything about the result.
+fn verdict(case: &Case, mscw: &Path) -> Verdict {
+    match attempt_read(case, mscw) {
+        Ok(None) => Verdict::NoPreset,
+        Err(reason) => Verdict::Rejected(reason),
+        Ok(Some(readings)) => {
+            let fields = field_mismatches(case, &readings);
+            if fields.is_empty() {
+                Verdict::Exact
+            } else {
+                Verdict::Wrong(fields)
+            }
+        }
+    }
+}
+
+/// The descriptive active-filter note, so a published report cannot be mistaken
+/// for a whole-corpus run when `MSCOUT_CASE`/`MSCOUT_STATE` narrowed it.
+fn filters_note() -> String {
+    let mut active = Vec::new();
+    if let Ok(case) = std::env::var("MSCOUT_CASE") {
+        active.push(format!("MSCOUT_CASE={case}"));
+    }
+    if let Ok(state) = std::env::var("MSCOUT_STATE") {
+        active.push(format!("MSCOUT_STATE={state}"));
+    }
+    if active.is_empty() {
+        "none (whole corpus)".to_string()
+    } else {
+        active.join(", ")
+    }
+}
+
+/// Publish the corpus's accuracy instead of only asserting it: for every frame
+/// case, print whether the read was **exact**, **rejected** or **wrong**, with
+/// the wrong fields spelled out, then the per-pair counts and the frozen
+/// hold-out line.
+///
+/// `docs/ACCURACY.md` records these numbers with the date and the command. The
+/// report deliberately does **not** assert the counts: a known wrong stays a
+/// printed wrong, so it cannot be turned into a silent pass and a real
+/// improvement cannot be mistaken for one either.
+#[test]
+#[ignore = "requires the MSCW install and Windows Arial"]
+fn accuracy_report() {
+    let mscw = mscw_dir();
+    assert!(
+        mscw.is_dir(),
+        "MSCW install not found at {} — set MSCOUT_MSCW_DIR",
+        mscw.display()
+    );
+
+    let cases = load_cases();
+    assert!(!cases.is_empty(), "no fixture cases to report");
+
+    println!();
+    println!("=== fixture accuracy report ===");
+    println!("fixtures : {}", fixtures_dir().display());
+    println!("filters  : {}", filters_note());
+    println!("cases    : {}", cases.len());
+    println!();
+
+    let mut counts: BTreeMap<String, [usize; 4]> = BTreeMap::new();
+    let mut scored: Vec<(String, Verdict)> = Vec::new();
+    for case in &cases {
+        let verdict = verdict(case, &mscw);
+        let entry = counts.entry(case.pair_key.clone()).or_insert([0; 4]);
+        match &verdict {
+            Verdict::Exact => entry[0] += 1,
+            Verdict::Rejected(_) => entry[1] += 1,
+            Verdict::Wrong(_) => entry[2] += 1,
+            Verdict::NoPreset => entry[3] += 1,
+        }
+        println!(
+            "  {:<24} {:<10} {}",
+            case.key,
+            verdict.label(),
+            verdict.detail()
+        );
+        scored.push((case.key.clone(), verdict));
+    }
+
+    println!();
+    println!(
+        "{:<24} {:>5} {:>9} {:>6} {:>10} {:>6}",
+        "pair", "exact", "rejected", "wrong", "no-preset", "cases"
+    );
+    let mut total = [0usize; 4];
+    for (pair, row) in &counts {
+        for (sum, value) in total.iter_mut().zip(row) {
+            *sum += *value;
+        }
+        println!(
+            "{:<24} {:>5} {:>9} {:>6} {:>10} {:>6}",
+            pair,
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row.iter().sum::<usize>()
+        );
+    }
+    println!(
+        "{:<24} {:>5} {:>9} {:>6} {:>10} {:>6}",
+        "total",
+        total[0],
+        total[1],
+        total[2],
+        total[3],
+        total.iter().sum::<usize>()
+    );
+
+    // The hold-out line always names the frozen state, even when the filters
+    // excluded it from the counted run: the reservation is a corpus fact, not a
+    // property of this invocation.
+    let frozen: Vec<Case> = load_cases_in(&fixtures_dir())
+        .into_iter()
+        .filter(|case| case.holdout)
+        .collect();
+    assert_eq!(
+        frozen.len(),
+        1,
+        "exactly one frozen hold-out expected; found {}",
+        frozen.len()
+    );
+    let frozen_case = &frozen[0];
+    let frozen_verdict = match scored.iter().find(|(key, _)| *key == frozen_case.key) {
+        Some((_, verdict)) => verdict.summary(),
+        // Not a second case and not a duplicate read: the filters excluded the
+        // hold-out from the counted run, so this is its only read here. The line
+        // exists because the reservation is a corpus fact, not a property of this
+        // invocation.
+        None => format!(
+            "{} (not in this filtered run)",
+            verdict(frozen_case, &mscw).summary()
+        ),
+    };
+    println!();
+    println!("hold-out : {} — {frozen_verdict}", frozen_case.key);
+
+    println!();
+    println!(
+        "note: counts are printed, not asserted — a known wrong stays visible as \
+         a wrong and is never promoted to a pass."
+    );
 }
 
 /// Live confirmation: capture the running client and read it with the
