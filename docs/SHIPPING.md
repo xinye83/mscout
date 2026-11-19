@@ -13,6 +13,7 @@ stays in `data/`.
 | Preset calibration boxes (`src-tauri/presets/*.json`) | measured **geometry** only | Every preset has `expGlyphs = levelGlyphs = mapGlyphs = 0`, no maps/identities. Shipped pairs: **1366×768 and 1920×1080 at Default, Ideal and Filtered**. 1920×1200 has no preset and falls back to calibration. See [PRESETS.md](PRESETS.md). |
 | EXP table | game **numbers**, not art | `exp_table.rs` / `expTable.ts`; 1–49 confirmed, 50–89 estimated and labelled, 90–100 anchored. |
 | Detection constants and rate math | our logic | minimap panel colour/proportions, ROI rules, rate windows. |
+| Job-name vocabulary (`jobs::JOB_NAMES`) | a closed set of **class labels**, not client content | 5 trees + 10 second jobs + 10 reserved third jobs; no art, no per-client strings. See D33 for why this one list ships while the map table does not. |
 | Docs, tray/overlay assets | ours | — |
 
 Nothing else is bundled: no glyph atlases, no map-name list, no fonts, no
@@ -79,6 +80,14 @@ contain redistributable-restricted content.
 - Player profiles, fingerprints, samples.
 - The extracted Noto TTF, unless a future CJK feature needs it (it is OFL, but
   the English UI does not).
+
+**The job vocabulary is not in this list.** It is class *labels* — a closed,
+version-stable enum of what the game calls a job — not client content. D33 records
+the reasoning and the narrow scope: it exists only because the client has no
+job-name table to read, it contains no art and no map/NPC/item text, and it is
+re-checked against the published class list when a client update adds or renames a
+class. A stale entry is worse than a missing one, because it can attract a near
+miss from the wrong branch.
 
 ## Current compliance
 

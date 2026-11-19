@@ -328,6 +328,43 @@ pub fn save_target(selector: Option<&WindowSelector>) -> Result<(), String> {
     })
 }
 
+/// Where the player last dragged the overlay, in physical pixels.
+///
+/// Stored apart from the computed anchor: the anchor follows the game window, and
+/// a dragged panel must not be yanked back to it on the next tick or restart.
+/// `None` means "never dragged", which is what lets the anchor place the panel.
+pub fn load_overlay_position() -> Option<(i32, i32)> {
+    parse_overlay_position(&read_raw())
+}
+
+/// Read a position out of a settings object.
+///
+/// Split from the file read so a malformed or half-written value is testable: a
+/// position that does not parse must read as "never dragged", never as `(0, 0)`,
+/// which would move the panel to the top-left corner.
+fn parse_overlay_position(value: &Value) -> Option<(i32, i32)> {
+    let position = value.get("overlayPosition")?;
+    Some((
+        position.get("x")?.as_i64()? as i32,
+        position.get("y")?.as_i64()? as i32,
+    ))
+}
+
+pub fn save_overlay_position(x: i32, y: i32) -> Result<(), String> {
+    update(move |object| {
+        let mut position = Map::new();
+        position.insert("x".into(), Value::from(x));
+        position.insert("y".into(), Value::from(y));
+        object.insert("overlayPosition".into(), Value::Object(position));
+    })
+}
+
+pub fn clear_overlay_position() -> Result<(), String> {
+    update(|object| {
+        object.remove("overlayPosition");
+    })
+}
+
 pub fn load_calibration() -> Calibration {
     crate::profile::active()
         .map(|profile| profile.calibration)
@@ -497,5 +534,55 @@ mod tests {
         let bytes = [0u8, 1, 15, 16, 127, 255];
         assert_eq!(from_hex(&to_hex(&bytes)).unwrap(), bytes);
         assert_eq!(from_hex("abc"), None);
+    }
+
+    #[test]
+    fn a_saved_overlay_position_round_trips() {
+        let value: Value = serde_json::json!({
+            "overlayPosition": { "x": 1690, "y": 285 }
+        });
+        assert_eq!(parse_overlay_position(&value), Some((1690, 285)));
+    }
+
+    #[test]
+    fn a_negative_position_is_kept() {
+        // Dragging onto a monitor left of the primary one gives negative coordinates,
+        // which must not be clamped away.
+        let value: Value = serde_json::json!({
+            "overlayPosition": { "x": -1920, "y": -40 }
+        });
+        assert_eq!(parse_overlay_position(&value), Some((-1920, -40)));
+    }
+
+    #[test]
+    fn a_missing_or_broken_position_means_never_dragged() {
+        // Never `(0, 0)`: that would silently move the panel to the top-left corner.
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({ "overlayPosition": null }),
+            serde_json::json!({ "overlayPosition": {} }),
+            serde_json::json!({ "overlayPosition": { "x": 10 } }),
+            serde_json::json!({ "overlayPosition": { "x": "10", "y": 20 } }),
+            serde_json::json!({ "overlayPosition": [10, 20] }),
+            serde_json::json!("not an object"),
+        ] {
+            assert_eq!(
+                parse_overlay_position(&value),
+                None,
+                "must not invent a position from {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_position_is_independent_of_the_other_settings() {
+        // A drag must survive alongside the target and UI Size, and vice versa.
+        let value: Value = serde_json::json!({
+            "mscwDir": "D:\\MapleStory\\MSCW",
+            "uiMode": "ideal",
+            "targetWindow": { "title": "MapleStory", "process": "MapleStory.exe" },
+            "overlayPosition": { "x": 1690, "y": 285 }
+        });
+        assert_eq!(parse_overlay_position(&value), Some((1690, 285)));
     }
 }

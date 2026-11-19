@@ -591,7 +591,16 @@ pub struct MscwStatus {
 }
 
 pub fn status() -> MscwStatus {
-    let Some(dir) = crate::settings::mscw_dir() else {
+    status_for(crate::settings::mscw_dir().as_deref())
+}
+
+/// The status for a given client directory, or for none.
+///
+/// Split out from [`status`] so the "no folder chosen" and "folder is gone"
+/// cases can be asserted without touching the player's saved settings — those are
+/// the two states the calibration window has to explain rather than crash on.
+fn status_for(dir: Option<&str>) -> MscwStatus {
+    let Some(dir) = dir else {
         return MscwStatus {
             path: None,
             exists: false,
@@ -600,7 +609,7 @@ pub fn status() -> MscwStatus {
             error: None,
         };
     };
-    let path = PathBuf::from(&dir);
+    let path = PathBuf::from(dir);
     let exists = path.is_dir();
     let atlas = if exists { canvas_wz(&path) } else { None };
     let map_names = if exists {
@@ -611,7 +620,7 @@ pub fn status() -> MscwStatus {
         0
     };
     MscwStatus {
-        path: Some(dir),
+        path: Some(dir.to_string()),
         exists,
         atlas_found: atlas.is_some(),
         map_names,
@@ -703,6 +712,56 @@ mod tests {
     use super::*;
     use crate::capture::Frame;
     use crate::settings::Region;
+
+    /// EDGE-02: no folder chosen is a state to report, not an error to throw.
+    #[test]
+    fn no_mscw_configured_reports_an_unset_state() {
+        let status = status_for(None);
+        assert_eq!(status.path, None);
+        assert!(!status.exists);
+        assert!(!status.atlas_found);
+        assert_eq!(status.map_names, 0);
+        // No folder was chosen, so there is nothing to report as broken.
+        assert_eq!(status.error, None);
+    }
+
+    /// EDGE-02: a saved path that no longer exists must say so clearly.
+    #[test]
+    fn a_missing_mscw_folder_reports_it_does_not_exist() {
+        let missing = std::env::temp_dir().join("mscout-no-such-mscw-folder");
+        let status = status_for(Some(&missing.to_string_lossy()));
+
+        assert_eq!(
+            status.path.as_deref(),
+            Some(missing.to_string_lossy().as_ref())
+        );
+        assert!(
+            !status.exists,
+            "a non-existent folder must not report as found"
+        );
+        assert!(!status.atlas_found);
+        assert_eq!(status.map_names, 0);
+        // A missing folder is not the same as a folder without the atlas; the
+        // "atlas not found" message must not be shown for a folder that is gone.
+        assert_eq!(status.error, None);
+    }
+
+    /// EDGE-02: a folder that exists but has no client atlas names what is missing.
+    #[test]
+    fn an_empty_folder_names_the_missing_atlas() {
+        let empty = std::env::temp_dir().join("mscout-empty-mscw-folder");
+        let _ = std::fs::create_dir_all(&empty);
+        let status = status_for(Some(&empty.to_string_lossy()));
+
+        assert!(status.exists);
+        assert!(!status.atlas_found);
+        assert_eq!(status.map_names, 0);
+        assert_eq!(
+            status.error.as_deref(),
+            Some("Data/UI/_Canvas/_Canvas_000.wz was not found"),
+            "an existing folder without the atlas must name the missing file"
+        );
+    }
 
     fn game_dir() -> PathBuf {
         PathBuf::from(

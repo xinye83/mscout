@@ -336,7 +336,13 @@ struct EngineState {
     last_sample: Option<Sample>,
     published: Option<CaptureStatus>,
     published_profile: Option<Profile>,
+    /// The last anchor this engine placed the overlay at, so a game that has not
+    /// moved does not cost a `SetWindowPos` every tick.
     anchored: Option<(i32, i32)>,
+    /// Where the player dragged the overlay, in physical pixels. While this is set
+    /// the anchor leaves the panel alone: a dragged position outranks the computed
+    /// one until the player gives up the override.
+    restored_position: Option<(i32, i32)>,
     good_reads: usize,
     last_seed_attempt: Option<std::time::Instant>,
     identity_seed_attempt: Option<std::time::Instant>,
@@ -352,6 +358,7 @@ impl EngineState {
             published: None,
             published_profile: None,
             anchored: None,
+            restored_position: settings::load_overlay_position(),
             good_reads: 0,
             last_seed_attempt: None,
             identity_seed_attempt: None,
@@ -396,11 +403,81 @@ fn publish_capture<R: Runtime>(
     let _ = app.emit("capture-status", status);
 }
 
+/// Movement smaller than this is not a drag: the window manager can round a
+/// position by a pixel during a resize or a DPI change.
+const DRAG_TOLERANCE: i32 = 2;
+
+/// Record a position the player dragged to, and stop anchoring from overriding it.
+///
+/// This is the one place a drag is noticed. Comparing the window's real position
+/// with the one this engine last set catches a drag however it happened — a
+/// drag-region drag, a move from the window manager, or a restored session — so
+/// nothing depends on the frontend reporting the gesture.
+fn adopt_dragged_position<R: Runtime>(app: &AppHandle<R>, engine: &mut EngineState) {
+    // A reset makes the panel follow the game window again. Dropping the remembered
+    // anchor too means the next `anchor_overlay` places it afresh instead of
+    // assuming it is already where it should be.
+    if crate::take_position_reset() {
+        engine.restored_position = None;
+        engine.anchored = None;
+        return;
+    }
+
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(actual) = window.outer_position() else {
+        return;
+    };
+
+    // With no baseline yet — nothing anchored, nothing saved — the window is where
+    // Windows put it. Adopt that as the baseline so a later drag is measurable, but
+    // do not save it: the player has not moved anything yet, and saving here would
+    // pin the panel before the anchor ever got a chance to place it.
+    let Some(expected) = engine.anchored else {
+        engine.anchored = Some((actual.x, actual.y));
+        return;
+    };
+
+    if (actual.x - expected.0).abs() <= DRAG_TOLERANCE
+        && (actual.y - expected.1).abs() <= DRAG_TOLERANCE
+    {
+        return;
+    }
+
+    let position = (actual.x, actual.y);
+    engine.restored_position = Some(position);
+    engine.anchored = Some(position);
+    // Losing the saved position on a write failure would be worse than a drag that
+    // does not survive the next restart, so the failure is logged rather than
+    // swallowed.
+    if let Err(error) = settings::save_overlay_position(position.0, position.1) {
+        crate::calibration::log(&format!("could not save the overlay position: {error}"));
+    }
+}
+
 fn anchor_overlay<R: Runtime>(
     app: &AppHandle<R>,
     engine: &mut EngineState,
     screen: window_target::Rect,
 ) {
+    // A dragged position wins. The player moved the panel deliberately, so the
+    // computed anchor must not pull it back on this tick or the next restart —
+    // that was the "position is not remembered" bug.
+    if let Some(position) = engine.restored_position {
+        if engine.anchored != Some(position) {
+            if let Some(window) = app.get_webview_window("main") {
+                if window
+                    .set_position(tauri::PhysicalPosition::new(position.0, position.1))
+                    .is_ok()
+                {
+                    engine.anchored = Some(position);
+                }
+            }
+        }
+        return;
+    }
+
     // Overlay top-left sits at the game client's top-right corner.
     let anchor = (screen.x + screen.w, screen.y);
     if engine.anchored == Some(anchor) {
@@ -460,6 +537,12 @@ fn run<R: Runtime>(app: AppHandle<R>) {
         let target_status = window_target::status_for(&selector);
         window_target::publish_status(&app, &target_state, target_status.clone());
 
+        // Notice a drag before anchoring, so the panel the player just moved is not
+        // snapped back on this tick. This runs whether or not a target is attached:
+        // the player can drag the panel while the game is closed, and that position
+        // should still be remembered.
+        adopt_dragged_position(&app, &mut engine);
+
         if let Some(screen) = target_status.screen {
             anchor_overlay(&app, &mut engine, screen);
         }
@@ -496,6 +579,18 @@ fn run<R: Runtime>(app: AppHandle<R>) {
             }
             Err(TickError::Lost(reason)) => {
                 engine.reset_target();
+                // The player may not be looking at the overlay, so a lost capture
+                // is announced: that is the whole point of having a notification.
+                // Only on the transition, so a sustained outage does not notify
+                // once a second.
+                if engine
+                    .published
+                    .as_ref()
+                    .map(|status| status.state.as_str())
+                    != Some("lost")
+                {
+                    crate::notify::capture_lost(&reason);
+                }
                 publish_capture(&app, &mut engine, CaptureStatus::lost(reason));
             }
             Err(TickError::Uncalibrated(reason)) => {
@@ -1185,27 +1280,27 @@ enum IdentityKind {
     Job,
 }
 
-fn finish_identity(text: &str, kind: IdentityKind) -> String {
+/// Finish a *read* identity line, or return `None` when it cannot be shown.
+///
+/// A name is open-ended, so it is displayed as transcribed. A job is a closed
+/// vocabulary: text that resolves to no known job is not a job, and saying so is
+/// the point of the vocabulary — otherwise a confident-looking misread would be
+/// displayed and never flagged. Only the readers' own text goes through here; a
+/// taught fingerprint is exact and is returned without this gate.
+fn finish_identity(text: &str, kind: IdentityKind) -> Option<String> {
     let text = text.trim();
-    match kind {
-        IdentityKind::Name => crate::font_seed::fix_identity_case(text),
-        IdentityKind::Job => title_case_job(text),
+    if text.is_empty() {
+        return None;
     }
-}
-
-fn title_case_job(text: &str) -> String {
-    text.split_whitespace()
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                Some(first) => {
-                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
-                }
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    match kind {
+        IdentityKind::Name => {
+            let text = crate::font_seed::fix_identity_case(text);
+            (!text.is_empty()).then_some(text)
+        }
+        // Close to a real job snaps to it (repairing the documented `Page` → `age`
+        // drop); anything else is reported as unrecognised rather than displayed.
+        IdentityKind::Job => crate::jobs::resolve(text),
+    }
 }
 
 /// Combine the glyph read with OCR when the glyph atlas is partial. The OCR can
@@ -1330,30 +1425,30 @@ fn read_identity(
     // Ideal and the 1366 renderings reproduce every shape exactly. Keep the
     // exact glyph read and do not pay for OCR.
     if total > 0 && known == total && mean <= 30.0 {
-        let text = finish_identity(&glyph_text, kind);
-        if !text.is_empty() {
+        if let Some(text) = finish_identity(&glyph_text, kind) {
             return read(text, ReadSource::Font);
         }
     }
 
     let ocr = crate::winocr::identity_candidates(frame, region, kind == IdentityKind::Job);
     if let Some(text) = choose_identity_text(&glyph_text, &guesses, known_ratio, confidence, &ocr) {
-        let text = finish_identity(&text, kind);
-        if !text.is_empty() {
+        if let Some(text) = finish_identity(&text, kind) {
             return read(text, ReadSource::Font);
         }
     }
 
     if !glyph_text.is_empty() && confidence >= 0.55 && known_ratio >= 0.5 {
-        let text = finish_identity(&glyph_text, kind);
-        if !text.is_empty() {
+        if let Some(text) = finish_identity(&glyph_text, kind) {
             return read(text, ReadSource::Font);
         }
     }
 
+    // A taught fingerprint is the player's own labelling, so it is returned as
+    // taught: the job vocabulary exists to police the readers' guesses, not to
+    // overrule text the player entered deliberately.
     match template.and_then(|template| match_template(frame, region, template)) {
-        Some(text) => read(text, ReadSource::Fingerprint),
-        None => unread,
+        Some(text) if !text.trim().is_empty() => read(text, ReadSource::Fingerprint),
+        _ => unread,
     }
 }
 
@@ -2480,6 +2575,89 @@ mod tests {
         // Neither box is set at all.
         let no_box = identity_provenance(&unread(), &unread(), &Calibration::default(), true, true);
         assert_eq!(no_box.reason.as_deref(), Some("no name/job box is set"));
+    }
+
+    #[test]
+    fn the_job_gate_accepts_a_real_job_and_a_close_miss() {
+        // A real job passes through, canonicalised.
+        assert_eq!(
+            finish_identity("Page", IdentityKind::Job).as_deref(),
+            Some("Page")
+        );
+        // The documented Default rendering drops the leading `P`.
+        assert_eq!(
+            finish_identity("age", IdentityKind::Job).as_deref(),
+            Some("Page")
+        );
+        // Punctuation and spacing are the renderer's, not the vocabulary's.
+        assert_eq!(
+            finish_identity("Wizard (Ice, Lightning)", IdentityKind::Job).as_deref(),
+            Some("Wizard (Ice,Lightning)")
+        );
+    }
+
+    #[test]
+    fn the_job_gate_rejects_text_that_is_not_a_job() {
+        // This is the whole point of the vocabulary: a confident-looking misread
+        // must be reported as unrecognised, not displayed as a class.
+        assert_eq!(finish_identity("Zqx", IdentityKind::Job), None);
+        assert_eq!(finish_identity("Euroblood", IdentityKind::Job), None);
+        assert_eq!(finish_identity("", IdentityKind::Job), None);
+        assert_eq!(finish_identity("   ", IdentityKind::Job), None);
+        // A game this build does not have must not resolve to one it does.
+        assert_eq!(finish_identity("Pirate", IdentityKind::Job), None);
+        assert_eq!(finish_identity("Corsair", IdentityKind::Job), None);
+    }
+
+    #[test]
+    fn a_two_edit_near_miss_still_snaps_by_design() {
+        // `Pqe` is two edits from `Page`, which is inside the tolerance that exists
+        // to repair exactly this kind of damaged rendering. Snapping it to `Page` is
+        // the correction; the tolerance is deliberately not tightened to zero.
+        assert_eq!(
+            finish_identity("Pqe", IdentityKind::Job).as_deref(),
+            Some("Page")
+        );
+        // Beyond the tolerance it stops being a repair and becomes a guess.
+        assert_eq!(finish_identity("Pqxv", IdentityKind::Job), None);
+    }
+
+    #[test]
+    fn the_name_gate_still_accepts_an_open_ended_name() {
+        // Names are not a closed set, so any non-empty text is a valid name.
+        assert_eq!(
+            finish_identity("Euroblood", IdentityKind::Name).as_deref(),
+            Some("Euroblood")
+        );
+        assert_eq!(
+            finish_identity("xXSlayerXx", IdentityKind::Name).as_deref(),
+            Some("xXSlayerXx")
+        );
+        assert_eq!(finish_identity("", IdentityKind::Name), None);
+    }
+
+    #[test]
+    fn a_rejected_job_is_reported_as_unrecognised_not_displayed() {
+        // End to end through the reader: the gate returns None, so the published
+        // profile carries no job, which is what the overlay flags as unrecognised.
+        let calibration = Calibration {
+            job: Some(Region {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 12,
+            }),
+            ..Calibration::default()
+        };
+        let read = read_identity(
+            &blank_frame(),
+            calibration.job,
+            &empty_atlas(),
+            None,
+            IdentityKind::Job,
+        );
+        assert_eq!(read.text, None, "a blank crop must not become a job");
+        assert_eq!(read.source, ReadSource::None);
     }
 
     #[test]

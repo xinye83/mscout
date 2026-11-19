@@ -45,6 +45,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   2026-11-16 runs with the commands: 18 exact with the app's saved MSCW setting,
   6 exact / 12 wrong (`map "unknown"`) without it, plus the corpus limits and the
   retrospective-holdout caveat.
+- The **job line is read against a closed vocabulary** (`jobs::JOB_NAMES`) instead
+  of being accepted as free text. An exact, punctuation-insensitive hit passes
+  through; a read within two edits of a known job snaps to it, which repairs the
+  `Page` → `age` leading-capital drop that was previously patched case by case;
+  anything else is reported as **unrecognised** rather than displayed as a
+  confident class. The two elemental branches are matched on their element words,
+  so a read naming a different element is a different job and is never rewritten
+  into the other one. Taught name/job fingerprints bypass the gate, since they are
+  the player's own labelling. The list covers Classic World's five trees, ten
+  second jobs and the ten third jobs (reserved; third job is not in the initial
+  launch). See `docs/DECISIONS.md` D33 and the amended `docs/SHIPPING.md`.
+- `npm test` runs the front-end unit tests with Node's built-in runner
+  (`node --test`, native TypeScript). Coverage starts with the History chart's
+  downsampling, which previously kept only each bucket's last point and so dropped
+  break markers on large ranges — a real outage could be drawn as a continuous
+  line. `downsample` now preserves every gap.
+- **Capture-lost notifications.** A lost capture now raises a Windows toast instead
+  of only changing the panel. The toast is posted under the AUMID
+  `MScout.Notifications`, registered under `HKCU` on first use so an unpackaged or
+  portable build can post without a Start Menu shortcut, and it fires on the
+  transition to `lost` rather than once a tick. The outcome is written to
+  `data/debug.log` either way: a notification that never appears is otherwise
+  indistinguishable from one that was never attempted. See `docs/SPEC.md` §3.4.
+- The **overlay position survives a restart.** A drag is detected by comparing the
+  window's real position with the last one the engine set, and saved as
+  `overlayPosition` in `settings.json`; the automatic anchor defers to it instead of
+  snapping the panel back to the game's corner. The tray gained **Snap back to the
+  game corner** to drop the saved position and resume following the game.
 
 ### Changed
 - The EXP and level readers are runner-up aware: a digit whose closest other

@@ -294,3 +294,51 @@ Fixtures: `1920x1080@filtered/exp-21865.png`, `exp-26487.png` and
 `ocr::tests::readout_accepts_a_near_miss_digit` and
 `ocr::tests::level_reads_a_near_miss_digit`; client-tier
 `game_font::tests::reads_filtered_exp_digit_sweep`.
+
+## D33 — Job names ship as a closed vocabulary and are snapped, not transcribed
+
+The job line is the one HUD value with a bounded domain: Classic World prints one
+of a known set of strings. It is now read as recognition over that set
+(`src-tauri/src/jobs.rs`) instead of being accepted as transcribed text.
+
+An exact, punctuation-insensitive hit is taken as-is; a read within two edits of a
+known name snaps to that name; anything further away is returned unchanged and
+reported as unrecognised. Ties between two equally close names are rejected
+rather than resolved by list order. This repairs the documented `Page` → `age`
+leading-capital drop that `winocr.rs` and `choose_identity_text` patched
+case-by-case, and removes the failure mode where an unconstrained read returns a
+plausible wrong string with nothing to distinguish it.
+
+What it cannot do: it does not validate the box or the segmentation. A bad crop is
+still a bad crop, and a wrong job is corrected only when it lands within two edits
+of a real one. The character name is open-ended and stays a transcription.
+
+This is a deliberate, narrow exception to D24's "no map/street name list" rule. The
+vocabulary is **job names only** — a closed, small, non-version-specific set of
+class labels, not client content like map names, NPC text or item names, and not
+rendered glyph templates. It carries no game art and no per-client strings. The
+justification is that the client exposes no job-name table to read:
+`map_names::tests::probe_string_jobs` scans `String_000.wz`
+(StringTable/UI/Etc/NameChange/Consume), `Etc_000.wz`, `UI_000.wz`, `Skill.wz` and
+`Character.wz` and finds none, unlike `Map.img`, which is read at runtime. With no
+client-side source, a shipped list is the only way to get closed-set matching;
+the alternative is an unbounded transcription error class.
+
+Source: <https://meowdb.com/msclassic/classes>. Five trees — Beginner, Warrior,
+Magician, Bowman, Thief — with **no Pirate** in this game; ten second-job branches
+(Fighter, Page, Spearman, F/P Wizard, I/L Wizard, Cleric, Hunter, Crossbowman,
+Assassin, Bandit) and ten third jobs, which are not in the initial launch and are
+listed only so a future level-up reads correctly on first sight. Slash forms are
+compared punctuation-insensitively, so `FP Wizard` and `F P Wizard` match the same
+entry.
+
+Maintenance: the list is client-version-specific in the same way the map table is.
+A new class, a rename, or the third-job launch makes it stale, and a stale entry is
+worse than a missing one because it can attract a near miss from the wrong branch.
+Re-check it against the class list above when a major client update lands.
+
+Tests: `jobs::tests` (10 cases) cover exact hits, the `age` repair, single-glyph
+confusions, slash/space variants, rejection of short fragments, rejection of
+distant words, rejection of classes this game does not have (Pirate, Brawler,
+Buccaneer, Corsair, Noblesse, Legend, Evan, Citizen, Archer), vocabulary
+uniqueness, and self-consistency of every entry.

@@ -15,7 +15,9 @@ mod engine;
 mod exp_table;
 mod font_seed;
 mod game_font;
+mod jobs;
 mod map_names;
+mod notify;
 mod ocr;
 mod preset;
 mod profile;
@@ -28,6 +30,17 @@ mod winocr;
 
 struct OverlayState {
     interactive: AtomicBool,
+}
+
+/// Set when the player asks the overlay to stop using a dragged position.
+///
+/// The engine loop owns the anchoring and cannot be reached from the tray callback,
+/// so the reset is a flag it reads and clears rather than a direct mutation.
+static POSITION_RESET: AtomicBool = AtomicBool::new(false);
+
+/// Read and clear the "forget the dragged position" request.
+pub(crate) fn take_position_reset() -> bool {
+    POSITION_RESET.swap(false, Ordering::Relaxed)
 }
 
 pub(crate) fn data_dir() -> Result<PathBuf, String> {
@@ -438,6 +451,19 @@ fn toggle_visible<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Forget a dragged overlay position, so the panel follows the game window again.
+///
+/// A drag and the automatic anchor are both reasonable places to sit; without a way
+/// back, a single accidental drag would permanently pin the panel away from the
+/// corner it is designed to hug.
+fn reset_overlay_position<R: Runtime>(app: &AppHandle<R>) {
+    if let Err(error) = settings::clear_overlay_position() {
+        crate::calibration::log(&format!("could not clear the overlay position: {error}"));
+    }
+    POSITION_RESET.store(true, Ordering::Relaxed);
+    let _ = app.emit("overlay-position-reset", ());
+}
+
 fn open_history<R: Runtime>(app: &AppHandle<R>) {
     // The window must be built from the event loop, never synchronously inside
     // the IPC message handler: a webview created there comes up blank. The
@@ -493,10 +519,25 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let target = MenuItem::with_id(app, "target", "Choose game window…", true, None::<&str>)?;
     let calibrate = MenuItem::with_id(app, "calibrate", "Calibrate boxes…", true, None::<&str>)?;
     let history = MenuItem::with_id(app, "history", "History", true, None::<&str>)?;
+    let reposition = MenuItem::with_id(
+        app,
+        "reset-position",
+        "Snap back to the game corner",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&toggle, &interactive, &target, &calibrate, &history, &quit],
+        &[
+            &toggle,
+            &interactive,
+            &target,
+            &calibrate,
+            &history,
+            &reposition,
+            &quit,
+        ],
     )?;
 
     let mut builder = TrayIconBuilder::with_id("tray")
@@ -514,6 +555,7 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "target" => window_target::open_target_picker(app),
             "calibrate" => calibration::open_calibration_window(app),
             "history" => open_history(app),
+            "reset-position" => reset_overlay_position(app),
             "quit" => app.exit(0),
             _ => {}
         })
