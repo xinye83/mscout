@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { RepairSummary, Sample } from "./types";
 import { formatRate, total } from "./rates";
 import ExpChart, { type ChartPoint } from "./ExpChart";
+import { downsample } from "./chartData";
 
 const RANGES = [
   { label: "1 day", days: 1 },
@@ -11,16 +12,6 @@ const RANGES = [
 ];
 
 const GAP_SEC = 120;
-
-function downsample(points: ChartPoint[], max: number): ChartPoint[] {
-  if (points.length <= max) return points;
-  const bucket = Math.ceil(points.length / max);
-  const out: ChartPoint[] = [];
-  for (let i = 0; i < points.length; i += bucket) {
-    out.push(points[Math.min(i + bucket - 1, points.length - 1)]);
-  }
-  return out;
-}
 
 export default function History() {
   const [days, setDays] = useState(7);
