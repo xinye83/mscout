@@ -13,6 +13,9 @@ data/
 # Local agent/tooling state
 .commandcode/
 
+# Internal verification checklist — working notes, not shipped documentation
+TEST_PLAN.md
+
 # OS junk
 Thumbs.db
 desktop.ini
