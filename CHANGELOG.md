@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-19
+
 ### Added
 - Every reading and diagnostic now carries per-field **read provenance**:
   `source` (the reader stage that answered — `atlas`, `font`, `fingerprint`,
@@ -393,7 +395,8 @@ First release. Read-only: it observes the screen and never interacts with the ga
 - **Docs.** Setup guide, behavioral spec, roadmap, decision log, data formats, dev notes.
 - **Tests.** Rust unit tests for the EXP table, glyph segmentation and matching, thresholding, settings/profile round-trips and window enumeration, plus `#[ignore]`d diagnostics for live capture.
 
-[Unreleased]: https://github.com/xinye83/mscout/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/xinye83/mscout/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/xinye83/mscout/releases/tag/v0.7.0
 [0.6.0]: https://github.com/xinye83/mscout/releases/tag/v0.6.0
 [0.5.0]: https://github.com/xinye83/mscout/releases/tag/v0.5.0
 [0.4.0]: https://github.com/xinye83/mscout/releases/tag/v0.4.0
