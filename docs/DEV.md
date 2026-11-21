@@ -30,7 +30,7 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 | `npx tauri build --no-bundle` | Release exe at `src-tauri/target/release/mscout.exe` |
 | `npx tauri build` | Full NSIS installer |
 | `cargo check --manifest-path src-tauri/Cargo.toml` | Fast Rust compile check |
-| `npx tsc --noEmit` | Frontend typecheck |
+| `npm run typecheck` | Frontend typecheck, app and tests (`tsconfig.test.json`) |
 | `node scripts/gen-mock.mjs` | Write mock samples into `data-mock/samples/` (or `$MSCOUT_DATA_DIR`); never into `data/` |
 | `npm run version:check` | Check every stored version agrees (non-zero on drift) |
 | `npm run test:version-script` | Test the version bump/check script |

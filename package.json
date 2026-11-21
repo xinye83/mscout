@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "node --test src/*.test.ts",
     "test:version-script": "node --test scripts/bump-version.test.mjs",
     "version:check": "node scripts/bump-version.mjs --check",
