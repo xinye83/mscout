@@ -785,8 +785,13 @@ pub fn split_identity(serial: u64, x: i32, y: i32, w: i32, h: i32) -> Result<Vec
         "split_identity serial={serial} box {x},{y} {w}x{h}"
     ));
     let frame = cached_frame(serial)?;
-    let region = Region { x, y, w, h };
-    let gray = ocr::crop_gray(&frame, region).ok_or("the box is outside the frame")?;
+    split_lines(&frame, Region { x, y, w, h })
+}
+
+/// The two text lines (job over name) inside one drawn box, as frame regions.
+fn split_lines(frame: &Frame, region: Region) -> Result<Vec<Region>, String> {
+    let Region { x, y, .. } = region;
+    let gray = ocr::crop_gray(frame, region).ok_or("the box is outside the frame")?;
 
     let mut lines = ocr::text_lines(&gray);
     log(&format!("split_identity: text_lines found {:?}", lines));
@@ -1344,5 +1349,58 @@ mod tests {
         );
         assert!(serde_json::from_value::<DigitBox>(serde_json::json!("name")).is_err());
         assert!(serde_json::from_value::<IdentityBox>(serde_json::json!("job")).is_ok());
+    }
+
+    /// One box drawn around both identity lines splits into job over name, on
+    /// the real HUD crops (Ideal's 7 px lines sit one blank row apart; Default's
+    /// are larger and anti-aliased).
+    #[test]
+    fn one_box_around_job_and_name_splits_into_two_lines() {
+        // (pair, the box in hud-main.png coordinates, job rows, name rows)
+        let cases = [
+            (
+                "1920x1080@ideal",
+                Region {
+                    x: 85,
+                    y: 12,
+                    w: 118,
+                    h: 27,
+                },
+                13..26,
+                26..38,
+            ),
+            (
+                "1920x1080",
+                Region {
+                    x: 112,
+                    y: 10,
+                    w: 110,
+                    h: 46,
+                },
+                10..33,
+                31..56,
+            ),
+        ];
+        for (pair, drawn, job_rows, name_rows) in cases {
+            let frame = crate::regression::fixture_frame(pair, "hud-main");
+            let lines =
+                split_lines(&frame, drawn).unwrap_or_else(|error| panic!("{pair}: {error}"));
+            assert_eq!(lines.len(), 2, "{pair}: {lines:?}");
+            let (job, name) = (lines[0], lines[1]);
+            assert!(job.y + job.h <= name.y, "{pair}: job above name {lines:?}");
+            assert!(
+                job_rows.contains(&job.y) && job_rows.contains(&(job.y + job.h - 1)),
+                "{pair}: job {job:?}"
+            );
+            assert!(
+                name_rows.contains(&name.y) && name_rows.contains(&(name.y + name.h - 1)),
+                "{pair}: name {name:?}"
+            );
+            assert_eq!(
+                (job.x, name.x),
+                (drawn.x, drawn.x),
+                "{pair}: lines keep the box's x"
+            );
+        }
     }
 }
