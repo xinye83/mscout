@@ -765,6 +765,236 @@ pub(crate) fn expected_state(state: &str) -> Option<MinimapState> {
 }
 
 // ---------------------------------------------------------------------------
+// Import: a saved diagnostic becomes focused crops.
+// ---------------------------------------------------------------------------
+
+/// The pieces of a diagnostic (`data/diagnostics/read-*.json`) the importer uses.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Diagnostic {
+    profile: String,
+    calibration: crate::settings::Calibration,
+    readings: serde_json::Value,
+    hud_strip: Option<HudStrip>,
+}
+
+#[derive(Deserialize)]
+struct HudStrip {
+    region: Region,
+    rgba: String,
+}
+
+/// The crops an import writes: for each box, its kind, the file stem and the
+/// truth MScout read there.
+fn import_plan(diagnostic: &Diagnostic) -> Vec<(&'static str, Region, String, CropTruth)> {
+    let readings = &diagnostic.readings;
+    let text = |field: &str| readings.get(field).and_then(serde_json::Value::as_str);
+    let slug = |value: &str| {
+        value
+            .to_lowercase()
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .collect::<String>()
+    };
+    let calibration = &diagnostic.calibration;
+    let mut plan = Vec::new();
+    if let (Some(region), Some(name)) = (calibration.name, text("name")) {
+        let truth = CropTruth {
+            name: Some(name.to_string()),
+            ..CropTruth::default()
+        };
+        plan.push(("name", region, format!("name-{}", slug(name)), truth));
+    }
+    if let (Some(region), Some(job)) = (calibration.job, text("job")) {
+        let truth = CropTruth {
+            job: Some(job.to_string()),
+            ..CropTruth::default()
+        };
+        plan.push(("job", region, format!("job-{}", slug(job)), truth));
+    }
+    let exp = readings.get("exp").and_then(serde_json::Value::as_i64);
+    let pct = readings.get("pct").and_then(serde_json::Value::as_f64);
+    if let (Some(region), Some(exp_text), Some(exp), Some(pct)) =
+        (calibration.exp, text("expText"), exp, pct)
+    {
+        let truth = CropTruth {
+            exp_text: Some(exp_text.to_string()),
+            exp: Some(exp),
+            pct: Some(pct),
+            ..CropTruth::default()
+        };
+        plan.push(("exp", region, format!("exp-{exp}"), truth));
+    }
+    let level = readings
+        .get("lv")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|lv| *lv > 0);
+    if let (Some(region), Some(level)) = (calibration.level, level) {
+        let truth = CropTruth {
+            level: Some(level as u32),
+            ..CropTruth::default()
+        };
+        plan.push(("level", region, format!("level-{level}"), truth));
+    }
+    plan
+}
+
+/// Cut `region` (frame coordinates) out of the HUD strip, losslessly.
+fn cut_from_strip(strip: &HudStrip, region: Region) -> Option<image::RgbaImage> {
+    let rgba = crate::settings::from_hex(&strip.rgba)?;
+    let origin = strip.region;
+    let (x0, y0) = (region.x - origin.x, region.y - origin.y);
+    if x0 < 0 || y0 < 0 || x0 + region.w > origin.w || y0 + region.h > origin.h {
+        return None;
+    }
+    let mut out = image::RgbaImage::new(region.w as u32, region.h as u32);
+    for y in 0..region.h {
+        for x in 0..region.w {
+            let index = (((y0 + y) * origin.w + x0 + x) * 4) as usize;
+            out.put_pixel(
+                x as u32,
+                y as u32,
+                image::Rgba([
+                    rgba[index],
+                    rgba[index + 1],
+                    rgba[index + 2],
+                    rgba[index + 3],
+                ]),
+            );
+        }
+    }
+    Some(out)
+}
+
+/// Turn a saved diagnostic into focused crops under `crops/<pair>/`.
+///
+/// `MSCOUT_DIAGNOSTIC=<path to read-*.json>`. Each box with a reading becomes
+/// `<kind>-<value>.png` plus a sidecar holding what MScout **read**, marked
+/// `"verified": false`. The gate refuses unverified truth, so the import is not
+/// done until a person has checked every value against the pixels, corrected
+/// the misread one (that is usually why the diagnostic was saved), renamed the
+/// file if the value in its name was wrong, and set `"verified": true`. An
+/// existing file is never overwritten.
+#[test]
+#[ignore = "tool: set MSCOUT_DIAGNOSTIC to a diagnostic to import its crops"]
+fn import_diagnostic() {
+    let path = std::env::var("MSCOUT_DIAGNOSTIC").expect("set MSCOUT_DIAGNOSTIC");
+    let diagnostic: Diagnostic = read_json(Path::new(&path), "diagnostic");
+    let strip = diagnostic
+        .hud_strip
+        .as_ref()
+        .expect("the diagnostic has no hudStrip — save it again with a current build");
+    let dir = crops_dir().join(&diagnostic.profile);
+    assert!(
+        frames_dir().join(&diagnostic.profile).is_dir(),
+        "no frames/{} pair: add the pair before its crops",
+        diagnostic.profile
+    );
+    std::fs::create_dir_all(&dir).expect("create the crops directory");
+    let added = chrono::Local::now().format("%Y-%m-%d").to_string();
+    for (kind, region, stem, truth) in import_plan(&diagnostic) {
+        let png = dir.join(format!("{stem}.png"));
+        if png.exists() {
+            println!("skipped {}: already exists", png.display());
+            continue;
+        }
+        let Some(image) = cut_from_strip(strip, region) else {
+            println!("skipped {stem}: {region:?} is outside the HUD strip");
+            continue;
+        };
+        image.save(&png).expect("write the crop");
+        let sidecar = serde_json::json!({
+            "version": VERSION,
+            "kind": kind,
+            "added": added,
+            "verified": false,
+            "truth": serde_json::to_value(TruthOut::from(&truth)).expect("truth"),
+        });
+        std::fs::write(
+            png.with_extension("json"),
+            serde_json::to_string_pretty(&sidecar).expect("sidecar") + "\n",
+        )
+        .expect("write the sidecar");
+        println!(
+            "wrote {} (verify it, then set \"verified\": true)",
+            png.display()
+        );
+    }
+}
+
+/// [`CropTruth`] as written to a sidecar: only the fields that are set.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TruthOut {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exp_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exp: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    job: Option<String>,
+}
+
+impl From<&CropTruth> for TruthOut {
+    fn from(truth: &CropTruth) -> Self {
+        Self {
+            exp_text: truth.exp_text.clone(),
+            exp: truth.exp,
+            pct: truth.pct,
+            level: truth.level,
+            name: truth.name.clone(),
+            job: truth.job.clone(),
+        }
+    }
+}
+
+/// The import plan and the lossless cut, on a synthetic diagnostic.
+#[test]
+fn an_import_cuts_each_read_box_from_the_hud_strip() {
+    let strip_region = Region {
+        x: 100,
+        y: 50,
+        w: 4,
+        h: 3,
+    };
+    let rgba: Vec<u8> = (0..4 * 3 * 4).map(|i| i as u8).collect();
+    let diagnostic: Diagnostic = serde_json::from_value(serde_json::json!({
+        "profile": "1920x1080@ideal",
+        "calibration": {
+            "name": { "x": 101, "y": 51, "w": 2, "h": 1 },
+            "level": { "x": 100, "y": 50, "w": 1, "h": 1 }
+        },
+        "readings": { "name": "Euroveln", "lv": 2, "job": null },
+        "hudStrip": { "region": strip_region, "rgba": crate::settings::to_hex(&rgba) }
+    }))
+    .expect("diagnostic");
+    let plan = import_plan(&diagnostic);
+    let stems: Vec<&str> = plan.iter().map(|(_, _, stem, _)| stem.as_str()).collect();
+    assert_eq!(stems, ["name-euroveln", "level-2"]);
+
+    let strip = diagnostic.hud_strip.as_ref().expect("strip");
+    let name = cut_from_strip(strip, plan[0].1).expect("inside the strip");
+    // Row 1, columns 1-2 of a 4-wide strip: pixels 5 and 6.
+    assert_eq!(name.get_pixel(0, 0).0, [20, 21, 22, 23]);
+    assert_eq!(name.get_pixel(1, 0).0, [24, 25, 26, 27]);
+    assert!(cut_from_strip(
+        strip,
+        Region {
+            x: 99,
+            y: 50,
+            w: 2,
+            h: 1
+        }
+    )
+    .is_none());
+}
+
+// ---------------------------------------------------------------------------
 // Hermetic tier: needs the repository, nothing else.
 // ---------------------------------------------------------------------------
 
