@@ -17,6 +17,7 @@ mod fsutil;
 mod game_font;
 mod guard;
 mod jobs;
+mod map_match;
 mod map_names;
 mod model;
 mod notify;
