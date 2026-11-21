@@ -557,13 +557,22 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                     let _ = app.emit("profile", &outcome.profile);
                 }
 
+                // A history row that cannot be written is reported at once: the
+                // overlay must not say "reading" while nothing is being recorded.
+                let mut history_error = None;
                 if outcome.verified {
                     // An unrecognised level still updates the overlay, but it is kept
                     // out of the history: a row with level 0 has no place on the EXP
                     // curve and would bend it towards the origin.
                     if outcome.sample.lv > 0 {
-                        let record = serde_json::to_value(&outcome.sample).unwrap_or_default();
-                        let _ = crate::append_sample_record(&record);
+                        let written = serde_json::to_value(&outcome.sample)
+                            .map_err(|error| error.to_string())
+                            .and_then(|record| crate::append_sample_record(&record));
+                        if let Err(error) = written {
+                            let reason = format!("history not saved: {error}");
+                            log_once(&reason);
+                            history_error = Some(reason);
+                        }
                     }
                 }
                 // Display each successful read immediately; only the history write
@@ -574,7 +583,10 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                     engine.last_sample = Some(outcome.sample);
                 }
                 engine.keep_outcome(true);
-                let status = engine.status(None);
+                let status = match history_error {
+                    Some(reason) => CaptureStatus::degraded(Some(reason)),
+                    None => engine.status(None),
+                };
                 publish_capture(&app, &mut engine, status);
             }
             Err(TickError::Lost(reason)) => {

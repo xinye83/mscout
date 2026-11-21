@@ -81,14 +81,38 @@ pub(crate) fn append_sample_record(record: &Value) -> Result<(), String> {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     let path = dir.join(format!("{day}.jsonl"));
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|e| e.to_string())?;
+    let mut line = serde_json::to_string(record).map_err(|e| e.to_string())?;
+    line.push('\n');
+    append_line(&path, &line).map_err(|e| e.to_string())
+}
 
-    let line = serde_json::to_string(record).map_err(|e| e.to_string())?;
-    writeln!(file, "{line}").map_err(|e| e.to_string())
+/// Append one complete line. The line goes out in a single `write_all`, so a
+/// crash leaves at most a missing row rather than half of one. If the file does
+/// not end in a newline - the tail of an earlier interrupted write - a newline is
+/// written first, so the new row is not glued onto the broken one and both lost.
+fn append_line(path: &std::path::Path, line: &str) -> std::io::Result<()> {
+    let needs_break = ends_without_newline(path)?;
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    if needs_break {
+        file.write_all(b"\n")?;
+    }
+    file.write_all(line.as_bytes())
+}
+
+fn ends_without_newline(path: &std::path::Path) -> std::io::Result<bool> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if file.metadata()?.len() == 0 {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::End(-1))?;
+    let mut last = [0u8; 1];
+    file.read_exact(&mut last)?;
+    Ok(last[0] != b'\n')
 }
 
 #[tauri::command]
@@ -677,6 +701,31 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appends_whole_lines_and_repairs_a_torn_tail() {
+        let dir = std::env::temp_dir().join(format!("mscout-append-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch dir");
+        let path = dir.join("2026-11-19.jsonl");
+
+        append_line(&path, "{\"t\":1}\n").expect("first row");
+        // A crash mid-write leaves a partial row (or NUL padding) with no newline.
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .and_then(|mut file| file.write_all(b"{\"t\":2,\"ex\0\0"))
+            .expect("simulate a torn tail");
+        append_line(&path, "{\"t\":3}\n").expect("row after the tear");
+
+        let text = fs::read_to_string(&path).expect("read back");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "{text:?}");
+        assert_eq!(lines[0], "{\"t\":1}");
+        assert_eq!(lines[2], "{\"t\":3}", "the new row stands on its own line");
+        assert!(serde_json::from_str::<Value>(lines[2]).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn flags_the_dips_the_reader_used_to_record() {
