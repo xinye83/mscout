@@ -344,10 +344,10 @@ fn get_settings() -> Result<Value, String> {
 
 #[tauri::command]
 fn set_settings(value: Value) -> Result<(), String> {
-    let dir = data_dir()?;
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let raw = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
-    fs::write(dir.join("settings.json"), raw).map_err(|e| e.to_string())
+    let Value::Object(replacement) = value else {
+        return Err("settings must be a JSON object".into());
+    };
+    settings::update_settings(move |object| *object = replacement)
 }
 
 #[tauri::command]

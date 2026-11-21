@@ -3,10 +3,18 @@ use std::sync::{Mutex, PoisonError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
+/// `settings.json` as last read or written, keyed by its path, behind the one
+/// lock every read and write takes. The engine asks for the UI Size every tick;
+/// reading it from disk each time raced the in-place rewrite done by overlay
+/// drags, and a torn read fell back to the Default UI Size and activated the
+/// wrong profile. The file is read once and then only ever replaced by
+/// [`update`], so edits made to it by hand while the app runs are not picked up.
+static SETTINGS: Mutex<Option<(std::path::PathBuf, Value)>> = Mutex::new(None);
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    SETTINGS_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+type Cache = std::sync::MutexGuard<'static, Option<(std::path::PathBuf, Value)>>;
+
+fn lock() -> Cache {
+    SETTINGS.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn path() -> Result<std::path::PathBuf, String> {
@@ -17,10 +25,18 @@ pub fn read_raw() -> Value {
     let Ok(path) = path() else {
         return Value::Object(Map::new());
     };
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return Value::Object(Map::new());
-    };
-    parse_object(&raw).unwrap_or_else(|| Value::Object(Map::new()))
+    let mut cache = lock();
+    if let Some((cached_path, value)) = cache.as_ref() {
+        if *cached_path == path {
+            return value.clone();
+        }
+    }
+    let value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| parse_object(&raw))
+        .unwrap_or_else(|| Value::Object(Map::new()));
+    *cache = Some((path, value.clone()));
+    value
 }
 
 /// Parse settings text as a JSON object. A UTF-8 BOM (e.g. from an editor or
@@ -36,7 +52,7 @@ fn update<F>(apply: F) -> Result<(), String>
 where
     F: FnOnce(&mut Map<String, Value>),
 {
-    let _guard = lock();
+    let mut cache = lock();
     let dir = crate::data_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let file = dir.join("settings.json");
@@ -70,7 +86,9 @@ where
     }
 
     let text = serde_json::to_string_pretty(&raw).map_err(|e| e.to_string())?;
-    crate::fsutil::write_atomic(&file, text.as_bytes()).map_err(|e| e.to_string())
+    crate::fsutil::write_atomic(&file, text.as_bytes()).map_err(|e| e.to_string())?;
+    *cache = Some((file, raw));
+    Ok(())
 }
 
 pub fn update_settings<F>(apply: F) -> Result<(), String>
