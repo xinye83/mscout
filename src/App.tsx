@@ -2,7 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { CaptureStatus, Profile, Sample, TargetStatus } from "./types";
-import { etaSeconds, formatDuration, formatRate, rateOver, total } from "./rates";
+import {
+  currentCharacterRun,
+  etaSeconds,
+  formatDuration,
+  formatRate,
+  rateOver,
+  total,
+} from "./rates";
 import { expRequired } from "./expTable";
 import ExpChart from "./ExpChart";
 import { dotState } from "./overlayState";
@@ -120,8 +127,12 @@ export default function App() {
 
   // Rows whose level was never recognised are shown live but kept out of the
   // chart and the rates: with level 0 the cumulative total has no meaning, and the
-  // curve would bend towards the origin.
-  const charted = useMemo(() => samples.filter((sample) => sample.lv > 0), [samples]);
+  // curve would bend towards the origin. Only the character now on screen is
+  // charted: a rate across a character switch compares two unrelated totals.
+  const charted = useMemo(
+    () => currentCharacterRun(samples.filter((sample) => sample.lv > 0)),
+    [samples],
+  );
 
   const derived = useMemo(() => {
     if (!current) return null;

@@ -1,8 +1,28 @@
 import type { Sample } from "./types";
-import { expRequired, totalExp } from "./expTable";
+import { expRequired, totalExp } from "./expTable.ts";
 
 export function total(sample: Sample): number {
   return totalExp(sample.lv, sample.exp);
+}
+
+/**
+ * The trailing run of samples that belong to the character now on screen.
+ *
+ * Cumulative EXP is per character, so a rate or chart that spans a switch
+ * subtracts one character's total from another's (a level-1 alt after a level-37
+ * main read as about -20M/h). A switch is a different character name, or a
+ * level lower than the sample before it - levels never go down for one
+ * character, and older rows carry no name.
+ */
+export function currentCharacterRun(samples: Sample[]): Sample[] {
+  let name = samples.at(-1)?.name;
+  for (let i = samples.length - 1; i > 0; i -= 1) {
+    const previous = samples[i - 1];
+    if (previous.lv > samples[i].lv) return samples.slice(i);
+    if (name && previous.name && previous.name !== name) return samples.slice(i);
+    name ??= previous.name;
+  }
+  return samples;
 }
 
 export function rateOver(samples: Sample[], windowSec: number): number | null {
