@@ -105,6 +105,11 @@ docs/                setup, presets, spec, roadmap, decisions, data format, dev 
 
 `cargo test --manifest-path src-tauri/Cargo.toml --lib` runs the Rust suite: EXP-table anchors, glyph segmentation/matching, thresholding, settings/profile round-trips, and window enumeration.
 
+Tests never touch the real `data/` folder. Without `MSCOUT_DATA_DIR` each run
+uses a temp folder and copies only the MSCW install path from `data/settings.json`.
+The tool tests that are meant to write real data (`repair_history_now`,
+`seed_live_profile`, `dumps_exp_crop`) need `MSCOUT_DATA_DIR=data` to do so.
+
 Some tests are `#[ignore]`d diagnostics that need the game window, the MSCW
 install, or a captured frame. They are listed by `cargo test -- --list`. The
 MSCW folder defaults to the Steam example path; override it with
@@ -123,4 +128,4 @@ MSCW folder defaults to the Steam example path; override it with
 | `regression::probe_live_minimap` | live game | — (live minimap state/labels) |
 | `capture::dumps_exp_crop` | live game, `MSCOUT_CROP`, `MSCOUT_FRAME` | `data/<MSCOUT_FRAME>` |
 
-Run one with `cargo test --manifest-path src-tauri/Cargo.toml --lib <name> -- --ignored --nocapture`. Set `MSCOUT_SHOW_CROP=1` to print the thresholded crop. The front end has no test runner yet; `npx tsc --noEmit` is the gate there.
+Run one with `cargo test --manifest-path src-tauri/Cargo.toml --lib <name> -- --ignored --nocapture`. Set `MSCOUT_SHOW_CROP=1` to print the thresholded crop. The front end is checked with `npm run typecheck` and `npm test`.

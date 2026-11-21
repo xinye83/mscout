@@ -50,6 +50,12 @@ pub(crate) fn data_dir() -> Result<PathBuf, String> {
         return Ok(PathBuf::from(dir));
     }
 
+    // A test never writes into the developer's real `data/` (debug.log, history,
+    // profiles). Without MSCOUT_DATA_DIR it gets a per-process temp folder.
+    #[cfg(test)]
+    return Ok(test_data_dir());
+
+    #[allow(unreachable_code)]
     let base = if cfg!(debug_assertions) {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -64,6 +70,34 @@ pub(crate) fn data_dir() -> Result<PathBuf, String> {
     };
 
     Ok(base.join("data"))
+}
+
+/// The data folder for a test run without MSCOUT_DATA_DIR: a temp folder per
+/// process. The real folder's MSCW install path is copied in (read only), so the
+/// tests that need the client's WZ files still find them.
+#[cfg(test)]
+fn test_data_dir() -> PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("mscout-test-data-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let real = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(|root| root.join("data").join("settings.json"));
+        let mscw = real
+            .and_then(|path| fs::read_to_string(path).ok())
+            .and_then(|text| {
+                serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok()
+            })
+            .and_then(|value| value.get("mscwDir").cloned());
+        let settings = match mscw {
+            Some(dir) => serde_json::json!({ "mscwDir": dir }),
+            None => serde_json::json!({}),
+        };
+        let _ = fs::write(dir.join("settings.json"), settings.to_string());
+        dir
+    })
+    .clone()
 }
 
 pub(crate) fn append_sample_record(record: &Value) -> Result<(), String> {
@@ -786,7 +820,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "tool: flags the misread rows in the recorded history"]
+    #[ignore = "tool: flags misread rows; set MSCOUT_DATA_DIR to the data folder to repair"]
     fn repair_history_now() {
         match repair_history() {
             Ok(summary) => println!(
@@ -795,5 +829,14 @@ mod tests {
             ),
             Err(error) => println!("repair failed: {error}"),
         }
+    }
+
+    #[test]
+    fn tests_never_use_the_real_data_folder() {
+        if std::env::var("MSCOUT_DATA_DIR").is_ok() {
+            return;
+        }
+        let dir = data_dir().expect("data dir");
+        assert!(dir.starts_with(std::env::temp_dir()), "{}", dir.display());
     }
 }
