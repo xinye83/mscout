@@ -6,6 +6,70 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-21
+
+### Added
+- **Deaths are recorded** as `"event":"death"` on the first row after a
+  confirmed death (EXP fell by at least 1% of the level and stayed down for
+  five reads) instead of stalling recording until the EXP was re-earned. Rates
+  add back EXP lost at a death, and the history repair starts a new high-water
+  mark there.
+- Sample rows carry the character **name**, and a different name or a lower
+  level starts a new run: the overlay's rates and chart cover only the
+  character now on screen, and switching characters no longer stalls the guard.
+- **Save diagnostic** also stores the name/job crops and the HUD strip around
+  every read box as lossless RGBA, so a misread can become a test fixture
+  without a second capture.
+- `src-tauri/exp-table.json` is the one EXP table, read by the engine, the UI
+  and the mock generator.
+
+### Changed
+- Lv 50–89 use NiaMeowDB's per-level rows instead of an interpolation (up to
+  2.6% low), still labelled estimated. A frame whose level and percentage
+  disagree now counts as a failed read with its reason, instead of a silent
+  blank while the overlay said "reading".
+- The name/job boxes in the 1366×768 presets and the 1920×1080 Ideal preset are
+  wider, so longer jobs (`Beginner`) and names fit; saved profiles with the old
+  shipped widths are widened on load unless a fingerprint was taught.
+- The History page loads 7- and 30-day ranges at one row a minute (deaths and
+  character switches kept); day files still hold every row.
+- `debug.log` lines carry the date, and the file rotates to `debug.log.1` at 2 MB.
+- The webviews run under a content security policy.
+
+### Fixed
+- Settings and profiles are written atomically, and a file that does not parse
+  is renamed aside (`*.bad-<time>`) instead of being overwritten with defaults.
+- Settings are kept in memory, so a torn read can no longer switch to the wrong
+  UI Size profile for a tick.
+- Sample rows are appended in one write and a torn tail is repaired, so a crash
+  cannot glue two rows together; a failed history write shows as degraded.
+- The history repair holds the same lock as the appender and replaces each day
+  atomically; reads open only the days around the range and skip unreadable
+  lines instead of failing.
+- A thin dotted `i` in a name was read as `l` (`Euroveln` for `Eurovein`).
+- A Ctrl+Alt hotkey already taken by another app no longer stops MScout from
+  starting; the reader restarts after a crash instead of stopping silently; a
+  seeded atlas can no longer land in the other UI Size's profile.
+- The overlay computes rates only from rows the history recorded.
+- Capture follows an in-game resolution change and reads the newest frame; a
+  frame older than 30 s is no longer reused.
+- Heavy calibration commands (preview, atlas seeding, probe, diagnostic, teach)
+  and the history read/repair no longer freeze every window.
+- `gen-mock.mjs` writes to `data-mock/` (or `MSCOUT_DATA_DIR`) and refuses to
+  overwrite a day file; tests no longer write into the real `data/` folder.
+
+### Removed
+- IPC commands nothing called: `append_sample`, `calibration_for`, `clear_maps`,
+  `exp_glyphs`, `get_settings`, `set_settings`, `set_interactive`.
+
+### Internal
+- The read guard is its own state machine (`guard.rs`) with table tests; sample
+  storage moved to `samples.rs`, the minimap label reader to `map_match.rs`, and
+  the profile data types to `model.rs` (`settings::Atlas` is now `StoredAtlas`).
+- Every Rust command is called through typed functions in `src/api.ts`; IPC box
+  kinds and the UI Size are enums on the Rust side; the front-end tests are
+  type-checked.
+
 ## [0.7.0] - 2026-11-19
 
 ### Added
@@ -395,7 +459,8 @@ First release. Read-only: it observes the screen and never interacts with the ga
 - **Docs.** Setup guide, behavioral spec, roadmap, decision log, data formats, dev notes.
 - **Tests.** Rust unit tests for the EXP table, glyph segmentation and matching, thresholding, settings/profile round-trips and window enumeration, plus `#[ignore]`d diagnostics for live capture.
 
-[Unreleased]: https://github.com/xinye83/mscout/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/xinye83/mscout/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/xinye83/mscout/releases/tag/v0.8.0
 [0.7.0]: https://github.com/xinye83/mscout/releases/tag/v0.7.0
 [0.6.0]: https://github.com/xinye83/mscout/releases/tag/v0.6.0
 [0.5.0]: https://github.com/xinye83/mscout/releases/tag/v0.5.0
