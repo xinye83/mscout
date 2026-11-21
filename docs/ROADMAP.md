@@ -94,6 +94,9 @@ product features.
 - [ ] History window brush/zoom panning (preset ranges only today).
 - [ ] Per-map comparison once enough real data exists.
 - [ ] Portable build (`tauri build`, folder copy next to the exe).
+- [ ] **Drop the "not reading" Windows notification.** Stop posting the desktop
+  toast when the capture is lost (`notify::capture_lost`, SPEC §5 Lost state);
+  the overlay's red banner remains the signal. Update SPEC §5 and §8 with it.
 
 ## Later (unscheduled or deferred)
 
