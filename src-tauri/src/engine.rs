@@ -784,7 +784,7 @@ fn seed_from_game(frame: &Frame, profile: &profile::Profile) -> bool {
 fn seed_identity_from_frame(
     frame: &Frame,
     calibration: &Calibration,
-) -> Option<(settings::Atlas, u32)> {
+) -> Option<(settings::StoredAtlas, u32)> {
     let mut merged: Option<crate::ocr::Atlas> = None;
     let mut px = 0;
     for region in [calibration.job, calibration.name] {

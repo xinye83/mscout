@@ -377,7 +377,7 @@ fn period(height: u32) -> AtlasGlyph {
 pub fn seed_exp_atlas(
     gray: &crate::ocr::Gray,
     mscw_dir: &Path,
-) -> Result<(crate::settings::Atlas, u32), String> {
+) -> Result<(crate::settings::StoredAtlas, u32), String> {
     let height =
         crate::ocr::dominant_glyph_height(gray).ok_or("could not segment the EXP readout")?;
     let glyphs = exp_glyphs(mscw_dir, height)?;
@@ -471,7 +471,7 @@ fn dominant_size(segments: &[crate::ocr::Segment]) -> Option<(u32, u32)> {
 pub fn seed_level_atlas(
     gray: &crate::ocr::Gray,
     mscw_dir: &Path,
-) -> Result<(crate::settings::Atlas, (u32, u32)), String> {
+) -> Result<(crate::settings::StoredAtlas, (u32, u32)), String> {
     seed_level_atlas_with_floor(gray, mscw_dir, crate::ocr::TEXT_FLOOR_PUB)
 }
 
@@ -482,7 +482,7 @@ pub fn seed_level_atlas_with_floor(
     gray: &crate::ocr::Gray,
     mscw_dir: &Path,
     floor: u8,
-) -> Result<(crate::settings::Atlas, (u32, u32)), String> {
+) -> Result<(crate::settings::StoredAtlas, (u32, u32)), String> {
     // Otsu sees the pale tile frame, so segment on bright ink: the digits are
     // near-white, the tile is not.
     let mut segments = crate::ocr::bright_segments(gray, floor);
@@ -544,14 +544,14 @@ pub fn seed_level_best(
     frame: &crate::capture::Frame,
     region: crate::settings::Region,
     mscw_dir: &Path,
-) -> Option<(crate::settings::Atlas, (u32, u32), String)> {
+) -> Option<(crate::settings::StoredAtlas, (u32, u32), String)> {
     let normal = crate::ocr::crop_gray(frame, region)?;
     let keyed = crate::ocr::crop_white_key(frame, region);
 
     let evaluate = |crop: &crate::ocr::Gray,
                     floor: u8,
                     white_key: bool|
-     -> Option<(crate::settings::Atlas, (u32, u32), String, f64)> {
+     -> Option<(crate::settings::StoredAtlas, (u32, u32), String, f64)> {
         let (stored, size) = seed_level_atlas_with_floor(crop, mscw_dir, floor).ok()?;
         let atlas = crate::ocr::Atlas::from_settings(&stored);
         let read = if white_key {

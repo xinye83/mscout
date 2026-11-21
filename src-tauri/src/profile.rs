@@ -3,7 +3,7 @@ use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
-use crate::settings::{self, Atlas, Calibration, Identities, Template, UiMode};
+use crate::settings::{self, Calibration, Identities, StoredAtlas, Template, UiMode};
 
 /// One calibration set, scoped to a client size *and* a UI Size option.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -16,21 +16,21 @@ pub struct Profile {
     #[serde(default)]
     pub calibration: Calibration,
     #[serde(default)]
-    pub atlas: Atlas,
+    pub atlas: StoredAtlas,
     /// Glyphs of the minimap label font. Separate from `atlas` because the label
     /// is a different size and rendering from the EXP readout.
     #[serde(default)]
-    pub map_atlas: Atlas,
+    pub map_atlas: StoredAtlas,
     /// Glyphs of the level readout. Separate from `atlas` for the same reason as
     /// `map_atlas`: the level is drawn at its own size, and sharing one atlas made
     /// the two readers compete for the same characters, so learning a level glyph
     /// could change how the EXP was read and vice versa.
     #[serde(default)]
-    pub level_atlas: Atlas,
+    pub level_atlas: StoredAtlas,
     /// Name/job text atlas, seeded from the Windows Arial face. The taught
     /// `identities` fingerprints remain the exact fallback.
     #[serde(default)]
-    pub identity_atlas: Atlas,
+    pub identity_atlas: StoredAtlas,
     #[serde(default)]
     pub maps: Vec<Template>,
     /// Taught street lines (the top line of the minimap label). Separate from `maps`
@@ -363,7 +363,7 @@ pub fn migrate_legacy() -> Option<String> {
         return None;
     };
 
-    let atlas: Atlas = raw
+    let atlas: StoredAtlas = raw
         .get("atlas")
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
@@ -610,7 +610,7 @@ mod tests {
         .unwrap_or_else(|| panic!("upgrade fixture {fixture} does not load"))
     }
 
-    fn glyphs(atlas: &Atlas) -> Vec<(String, u32, u32, String)> {
+    fn glyphs(atlas: &StoredAtlas) -> Vec<(String, u32, u32, String)> {
         atlas
             .glyphs
             .iter()
@@ -620,7 +620,7 @@ mod tests {
 
     /// The atlas fields a load-then-save cycle must not rewrite, besides the
     /// glyphs themselves.
-    fn atlas_meta(atlas: &Atlas) -> (u32, String, u32, u32) {
+    fn atlas_meta(atlas: &StoredAtlas) -> (u32, String, u32, u32) {
         (
             atlas.format,
             atlas.source.clone(),
@@ -630,7 +630,7 @@ mod tests {
     }
 
     /// Every atlas of a profile, in a stable order, with a label for messages.
-    fn atlases(profile: &Profile) -> [(&'static str, &Atlas); 4] {
+    fn atlases(profile: &Profile) -> [(&'static str, &StoredAtlas); 4] {
         [
             ("atlas", &profile.atlas),
             ("mapAtlas", &profile.map_atlas),

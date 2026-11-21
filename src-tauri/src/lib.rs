@@ -18,6 +18,7 @@ mod game_font;
 mod guard;
 mod jobs;
 mod map_names;
+mod model;
 mod notify;
 mod ocr;
 mod preset;

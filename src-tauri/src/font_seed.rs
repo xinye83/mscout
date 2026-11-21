@@ -38,7 +38,7 @@ const IDENTITY_MAX_SCORE: f64 = 50.0;
 const UNKNOWN_SHAPE_PENALTY: f64 = 50.0;
 
 /// Seed a 1-bit identity atlas (name/job) from the live crop.
-pub fn seed_identity(gray: &Gray) -> Option<(settings::Atlas, u32)> {
+pub fn seed_identity(gray: &Gray) -> Option<(settings::StoredAtlas, u32)> {
     // Ideal's name/job are 1-bit Arial; Default Ratio at 1920 is anti-aliased.
     // Try both renders and a few ink thresholds, and keep whichever explains the
     // crop best.
@@ -79,7 +79,7 @@ fn seed(
     max_score: f64,
     charset: &str,
     modes: &[(bool, u8)],
-) -> Option<(settings::Atlas, u32)> {
+) -> Option<(settings::StoredAtlas, u32)> {
     let hint = ocr::dominant_glyph_height(gray).unwrap_or(9).max(4) as i32;
     // The ink height is smaller than the font's em size (Arial at 11 px gives a
     // ~8 px cap). Search from the ink height up, which covers both Ideal's 7 px

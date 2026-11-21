@@ -776,7 +776,7 @@ enum SplitPolicy {
 }
 
 impl Atlas {
-    pub fn from_settings(atlas: &crate::settings::Atlas) -> Self {
+    pub fn from_settings(atlas: &crate::settings::StoredAtlas) -> Self {
         let mut glyphs = Vec::new();
         for stored in &atlas.glyphs {
             let Some(ch) = stored.ch.chars().next() else {
@@ -808,7 +808,7 @@ impl Atlas {
         Self { glyphs }
     }
 
-    pub fn to_settings(&self) -> crate::settings::Atlas {
+    pub fn to_settings(&self) -> crate::settings::StoredAtlas {
         let glyphs = self
             .glyphs
             .iter()
@@ -820,7 +820,7 @@ impl Atlas {
                 cell: String::new(),
             })
             .collect();
-        crate::settings::Atlas {
+        crate::settings::StoredAtlas {
             format: 2,
             source: "taught".into(),
             cell_w: CELL_W as u32,
@@ -3383,7 +3383,7 @@ mod tests {
     fn legacy_cells_migrate_to_native_bitmaps() {
         // A 2x2 glyph stored in the old 12x16 format. Loading it must recover a
         // native 2x2 bitmap rather than dropping the profile's learned digits.
-        let stored = crate::settings::Atlas {
+        let stored = crate::settings::StoredAtlas {
             format: 0,
             source: String::new(),
             cell_w: CELL_W as u32,

@@ -75,7 +75,7 @@ fn digit_coverage(atlas: &Atlas) -> String {
 
 /// The learning view for a stored atlas. Everything shown comes from what is on
 /// disk, so the window cannot report a different source than the reader uses.
-fn learning_info(stored: &settings::Atlas) -> LearningInfo {
+fn learning_info(stored: &settings::StoredAtlas) -> LearningInfo {
     let atlas = Atlas::from_settings(stored);
     let level_stored = settings::load_level_atlas();
     let level_atlas = Atlas::from_settings(&level_stored);
