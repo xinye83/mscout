@@ -6,6 +6,7 @@ use windows::Graphics::Capture::{
 };
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
+use windows::Graphics::SizeInt32;
 use windows::Win32::Foundation::{HMODULE, HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0};
 use windows::Win32::Graphics::Direct3D11::{
@@ -47,7 +48,14 @@ pub struct Capturer {
     pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
     _item: GraphicsCaptureItem,
+    /// The WinRT device the pool was created with, kept to recreate the pool.
+    direct_device: IDirect3DDevice,
+    /// The size the pool's buffers were created at.
+    size: SizeInt32,
 }
+
+const PIXEL_FORMAT: DirectXPixelFormat = DirectXPixelFormat::B8G8R8A8UIntNormalized;
+const BUFFERS: i32 = 2;
 
 fn hwnd_from(raw: i64) -> HWND {
     HWND(raw as usize as *mut core::ffi::c_void)
@@ -91,8 +99,8 @@ impl Capturer {
 
         let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             &direct_device,
-            DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            2,
+            PIXEL_FORMAT,
+            BUFFERS,
             size,
         )
         .map_err(|e| e.to_string())?;
@@ -110,25 +118,50 @@ impl Capturer {
             pool,
             session,
             _item: item,
+            direct_device,
+            size,
         })
     }
 
+    /// The newest frame the pool holds, or `None` when nothing new arrived.
+    ///
+    /// Older queued frames are dropped, so a slow tick reads what is on screen
+    /// now rather than what was there a second ago. When the window's content
+    /// size no longer matches the pool (an in-game resolution change), the pool
+    /// is recreated at the new size: the old buffers would keep delivering the
+    /// old size, cropped, and the wrong profile would activate.
     pub fn try_frame(&mut self) -> Result<Option<Frame>, String> {
-        match self.pool.TryGetNextFrame() {
-            Ok(frame) => {
-                let surface = frame.Surface().map_err(|e| e.to_string())?;
-                let access: IDirect3DDxgiInterfaceAccess =
-                    surface.cast().map_err(|e| e.to_string())?;
-                let texture: ID3D11Texture2D =
-                    unsafe { access.GetInterface() }.map_err(|e| e.to_string())?;
-                let frame = self.read_texture(&texture)?;
-                if frame.is_uniform() {
-                    return Ok(None);
-                }
-                Ok(Some(frame))
-            }
-            Err(_) => Ok(None),
+        let mut newest = None;
+        while let Ok(frame) = self.pool.TryGetNextFrame() {
+            newest = Some(frame);
         }
+        let Some(frame) = newest else {
+            return Ok(None);
+        };
+
+        let content = frame.ContentSize().map_err(|e| e.to_string())?;
+        if (content.Width, content.Height) != (self.size.Width, self.size.Height)
+            && content.Width > 0
+            && content.Height > 0
+        {
+            let _ = frame.Close();
+            self.pool
+                .Recreate(&self.direct_device, PIXEL_FORMAT, BUFFERS, content)
+                .map_err(|e| e.to_string())?;
+            self.size = content;
+            // This frame was drawn into an old-size buffer; the next one is right.
+            return Ok(None);
+        }
+
+        let surface = frame.Surface().map_err(|e| e.to_string())?;
+        let access: IDirect3DDxgiInterfaceAccess = surface.cast().map_err(|e| e.to_string())?;
+        let texture: ID3D11Texture2D =
+            unsafe { access.GetInterface() }.map_err(|e| e.to_string())?;
+        let frame = self.read_texture(&texture)?;
+        if frame.is_uniform() {
+            return Ok(None);
+        }
+        Ok(Some(frame))
     }
 
     pub fn next_frame(&mut self) -> Result<Frame, String> {
