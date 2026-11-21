@@ -1180,4 +1180,39 @@ mod tests {
         assert_eq!(fix_identity_case("BluebeIl"), "Bluebell");
         assert_eq!(fix_identity_case("Dawn Warrior"), "Dawn Warrior");
     }
+
+    /// The live Ideal name crop for `Eurovein` (1920x1080, saved by a diagnostic).
+    /// The `i` is a 1 px bar with a one-pixel gap under its dot; it used to come
+    /// out as an empty shape that matched the `I` bar, so the name read
+    /// `Euroveln` after the case fix.
+    #[test]
+    fn a_dotted_i_in_a_name_is_not_read_as_a_bar() {
+        let rows = [
+            "######................................#...........",
+            "#.................................................",
+            "#.......#...#..#.#..###..#...#..###...#..#.##.....",
+            "#.......#...#..##..#...#.#...#.#...#..#..##..#....",
+            "######..#...#..#...#...#..#.#..#...#..#..#...#....",
+            "#.......#...#..#...#...#..#.#..#####..#..#...#....",
+            "#.......#...#..#...#...#..#.#..#......#..#...#....",
+            "#.......#...#..#...#...#...#...#...#..#..#...#....",
+            "######...####..#....###....#....###...#..#...#....",
+        ];
+        let w = rows[0].len();
+        let px = rows
+            .iter()
+            .flat_map(|row| row.bytes().map(|b| if b == b'#' { 239 } else { 60 }))
+            .collect();
+        let gray = Gray {
+            w,
+            h: rows.len(),
+            px,
+        };
+        let (stored, _) = seed_identity(&gray).expect("seed");
+        let atlas = Atlas::from_settings(&stored);
+        let (text, _) = atlas
+            .recognize_text(&gray, (gray.h as i32 / 3).max(2))
+            .expect("read");
+        assert_eq!(fix_identity_case(text.trim()), "Eurovein");
+    }
 }

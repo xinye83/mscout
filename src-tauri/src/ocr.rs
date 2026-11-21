@@ -258,7 +258,7 @@ fn normalize(
             }
         }
     }
-    let saturated = total > 0 && ink * 100 >= total * 85;
+    let mut saturated = total > 0 && ink * 100 >= total * 85;
 
     let mut floor = 0usize;
     let mut span = 1usize;
@@ -278,6 +278,14 @@ fn normalize(
             .iter()
             .rposition(|count| *count > 0)
             .unwrap_or(floor);
+        // The shape's most common value is already its brightest: there is no
+        // pale tile under it, the shape is solid ink. A thin stroke such as the
+        // `i` in a name (a 1 px bar with a one-pixel gap under its dot) is 8 of 9
+        // pixels ink; the own-floor threshold would call none of it ink and
+        // leave an empty shape, which then matches any 1 px glyph exactly.
+        if peak <= floor {
+            saturated = false;
+        }
         span = peak.saturating_sub(floor).max(1);
     }
 
