@@ -163,6 +163,44 @@ pub fn load_for_mode(client_w: u32, client_h: u32, ui_mode: UiMode) -> Option<Pr
     parse_for_mode(&text, client_w, client_h, ui_mode)
 }
 
+/// Load the saved set for a pair, for callers that are about to write one.
+///
+/// `Ok(None)` means there is no file. A file that exists but does not parse as a
+/// profile for this pair (a torn write, a newer schema, a hand edit) is renamed
+/// aside to `<name>.json.bad-<UTC time>` before `Ok(None)` is returned, so the
+/// caller's fresh profile never overwrites the only copy of the player's taught
+/// maps, names and atlases. A file that cannot be read at all (locked, denied)
+/// is an error: nothing is replaced.
+fn load_or_quarantine(
+    client_w: u32,
+    client_h: u32,
+    ui_mode: UiMode,
+) -> Result<Option<Profile>, String> {
+    let path = path_for(client_w, client_h, ui_mode)?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    if let Some(profile) = parse_for_mode(&text, client_w, client_h, ui_mode) {
+        return Ok(Some(profile));
+    }
+    let backup = quarantine(&path)?;
+    crate::calibration::log(&format!(
+        "profile {} could not be read; kept it as {} and started a new one",
+        path.display(),
+        backup.display()
+    ));
+    Ok(None)
+}
+
+/// Rename an unreadable profile out of the way. The new name no longer ends in
+/// `.json`, so [`list`] ignores it, but the player's data is still on disk.
+fn quarantine(path: &std::path::Path) -> Result<PathBuf, String> {
+    crate::fsutil::move_aside(path)
+        .map_err(|error| format!("cannot move aside {}: {error}", path.display()))
+}
+
 pub fn save(profile: &Profile) -> Result<(), String> {
     let _guard = lock(&DISK_LOCK);
     let dir = dir()?;
@@ -224,7 +262,7 @@ pub fn activate(client_w: u32, client_h: u32) -> Result<Profile, String> {
         }
     }
 
-    let profile = match load_for_mode(client_w, client_h, ui_mode) {
+    let profile = match load_or_quarantine(client_w, client_h, ui_mode)? {
         Some(profile) => profile,
         // A known size starts from its shipped preset and is saved straight
         // away, so it reads without any drawing and shows up as a normal,
@@ -319,7 +357,7 @@ pub fn migrate_legacy() -> Option<String> {
     }
 
     // The legacy sections predate UI Size, so they belong to the default mode.
-    let existing = load_for_mode(client_w, client_h, UiMode::Default);
+    let existing = load_or_quarantine(client_w, client_h, UiMode::Default).ok()?;
     let profile = existing.unwrap_or_else(|| {
         let mut profile = Profile::new_for_mode(client_w, client_h, UiMode::Default);
         profile.calibration = calibration;

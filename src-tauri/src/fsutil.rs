@@ -20,6 +20,23 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     result
 }
 
+/// Rename `path` to `<name>.bad-<UTC time>` so a file the app cannot parse is
+/// kept for the player instead of being overwritten. The new name no longer ends
+/// in the original extension, so loaders that scan by extension skip it.
+pub fn move_aside(path: &Path) -> std::io::Result<PathBuf> {
+    let mut name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    name.push(format!(
+        ".bad-{}",
+        chrono::Utc::now().format("%Y%m%d-%H%M%S")
+    ));
+    let backup = path.with_file_name(name);
+    fs::rename(path, &backup)?;
+    Ok(backup)
+}
+
 fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut file = File::create(path)?;
     file.write_all(bytes)?;
@@ -63,6 +80,20 @@ mod tests {
         fs::write(&path, b"old contents that are longer").expect("seed");
         write_atomic(&path, b"new").expect("write");
         assert_eq!(fs::read(&path).expect("read"), b"new");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn move_aside_keeps_the_file_under_a_new_extension() {
+        let dir = scratch("aside");
+        let path = dir.join("1920x1080@ideal.json");
+        fs::write(&path, b"{ torn").expect("seed");
+        let backup = move_aside(&path).expect("move");
+        assert!(!path.exists());
+        assert_eq!(fs::read(&backup).expect("read"), b"{ torn");
+        let name = backup.file_name().and_then(|n| n.to_str()).expect("name");
+        assert!(name.starts_with("1920x1080@ideal.json.bad-"), "{name}");
+        assert_ne!(backup.extension().and_then(|e| e.to_str()), Some("json"));
         let _ = fs::remove_dir_all(&dir);
     }
 

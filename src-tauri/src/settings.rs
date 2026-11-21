@@ -20,14 +20,16 @@ pub fn read_raw() -> Value {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return Value::Object(Map::new());
     };
-    // A UTF-8 BOM (e.g. from an editor or PowerShell's Set-Content) makes
-    // serde_json reject the file, which would silently clear every setting.
-    let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+    parse_object(&raw).unwrap_or_else(|| Value::Object(Map::new()))
+}
 
-    match serde_json::from_str::<Value>(raw) {
-        Ok(value) if value.is_object() => value,
-        _ => Value::Object(Map::new()),
-    }
+/// Parse settings text as a JSON object. A UTF-8 BOM (e.g. from an editor or
+/// PowerShell's Set-Content) would otherwise make serde_json reject the file.
+fn parse_object(raw: &str) -> Option<Value> {
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw);
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .filter(Value::is_object)
 }
 
 fn update<F>(apply: F) -> Result<(), String>
@@ -37,11 +39,28 @@ where
     let _guard = lock();
     let dir = crate::data_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let file = dir.join("settings.json");
 
-    let mut raw = read_raw();
-    if !raw.is_object() {
-        raw = Value::Object(Map::new());
-    }
+    // Never write `{}` plus one key over a file that merely failed to parse: that
+    // would erase the target window, MSCW folder and UI Size. An unparseable file
+    // is moved aside first; a file that cannot be read at all is left alone.
+    let mut raw = match std::fs::read_to_string(&file) {
+        Ok(text) => match parse_object(&text) {
+            Some(value) => value,
+            None => {
+                let backup = crate::fsutil::move_aside(&file).map_err(|error| {
+                    format!("cannot move aside unreadable {}: {error}", file.display())
+                })?;
+                crate::calibration::log(&format!(
+                    "settings.json could not be parsed; kept it as {}",
+                    backup.display()
+                ));
+                Value::Object(Map::new())
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
+        Err(error) => return Err(format!("cannot read {}: {error}", file.display())),
+    };
 
     {
         let object = raw
@@ -51,8 +70,7 @@ where
     }
 
     let text = serde_json::to_string_pretty(&raw).map_err(|e| e.to_string())?;
-    crate::fsutil::write_atomic(&dir.join("settings.json"), text.as_bytes())
-        .map_err(|e| e.to_string())
+    crate::fsutil::write_atomic(&file, text.as_bytes()).map_err(|e| e.to_string())
 }
 
 pub fn update_settings<F>(apply: F) -> Result<(), String>
@@ -529,6 +547,15 @@ pub fn from_hex(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_parse_accepts_a_bom_and_rejects_anything_but_an_object() {
+        assert!(parse_object("\u{feff}{\"uiMode\":\"ideal\"}").is_some());
+        assert!(parse_object("{}").is_some());
+        assert!(parse_object("{ torn").is_none());
+        assert!(parse_object("[1, 2]").is_none());
+        assert!(parse_object("").is_none());
+    }
 
     #[test]
     fn hex_round_trip() {
