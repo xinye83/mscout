@@ -151,6 +151,8 @@ Consequence: the supported matrix is explicit in [PRESETS.md](PRESETS.md). Addin
 
 ## D29 — 0.5.0 drops the 1920×1200 preset
 
+*Placed next to D25, which it amends, rather than in number order.*
+
 The 1920×1200 Ideal preset is removed. The pair has no saved-frame fixture and no
 verified automatic read, so it falls back to calibration like any other unshipped
 size. This supersedes the 1920×1200 part of D25; the 1366×768 and 1920×1080
