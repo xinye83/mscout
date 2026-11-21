@@ -573,7 +573,7 @@ fn run<R: Runtime>(app: AppHandle<R>) {
     // Carry the dip guard across a restart. The guard compares each reading with
     // the last one recorded, so without this the first reading after a restart has
     // nothing to compare against — which is how a two-EXP blip got into the history.
-    if let Some(record) = crate::last_sample_record() {
+    if let Some(record) = crate::samples::last() {
         let lv = record
             .get("lv")
             .and_then(serde_json::Value::as_u64)
@@ -632,7 +632,7 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                     if outcome.sample.lv > 0 {
                         let written = serde_json::to_value(&outcome.sample)
                             .map_err(|error| error.to_string())
-                            .and_then(|record| crate::append_sample_record(&record));
+                            .and_then(|record| crate::samples::append(&record));
                         match written {
                             Ok(()) => recorded = true,
                             Err(error) => {

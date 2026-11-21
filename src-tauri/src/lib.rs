@@ -1,5 +1,4 @@
-use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -25,6 +24,7 @@ mod preset;
 mod profile;
 #[cfg(test)]
 mod regression;
+mod samples;
 mod settings;
 mod window_target;
 #[cfg(windows)]
@@ -100,281 +100,22 @@ fn test_data_dir() -> PathBuf {
     .clone()
 }
 
-pub(crate) fn append_sample_record(record: &Value) -> Result<(), String> {
-    let t = record
-        .get("t")
-        .and_then(Value::as_i64)
-        .ok_or("sample is missing t")?;
-
-    let day = chrono::DateTime::from_timestamp(t, 0)
-        .ok_or("invalid timestamp")?
-        .with_timezone(&chrono::Local)
-        .format("%Y-%m-%d")
-        .to_string();
-
-    let dir = data_dir()?.join("samples");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-
-    let path = dir.join(format!("{day}.jsonl"));
-    let mut line = serde_json::to_string(record).map_err(|e| e.to_string())?;
-    line.push('\n');
-    append_line(&path, &line).map_err(|e| e.to_string())
-}
-
-/// Append one complete line. The line goes out in a single `write_all`, so a
-/// crash leaves at most a missing row rather than half of one. If the file does
-/// not end in a newline - the tail of an earlier interrupted write - a newline is
-/// written first, so the new row is not glued onto the broken one and both lost.
-fn append_line(path: &std::path::Path, line: &str) -> std::io::Result<()> {
-    let needs_break = ends_without_newline(path)?;
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    if needs_break {
-        file.write_all(b"\n")?;
-    }
-    file.write_all(line.as_bytes())
-}
-
-fn ends_without_newline(path: &std::path::Path) -> std::io::Result<bool> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error),
-    };
-    if file.metadata()?.len() == 0 {
-        return Ok(false);
-    }
-    file.seek(SeekFrom::End(-1))?;
-    let mut last = [0u8; 1];
-    file.read_exact(&mut last)?;
-    Ok(last[0] != b'\n')
-}
-
 #[tauri::command]
 fn append_sample(record: Value) -> Result<(), String> {
-    append_sample_record(&record)
+    samples::append(&record)
 }
 
-#[tauri::command]
-fn read_samples(from: i64, to: i64) -> Result<Vec<Value>, String> {
-    let dir = data_dir()?.join("samples");
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut samples = Vec::new();
-    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-            continue;
-        }
-
-        let file = fs::File::open(&path).map_err(|e| e.to_string())?;
-        for line in BufReader::new(file).lines() {
-            let line = line.map_err(|e| e.to_string())?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                // Rows the reader knows were wrong are skipped everywhere, so the
-                // chart and every rate calculation see clean data.
-                if value.get("bad").and_then(Value::as_bool).unwrap_or(false) {
-                    continue;
-                }
-                if let Some(t) = value.get("t").and_then(Value::as_i64) {
-                    if t >= from && t <= to {
-                        samples.push(value);
-                    }
-                }
-            }
-        }
-    }
-
-    samples.sort_by_key(|v| v.get("t").and_then(Value::as_i64).unwrap_or(0));
-    Ok(samples)
+/// Recorded rows in `[from, to]`. `bucket` (seconds) thins long ranges on the
+/// Rust side. Async, like the repair: a sync command runs on the main thread,
+/// and reading weeks of history there froze every window, the overlay included.
+#[tauri::command(async)]
+fn read_samples(from: i64, to: i64, bucket: Option<i64>) -> Result<Vec<Value>, String> {
+    samples::read(from, to, bucket)
 }
 
-/// The newest recorded row. The engine compares each reading against the last one
-/// it recorded, so without seeding from this the first reading after a restart is
-/// unchecked — which is how a two-EXP blip got into the history.
-pub(crate) fn last_sample_record() -> Option<Value> {
-    let dir = data_dir().ok()?.join("samples");
-    let mut days: Vec<std::path::PathBuf> = fs::read_dir(dir)
-        .ok()?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("jsonl"))
-        .collect();
-    days.sort();
-
-    let file = fs::File::open(days.pop()?).ok()?;
-    BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
-        .filter(|value| !value.get("bad").and_then(Value::as_bool).unwrap_or(false))
-        .last()
-}
-
-/// Indices of rows that fall below the running high-water mark and later climb back
-/// over it. A genuine loss of EXP — dying costs EXP — never recovers, so it is left
-/// alone; a misread always does, because the next good read overtakes it.
-///
-/// The third field marks a recorded death (`"event":"death"`). It starts a new
-/// high-water mark: without that, the next level-up would "climb back" over the
-/// pre-death mark and flag every row in between.
-fn find_misreads(rows: &[(u32, i64, bool)]) -> Vec<usize> {
-    let mut flagged = Vec::new();
-    let mut parked: Vec<usize> = Vec::new();
-    let mut baseline: Option<(u32, i64)> = None;
-
-    for (index, (level, exp, death)) in rows.iter().enumerate() {
-        if *death {
-            parked.clear();
-            baseline = Some((*level, *exp));
-            continue;
-        }
-        match baseline {
-            Some((base_level, base_exp))
-                if *level < base_level || (*level == base_level && *exp < base_exp) =>
-            {
-                parked.push(index);
-            }
-            _ => {
-                if let Some((base_level, base_exp)) = baseline {
-                    if !parked.is_empty() {
-                        if *level > base_level || (*level == base_level && *exp >= base_exp) {
-                            flagged.append(&mut parked);
-                        } else {
-                            parked.clear();
-                        }
-                    }
-                }
-                baseline = Some((*level, *exp));
-            }
-        }
-    }
-
-    flagged
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RepairSummary {
-    pub checked: usize,
-    pub flagged: usize,
-    pub files: usize,
-}
-
-/// Flag the recorded rows that break the invariants the reader now enforces, so
-/// the chart and the rate maths stop being dragged down by misreads.
-///
-/// Rows are flagged rather than deleted: the file stays as the evidence of how
-/// often the reader failed, and a mistaken flag can be removed by hand. A row is
-/// only flagged when it sits below the running high-water mark *and* the recording
-/// later climbs back over it — a genuine loss of EXP never recovers, so it stays.
-#[tauri::command]
-fn repair_history() -> Result<RepairSummary, String> {
-    let dir = data_dir()?.join("samples");
-    if !dir.exists() {
-        return Ok(RepairSummary {
-            checked: 0,
-            flagged: 0,
-            files: 0,
-        });
-    }
-
-    let mut files: Vec<std::path::PathBuf> = fs::read_dir(&dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("jsonl"))
-        .collect();
-    files.sort();
-
-    let mut lines_per_file: Vec<Vec<String>> = Vec::new();
-    let mut rows: Vec<(usize, usize, Value)> = Vec::new();
-    for (file_index, path) in files.iter().enumerate() {
-        let file = fs::File::open(path).map_err(|e| e.to_string())?;
-        let mut lines: Vec<String> = Vec::new();
-        for line in BufReader::new(file).lines() {
-            let line = line.map_err(|e| e.to_string())?;
-            if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                if value.get("t").and_then(Value::as_i64).is_some() {
-                    rows.push((file_index, lines.len(), value));
-                }
-            }
-            lines.push(line);
-        }
-        lines_per_file.push(lines);
-    }
-
-    // Every row of every day, in time order, so a dip across midnight is caught too.
-    rows.sort_by_key(|(_, _, value)| value.get("t").and_then(Value::as_i64).unwrap_or(0));
-    let checked = rows.len();
-
-    let series: Vec<(u32, i64, bool)> = rows
-        .iter()
-        .map(|(_, _, row)| {
-            (
-                row.get("lv").and_then(Value::as_u64).unwrap_or(0) as u32,
-                row.get("exp").and_then(Value::as_i64).unwrap_or(0),
-                row.get("event").and_then(Value::as_str) == Some("death"),
-            )
-        })
-        .collect();
-
-    let flagged: Vec<(usize, usize)> = find_misreads(&series)
-        .into_iter()
-        .filter_map(|index| {
-            rows.get(index)
-                .map(|(file_index, line_index, _)| (*file_index, *line_index))
-        })
-        .collect();
-
-    let mut changed_files = 0usize;
-    for (file_index, lines) in lines_per_file.iter_mut().enumerate() {
-        let mut changed = false;
-        for (flagged_file, line_index) in &flagged {
-            if *flagged_file != file_index {
-                continue;
-            }
-            let Ok(mut value) = serde_json::from_str::<Value>(&lines[*line_index]) else {
-                continue;
-            };
-            let Some(object) = value.as_object_mut() else {
-                continue;
-            };
-            if object.get("bad").and_then(Value::as_bool) == Some(true) {
-                continue;
-            }
-            object.insert("bad".into(), Value::Bool(true));
-            lines[*line_index] = serde_json::to_string(&value).map_err(|e| e.to_string())?;
-            changed = true;
-        }
-
-        if changed {
-            let text = lines.join("\n");
-            fs::write(&files[file_index], format!("{text}\n")).map_err(|e| e.to_string())?;
-            changed_files += 1;
-        }
-    }
-
-    // Report what the files now carry, so pressing the button twice is stable.
-    let total = lines_per_file
-        .iter()
-        .flat_map(|lines| lines.iter())
-        .filter(|line| {
-            serde_json::from_str::<Value>(line)
-                .ok()
-                .and_then(|value| value.get("bad").and_then(Value::as_bool))
-                .unwrap_or(false)
-        })
-        .count();
-
-    Ok(RepairSummary {
-        checked,
-        flagged: total,
-        files: changed_files,
-    })
+#[tauri::command(async)]
+fn repair_history() -> Result<samples::RepairSummary, String> {
+    samples::repair()
 }
 
 #[tauri::command]
@@ -775,90 +516,6 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn appends_whole_lines_and_repairs_a_torn_tail() {
-        let dir = std::env::temp_dir().join(format!("mscout-append-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("scratch dir");
-        let path = dir.join("2026-11-19.jsonl");
-
-        append_line(&path, "{\"t\":1}\n").expect("first row");
-        // A crash mid-write leaves a partial row (or NUL padding) with no newline.
-        fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .and_then(|mut file| file.write_all(b"{\"t\":2,\"ex\0\0"))
-            .expect("simulate a torn tail");
-        append_line(&path, "{\"t\":3}\n").expect("row after the tear");
-
-        let text = fs::read_to_string(&path).expect("read back");
-        let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 3, "{text:?}");
-        assert_eq!(lines[0], "{\"t\":1}");
-        assert_eq!(lines[2], "{\"t\":3}", "the new row stands on its own line");
-        assert!(serde_json::from_str::<Value>(lines[2]).is_ok());
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn flags_the_dips_the_reader_used_to_record() {
-        // The shape of the recorded history: a two-EXP blip, then a truncated read
-        // whose derived level falls away and later comes back.
-        let rows = no_events(&[
-            (35, 21_478),
-            (35, 21_476),
-            (35, 21_476),
-            (35, 21_500),
-            (19, 2_106),
-            (19, 2_106),
-            (35, 21_704),
-            (35, 21_710),
-        ]);
-        assert_eq!(find_misreads(&rows), vec![1, 2, 4, 5]);
-    }
-
-    /// History rows with no recorded events.
-    fn no_events(rows: &[(u32, i64)]) -> Vec<(u32, i64, bool)> {
-        rows.iter().map(|&(lv, exp)| (lv, exp, false)).collect()
-    }
-
-    #[test]
-    fn a_recorded_death_is_not_flagged_when_the_level_is_regained() {
-        let rows = vec![
-            (35, 100_000, false),
-            (35, 82_579, true), // the death row
-            (35, 90_000, false),
-            (35, 170_000, false),
-            (36, 1_000, false), // level-up: climbs past the pre-death mark
-        ];
-        assert_eq!(find_misreads(&rows), Vec::<usize>::new());
-    }
-
-    #[test]
-    fn keeps_a_loss_that_never_recovers() {
-        // Dying costs EXP and the recording stays lower, so nothing is flagged.
-        let rows = no_events(&[(35, 50_000), (35, 49_000), (35, 49_500), (35, 49_800)]);
-        assert_eq!(find_misreads(&rows), Vec::<usize>::new());
-    }
-
-    #[test]
-    fn keeps_an_ordinary_climb() {
-        let rows = no_events(&[(35, 1_000), (35, 2_000), (36, 10), (36, 900)]);
-        assert_eq!(find_misreads(&rows), Vec::<usize>::new());
-    }
-
-    #[test]
-    #[ignore = "tool: flags misread rows; set MSCOUT_DATA_DIR to the data folder to repair"]
-    fn repair_history_now() {
-        match repair_history() {
-            Ok(summary) => println!(
-                "checked {} rows, {} now flagged, {} files rewritten",
-                summary.checked, summary.flagged, summary.files
-            ),
-            Err(error) => println!("repair failed: {error}"),
-        }
-    }
 
     #[test]
     fn tests_never_use_the_real_data_folder() {

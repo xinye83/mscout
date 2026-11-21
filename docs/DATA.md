@@ -45,6 +45,8 @@ One JSON object per line, one line per second of captured play, grouped by local
 
 `repair_history` (the **repair history** button on the History page) marks rows that break those invariants with `bad: true`. A row is only marked when it sits below the running high-water mark *and* the recording later climbs back over it — a genuine loss of EXP never recovers, so it is left alone. A `death` row starts a new high-water mark, so regaining the level afterwards does not flag the rows in between. Rows are flagged rather than deleted: the file stays as evidence of how often the reader failed, and a mistaken flag can be removed by hand.
 
+The repair holds the same lock as the appender, so no row is added between its read and its rewrite, and each changed day file is replaced atomically. A line that is not valid UTF-8 or JSON (an interrupted write) is skipped by every reader and written back unchanged by the repair.
+
 ## Profiles — `data/profiles/<W>x<H>[@mode].json`
 
 Calibration is scoped to the game's **client size and UI Size**. Each pair gets one file:
@@ -209,9 +211,11 @@ When the engine first sees a client size with no `data/profiles/<W>x<H>[@mode].j
 
 ## Compaction
 
-- Raw 1 Hz rows are kept for 7 days.
-- Older days compact to one-minute aggregates (last value per bucket, gain sum, map set).
-- Aggregates are never deleted automatically.
+Not implemented on disk: day files keep every 1 Hz row. Long ranges are thinned
+when read instead. The History page asks for 7- and 30-day ranges with a
+60-second bucket, and `read_samples` returns the last row of each bucket, plus
+every row with an `event` and the first row of a different character. Writing
+aggregates to disk remains on the roadmap.
 
 ## Mock data
 

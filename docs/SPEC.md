@@ -302,6 +302,7 @@ Recording is gated: a size with no calibrated profile reports **lost** and write
 - Raw 1 Hz samples kept for 7 days.
 - Beyond that, compact to one-minute aggregates (mean exp, min/max, sum of gain, map set) so months of play stay small.
 - No automatic deletion of aggregates.
+- *Status:* not implemented yet. Day files keep every row; long ranges are thinned when read (see DATA.md, Compaction).
 
 ---
 

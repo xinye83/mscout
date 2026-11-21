@@ -22,7 +22,10 @@ export default function History() {
   useEffect(() => {
     const now = Math.floor(Date.now() / 1000);
     setSamples(null);
-    invoke<Sample[]>("read_samples", { from: now - days * 86_400, to: now })
+    // Longer ranges come thinned to one row a minute (deaths and character
+    // switches kept), so weeks of 1 Hz history do not flood the window.
+    const bucket = days > 1 ? 60 : undefined;
+    invoke<Sample[]>("read_samples", { from: now - days * 86_400, to: now, bucket })
       .then(setSamples)
       .catch(() => setSamples([]));
   }, [days, reload]);
