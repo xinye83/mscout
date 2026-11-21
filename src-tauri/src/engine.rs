@@ -565,6 +565,25 @@ fn supervise<R: Runtime>(app: AppHandle<R>) {
     }
 }
 
+/// The fields of the last recorded row the guard needs after a restart.
+#[derive(serde::Deserialize)]
+struct LastRow {
+    lv: u32,
+    exp: i64,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// The guard's starting point from the last recorded row, when it has a level.
+fn restart_seed(record: serde_json::Value) -> Option<guard::Point> {
+    let row: LastRow = serde_json::from_value(record).ok()?;
+    (row.lv > 0).then_some(guard::Point {
+        lv: row.lv,
+        exp: row.exp,
+        name: row.name,
+    })
+}
+
 /// The text of a panic payload (`panic!` with a literal or a formatted message).
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(text) = payload.downcast_ref::<&str>() {
@@ -582,24 +601,8 @@ fn run<R: Runtime>(app: AppHandle<R>) {
     // Carry the dip guard across a restart. The guard compares each reading with
     // the last one recorded, so without this the first reading after a restart has
     // nothing to compare against — which is how a two-EXP blip got into the history.
-    if let Some(record) = crate::samples::last() {
-        let lv = record
-            .get("lv")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as u32;
-        if lv > 0 {
-            engine.guard.seed(guard::Point {
-                lv,
-                exp: record
-                    .get("exp")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(0),
-                name: record
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string),
-            });
-        }
+    if let Some(point) = crate::samples::last().and_then(restart_seed) {
+        engine.guard.seed(point);
     }
 
     loop {
@@ -924,13 +927,6 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
                 frame.width, frame.height
             )));
         }
-    }
-
-    // Switch the active profile, so calibration and teach commands target the
-    // size that is actually on screen.
-    if profile::active_key().as_deref() != Some(profile.key().as_str()) {
-        profile::activate(frame.width, frame.height)
-            .map_err(|error| TickError::Lost(format!("profile failed: {error}")))?;
     }
 
     let calibration = profile.calibration.clone();
@@ -3264,5 +3260,22 @@ mod tests {
         let formatted =
             std::panic::catch_unwind(|| panic!("index {} out of range", 7)).unwrap_err();
         assert_eq!(panic_message(&*formatted), "index 7 out of range");
+    }
+
+    #[test]
+    fn a_restart_seeds_from_the_last_row_with_a_level() {
+        let seed = restart_seed(
+            serde_json::json!({"t": 1, "lv": 35, "exp": 21_478, "name": "Euroblood", "pct": 1.0}),
+        )
+        .expect("seed");
+        assert_eq!(
+            (seed.lv, seed.exp, seed.name.as_deref()),
+            (35, 21_478, Some("Euroblood"))
+        );
+        assert!(restart_seed(serde_json::json!({"t": 1, "lv": 0, "exp": 0})).is_none());
+        assert!(
+            restart_seed(serde_json::json!({"t": 1, "lv": 35})).is_none(),
+            "no exp, no seed"
+        );
     }
 }
