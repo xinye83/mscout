@@ -593,6 +593,22 @@ pub fn save_diagnostic(serial: u64) -> Result<String, String> {
             })
         })
         .collect::<Vec<_>>();
+    // The name/job crops exactly as the reader saw them, so a misread letter (an
+    // `i` read as `l` or `j`) can be reproduced from the file alone.
+    let identity_crops = [("job", calibration.job), ("name", calibration.name)]
+        .into_iter()
+        .filter_map(|(kind, region)| {
+            let region = region.filter(Region::is_usable)?;
+            let gray = ocr::crop_gray(&frame, region)?;
+            Some(serde_json::json!({
+                "kind": kind,
+                "region": region,
+                "w": gray.w,
+                "h": gray.h,
+                "px": settings::to_hex(&gray.px),
+            }))
+        })
+        .collect::<Vec<_>>();
     let payload = serde_json::json!({
         "version": 2,
         "capturedAt": chrono::Local::now().to_rfc3339(),
@@ -613,6 +629,7 @@ pub fn save_diagnostic(serial: u64) -> Result<String, String> {
         "expGlyphs": box_glyphs(serial, "exp".into()).unwrap_or_default(),
         "levelGlyphs": box_glyphs(serial, "level".into()).unwrap_or_default(),
         "mapLines": lines,
+        "identityCrops": identity_crops,
         "atlas": {
             "expGlyphs": exp_atlas.glyphs.len(),
             "expSize": exp_atlas.common_glyph_size(),
