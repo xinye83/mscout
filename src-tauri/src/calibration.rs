@@ -408,8 +408,71 @@ pub fn teach_street(serial: u64, street: String) -> Result<LearningInfo, String>
     Ok(learning_info(&settings::load_atlas()))
 }
 
+/// A digit readout: each owns its own glyph atlas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DigitBox {
+    Exp,
+    Level,
+}
+
+impl std::fmt::Display for DigitBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            DigitBox::Exp => "exp",
+            DigitBox::Level => "level",
+        })
+    }
+}
+
+/// A text line taught as an exact fingerprint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IdentityBox {
+    Name,
+    Job,
+}
+
+impl std::fmt::Display for IdentityBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            IdentityBox::Name => "name",
+            IdentityBox::Job => "job",
+        })
+    }
+}
+
+/// Any calibration box the window can preview.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BoxKind {
+    Exp,
+    Level,
+    Name,
+    Job,
+    Street,
+    Map,
+}
+
+impl std::fmt::Display for BoxKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            BoxKind::Exp => "exp",
+            BoxKind::Level => "level",
+            BoxKind::Name => "name",
+            BoxKind::Job => "job",
+            BoxKind::Street => "street",
+            BoxKind::Map => "map",
+        })
+    }
+}
+
 #[tauri::command(async)]
-pub fn teach_identity(serial: u64, kind: String, label: String) -> Result<LearningInfo, String> {
+pub fn teach_identity(
+    serial: u64,
+    kind: IdentityBox,
+    label: String,
+) -> Result<LearningInfo, String> {
     let label = label.trim().to_string();
     log(&format!(
         "teach_identity serial={serial} kind={kind} label={label:?}"
@@ -421,10 +484,9 @@ pub fn teach_identity(serial: u64, kind: String, label: String) -> Result<Learni
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
     let calibration = settings::load_calibration();
-    let region = match kind.as_str() {
-        "name" => calibration.name,
-        "job" => calibration.job,
-        _ => return Err("unknown identity".into()),
+    let region = match kind {
+        IdentityBox::Name => calibration.name,
+        IdentityBox::Job => calibration.job,
     }
     .filter(Region::is_usable);
     let Some(region) = region else {
@@ -442,10 +504,9 @@ pub fn teach_identity(serial: u64, kind: String, label: String) -> Result<Learni
     };
 
     let mut identities = settings::load_identities();
-    match kind.as_str() {
-        "name" => identities.name = Some(template),
-        "job" => identities.job = Some(template),
-        _ => return Err("unknown identity".into()),
+    match kind {
+        IdentityBox::Name => identities.name = Some(template),
+        IdentityBox::Job => identities.job = Some(template),
     }
     settings::save_identities(&identities)?;
 
@@ -632,8 +693,8 @@ pub fn save_diagnostic(serial: u64) -> Result<String, String> {
         // reports it.
         "provenance": provenance,
         "rejected": rejected,
-        "expGlyphs": box_glyphs(serial, "exp".into()).unwrap_or_default(),
-        "levelGlyphs": box_glyphs(serial, "level".into()).unwrap_or_default(),
+        "expGlyphs": box_glyphs(serial, DigitBox::Exp).unwrap_or_default(),
+        "levelGlyphs": box_glyphs(serial, DigitBox::Level).unwrap_or_default(),
         "mapLines": lines,
         "identityCrops": identity_crops,
         "hudStrip": hud_strip,
@@ -823,10 +884,10 @@ pub struct ExpGlyph {
 /// its own glyph set, so a shape from the level box must be judged by the level
 /// glyphs, not the EXP ones.
 #[tauri::command]
-pub fn box_glyphs(serial: u64, kind: String) -> Result<Vec<ExpGlyph>, String> {
+pub fn box_glyphs(serial: u64, kind: DigitBox) -> Result<Vec<ExpGlyph>, String> {
     let frame = cached_frame(serial)?;
     let calibration = settings::load_calibration();
-    let level = kind == "level";
+    let level = kind == DigitBox::Level;
     let (region, atlas) = if level {
         (
             calibration.level,
@@ -871,7 +932,7 @@ pub fn box_glyphs(serial: u64, kind: String) -> Result<Vec<ExpGlyph>, String> {
 pub fn label_glyph(
     client_w: u32,
     client_h: u32,
-    kind: String,
+    kind: DigitBox,
     ch: String,
     bitmap: String,
     w: u32,
@@ -892,7 +953,7 @@ pub fn label_glyph(
     profile::activate(client_w, client_h)?;
     // Each readout owns its glyph set, so the shape is stored where the reader that
     // produced it will look for it.
-    let level = kind == "level";
+    let level = kind == DigitBox::Level;
     let stored = if level {
         settings::load_level_atlas()
     } else {
@@ -1067,14 +1128,14 @@ pub struct LabelCrop {
 /// box actually covers. `map` and `street` use the line detector, matching the
 /// overlay; a saved box is only the fallback when detection fails.
 #[tauri::command]
-pub fn box_crop(serial: u64, kind: String) -> Result<LabelCrop, String> {
+pub fn box_crop(serial: u64, kind: BoxKind) -> Result<LabelCrop, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
     let calibration = settings::load_calibration();
 
-    let (gray, lines) = match kind.as_str() {
-        "street" | "map" => {
-            let map_line = kind == "map";
+    let (gray, lines) = match kind {
+        BoxKind::Street | BoxKind::Map => {
+            let map_line = kind == BoxKind::Map;
             // The line detector is what the overlay reads. Prefer its regions over
             // legacy saved boxes: an older profile can hold the whole two-line label
             // as `map`, which shows the wrong pixels for both cards.
@@ -1124,11 +1185,11 @@ pub fn box_crop(serial: u64, kind: String) -> Result<LabelCrop, String> {
         }
         other => {
             let region = match other {
-                "exp" => calibration.exp,
-                "level" => calibration.level,
-                "name" => calibration.name,
-                "job" => calibration.job,
-                _ => return Err(format!("unknown box '{other}'")),
+                BoxKind::Exp => calibration.exp,
+                BoxKind::Level => calibration.level,
+                BoxKind::Name => calibration.name,
+                BoxKind::Job => calibration.job,
+                BoxKind::Street | BoxKind::Map => unreachable!("handled above"),
             }
             .filter(Region::is_usable)
             .ok_or_else(|| format!("save the {other} box first"))?;
@@ -1269,5 +1330,19 @@ mod tests {
             b"0123456789"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn box_kinds_parse_the_ids_the_window_sends() {
+        let parse = |id: &str| serde_json::from_value::<BoxKind>(serde_json::json!(id));
+        for id in ["exp", "level", "name", "job", "street", "map"] {
+            assert_eq!(parse(id).expect(id).to_string(), id);
+        }
+        assert!(
+            parse("minimap").is_err(),
+            "an unknown box is refused at the IPC edge"
+        );
+        assert!(serde_json::from_value::<DigitBox>(serde_json::json!("name")).is_err());
+        assert!(serde_json::from_value::<IdentityBox>(serde_json::json!("job")).is_ok());
     }
 }

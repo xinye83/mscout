@@ -207,8 +207,7 @@ pub fn ui_modes() -> Vec<UiModeOption> {
 }
 
 #[tauri::command]
-pub fn set_ui_mode(mode: String) -> Result<(), String> {
-    let mode = UiMode::parse(&mode).ok_or_else(|| format!("unknown UI size mode {mode}"))?;
+pub fn set_ui_mode(mode: UiMode) -> Result<(), String> {
     save_ui_mode(mode)
 }
 

@@ -234,7 +234,7 @@ function CropPreview({
   serial,
   caption,
 }: {
-  kind: string;
+  kind: "exp" | "level" | "name" | "job" | "street" | "map";
   serial: number;
   caption?: (crop: LabelCrop) => string;
 }) {
