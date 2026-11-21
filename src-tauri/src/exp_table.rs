@@ -11,115 +11,36 @@
 /// Levels 50-88 used to be a geometric interpolation between 49 and 89, up to
 /// 2.6% below these rows, which pushed the cross-check past its 1-point
 /// tolerance late in a level and blanked otherwise good frames.
-const REQUIRED: [i64; 99] = [
-    15,
-    34,
-    57,
-    92,
-    135,
-    372,
-    560,
-    840,
-    1_242,
-    1_716,
-    2_360,
-    3_216,
-    4_200,
-    5_460,
-    7_050,
-    8_840,
-    11_040,
-    13_716,
-    16_680,
-    20_216,
-    24_402,
-    28_980,
-    34_320,
-    40_512,
-    47_216,
-    54_900,
-    63_666,
-    73_080,
-    83_720,
-    95_700,
-    108_480,
-    122_760,
-    138_666,
-    155_540,
-    174_216,
-    194_832,
-    216_600,
-    240_500,
-    266_682,
-    294_216,
-    324_240,
-    356_916,
-    391_160,
-    428_280,
-    468_450,
-    510_420,
-    555_680,
-    604_416,
-    655_200,
-    709_716,
-    748_608,
-    789_631,
-    832_902,
-    878_545,
-    926_689,
-    977_471,
-    1_031_036,
-    1_087_536,
-    1_147_132,
-    1_209_994,
-    1_276_301,
-    1_346_242,
-    1_420_016,
-    1_497_832,
-    1_579_913,
-    1_666_492,
-    1_757_815,
-    1_854_143,
-    1_955_750,
-    2_062_925,
-    2_175_973,
-    2_295_216,
-    2_420_993,
-    2_553_663,
-    2_693_603,
-    2_841_212,
-    2_996_910,
-    3_161_140,
-    3_334_370,
-    3_517_093,
-    3_709_829,
-    3_913_127,
-    4_127_566,
-    4_353_756,
-    4_592_341,
-    4_844_001,
-    5_109_452,
-    5_389_449,
-    5_684_790,
-    11_938_059,
-    25_069_923,
-    52_646_838,
-    110_558_359,
-    232_172_553,
-    487_562_361,
-    1_023_880_958,
-    2_150_150_011,
-    4_515_315_023,
-    9_482_161_548,
-];
+///
+/// The rows, read from `src-tauri/exp-table.json`: the one copy shared with the
+/// UI (`src/expTable.ts`) and the mock generator.
+fn rows() -> &'static [i64] {
+    static REQUIRED: std::sync::OnceLock<Vec<i64>> = std::sync::OnceLock::new();
+    REQUIRED.get_or_init(|| table().required)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Table {
+    // Read by the test that keeps [`ESTIMATED`] in step with the file.
+    #[cfg_attr(not(test), allow(dead_code))]
+    confirmed_through: u32,
+    #[cfg_attr(not(test), allow(dead_code))]
+    estimated_through: u32,
+    required: Vec<i64>,
+}
+
+fn table() -> Table {
+    serde_json::from_str(include_str!("../exp-table.json")).expect("exp-table.json is valid")
+}
 
 /// Levels whose requirement is a planning number, not confirmed in live play
-/// (see [`REQUIRED`]). Levels below are confirmed; 90 and up are launch data.
+/// (see [`rows`]). Levels below are confirmed; 90 and up are launch data.
 pub const ESTIMATED: std::ops::RangeInclusive<u32> = 50..=89;
 
 pub fn required(level: u32) -> Option<f64> {
     let index = usize::try_from(level.checked_sub(1)?).ok()?;
-    REQUIRED.get(index).map(|&exp| exp as f64)
+    rows().get(index).map(|&exp| exp as f64)
 }
 
 #[cfg(test)]
@@ -148,7 +69,13 @@ mod tests {
 
     #[test]
     fn requirements_rise_every_level() {
-        assert!(REQUIRED.windows(2).all(|pair| pair[0] <= pair[1]));
-        assert_eq!((*ESTIMATED.start(), *ESTIMATED.end()), (50, 89));
+        assert_eq!(rows().len(), 99);
+        assert!(rows().windows(2).all(|pair| pair[0] <= pair[1]));
+        let table = table();
+        assert_eq!(
+            (*ESTIMATED.start(), *ESTIMATED.end()),
+            (table.confirmed_through + 1, table.estimated_through),
+            "ESTIMATED matches the shared table"
+        );
     }
 }
