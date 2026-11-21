@@ -713,7 +713,9 @@ fn seed_from_game(frame: &Frame, profile: &profile::Profile) -> bool {
             return false;
         }
     };
-    if let Err(error) = settings::save_atlas(&stored) {
+    let key = profile.key();
+    let saved = profile::update_for(&key, |active| active.atlas = stored.clone());
+    if let Err(error) = saved {
         crate::calibration::log(&format!("seed from game could not save: {error}"));
         return false;
     }
@@ -723,7 +725,11 @@ fn seed_from_game(frame: &Frame, profile: &profile::Profile) -> bool {
     if let Some(region) = profile.calibration.level.filter(Region::is_usable) {
         match crate::game_font::seed_level_best(frame, region, dir) {
             Some((level_stored, (w, h), text)) => {
-                let _ = settings::save_level_atlas(&level_stored);
+                if let Err(error) =
+                    profile::update_for(&key, |active| active.level_atlas = level_stored)
+                {
+                    crate::calibration::log(&format!("seed level could not save: {error}"));
+                }
                 crate::calibration::log(&format!("auto-seeded level {w}x{h} from '{text}'"));
             }
             None => crate::calibration::log("seed from game: level not seeded"),
@@ -839,7 +845,12 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
             engine.identity_seed_attempt = Some(std::time::Instant::now());
             if let Some((stored, px)) = seed_identity_from_frame(&frame, &profile.calibration) {
                 profile.identity_atlas = stored.clone();
-                let _ = settings::save_identity_atlas(&stored);
+                let saved = profile::update_for(&profile.key(), |active| {
+                    active.identity_atlas = stored.clone();
+                });
+                if let Err(error) = saved {
+                    crate::calibration::log(&format!("identity seed could not save: {error}"));
+                }
                 crate::calibration::log(&format!("auto-seeded name/job text at {px}px from Arial"));
             }
         }

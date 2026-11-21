@@ -302,6 +302,35 @@ where
     Ok(current.profile.clone())
 }
 
+/// [`update`], but only while `key` is still the active profile.
+///
+/// The engine computes a seed from the profile it activated at the start of a
+/// tick; if the UI Size changed in between, a plain `update` would store that
+/// seed in the other profile. This refuses instead.
+pub fn update_for<F>(key: &str, apply: F) -> Result<Profile, String>
+where
+    F: FnOnce(&mut Profile),
+{
+    let mut active = lock(&ACTIVE);
+    let current = active
+        .as_mut()
+        .ok_or("no active profile — attach the game window first")?;
+    ensure_key(&current.key, key)?;
+    apply(&mut current.profile);
+    save(&current.profile)?;
+    Ok(current.profile.clone())
+}
+
+fn ensure_key(active: &str, expected: &str) -> Result<(), String> {
+    if active == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "the active profile changed to {active} while {expected} was being updated"
+        ))
+    }
+}
+
 /// Delete the saved set for a client size and UI Size. If that set is the active
 /// one, drop the active pointer so the engine re-derives it (as an empty
 /// profile) on the next tick. Missing files count as already removed.
@@ -411,6 +440,13 @@ pub fn delete_profile(client_w: u32, client_h: u32, ui_mode: Option<String>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_update_for_another_profile_is_refused() {
+        assert!(ensure_key("1920x1080@ideal", "1920x1080@ideal").is_ok());
+        let error = ensure_key("1920x1080", "1920x1080@ideal").unwrap_err();
+        assert!(error.contains("1920x1080@ideal"), "{error}");
+    }
 
     #[test]
     fn key_is_the_client_size() {
