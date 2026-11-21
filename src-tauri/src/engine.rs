@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use crate::capture::Frame;
 use crate::capture::{self, Capturer};
 use crate::exp_table;
+use crate::guard::{self, Guard};
 use crate::ocr::{self, Atlas};
 use crate::profile;
 use crate::settings::{self, Calibration, Identities, Region, Template};
@@ -92,6 +93,14 @@ pub struct Sample {
     /// screen. Absent in older rows, so it defaults to false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub map_hidden: bool,
+    /// The character name when it was read, so a restart can tell whether the
+    /// last row belongs to the character now on screen. Absent in older rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `"death"` on the first row after a confirmed death: EXP fell and stayed
+    /// down. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<String>,
 }
 
 /// The reader stage that produced one field of a reading.
@@ -278,6 +287,7 @@ static LAST_PROFILE: std::sync::Mutex<Option<Profile>> = std::sync::Mutex::new(N
 struct TickOutcome {
     sample: Sample,
     profile: Profile,
+    /// Write the sample to history (the guard has seen enough good reads).
     verified: bool,
 }
 
@@ -323,6 +333,10 @@ impl CaptureStatus {
 enum TickError {
     Lost(String),
     Parse(String),
+    /// The frame parsed, but the guard kept it out of history. The guard has
+    /// already updated its own state (a drop it is confirming must survive), so
+    /// this is counted as a failed read without resetting the guard.
+    Guarded(String),
     Transient(String),
     /// The client size has no usable profile yet. The overlay reports this and
     /// offers a Calibrate button; the window is not opened unasked.
@@ -333,7 +347,8 @@ struct EngineState {
     capturer: Option<(i64, Capturer)>,
     last_frame: Option<Frame>,
     outcomes: VecDeque<bool>,
-    last_sample: Option<Sample>,
+    /// Decides which readings become history rows; holds the last recorded one.
+    guard: Guard,
     published: Option<CaptureStatus>,
     published_profile: Option<Profile>,
     /// The last anchor this engine placed the overlay at, so a game that has not
@@ -343,7 +358,6 @@ struct EngineState {
     /// the anchor leaves the panel alone: a dragged position outranks the computed
     /// one until the player gives up the override.
     restored_position: Option<(i32, i32)>,
-    good_reads: usize,
     last_seed_attempt: Option<std::time::Instant>,
     identity_seed_attempt: Option<std::time::Instant>,
 }
@@ -354,12 +368,11 @@ impl EngineState {
             capturer: None,
             last_frame: None,
             outcomes: VecDeque::new(),
-            last_sample: None,
+            guard: Guard::new(),
             published: None,
             published_profile: None,
             anchored: None,
             restored_position: settings::load_overlay_position(),
-            good_reads: 0,
             last_seed_attempt: None,
             identity_seed_attempt: None,
         }
@@ -385,8 +398,7 @@ impl EngineState {
         self.capturer = None;
         self.last_frame = None;
         self.outcomes.clear();
-        self.last_sample = None;
-        self.good_reads = 0;
+        self.guard.reset();
         self.last_seed_attempt = None;
         self.identity_seed_attempt = None;
     }
@@ -505,28 +517,23 @@ fn run<R: Runtime>(app: AppHandle<R>) {
     // the last one recorded, so without this the first reading after a restart has
     // nothing to compare against — which is how a two-EXP blip got into the history.
     if let Some(record) = crate::last_sample_record() {
-        engine.last_sample = Some(Sample {
-            t: record
-                .get("t")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(0),
-            lv: record
-                .get("lv")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0) as u32,
-            exp: record
-                .get("exp")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(0),
-            pct: record
-                .get("pct")
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(0.0),
-            map: String::new(),
-            state: "idle".into(),
-            conf: 1.0,
-            map_hidden: false,
-        });
+        let lv = record
+            .get("lv")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as u32;
+        if lv > 0 {
+            engine.guard.seed(guard::Point {
+                lv,
+                exp: record
+                    .get("exp")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0),
+                name: record
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+            });
+        }
     }
 
     loop {
@@ -579,9 +586,6 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                 // waits for consecutive good reads. That keeps a map change from
                 // waiting three ticks before the overlay shows the new name.
                 let _ = app.emit("live-sample", &outcome.sample);
-                if outcome.verified {
-                    engine.last_sample = Some(outcome.sample);
-                }
                 engine.keep_outcome(true);
                 let status = match history_error {
                     Some(reason) => CaptureStatus::degraded(Some(reason)),
@@ -606,6 +610,7 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                 publish_capture(&app, &mut engine, CaptureStatus::lost(reason));
             }
             Err(TickError::Uncalibrated(reason)) => {
+                engine.guard.miss();
                 // The window is fine — only the calibration is missing — so keep
                 // the capturer attached. Resetting here would drop it, and next
                 // tick would re-attach with no frame yet and flip to a transient
@@ -615,11 +620,18 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                 publish_capture(&app, &mut engine, CaptureStatus::uncalibrated(reason));
             }
             Err(TickError::Parse(reason)) => {
+                engine.guard.miss();
+                engine.keep_outcome(false);
+                let status = engine.status(Some(reason));
+                publish_capture(&app, &mut engine, status);
+            }
+            Err(TickError::Guarded(reason)) => {
                 engine.keep_outcome(false);
                 let status = engine.status(Some(reason));
                 publish_capture(&app, &mut engine, status);
             }
             Err(TickError::Transient(reason)) => {
+                engine.guard.miss();
                 engine.keep_outcome(false);
                 let status = engine.status(Some(reason));
                 publish_capture(&app, &mut engine, status);
@@ -849,43 +861,28 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
         &profile.identity_atlas.source,
     );
 
-    // A character does not lose levels, so a level below the last accepted one is a
-    // misread however self-consistent it looks. This is what let a truncated number
-    // — 21,476 read as 2,106 — record itself as level 19 and put a dip in the
-    // history. An unrecognised level is 0 and takes no part in the comparison.
-    if let Some(previous) = &engine.last_sample {
-        if readings.lv > 0 && previous.lv > 0 && readings.lv < previous.lv {
-            return Err(TickError::Parse(format!(
-                "level fell from {} to {}",
-                previous.lv, readings.lv
-            )));
-        }
-    }
-
-    let state = match &engine.last_sample {
-        Some(previous)
-            if readings.lv > 0 && readings.lv == previous.lv && readings.exp < previous.exp =>
-        {
-            return Err(TickError::Parse(
-                "EXP dropped without a level change".into(),
-            ));
-        }
-        Some(previous)
-            if readings.lv > 0 && readings.lv == previous.lv && readings.exp == previous.exp =>
-        {
-            "idle"
-        }
-        _ => "gaining",
+    // Whether this reading may become history is the guard's call: levels only
+    // go up, EXP only goes up within a level except at a confirmed death, and rows
+    // are written only after consecutive good reads (see `guard`). A truncated
+    // 21,476 read as level 19, and a two-EXP blip, are what it was written against.
+    let point = guard::Point {
+        lv: readings.lv,
+        exp: readings.exp,
+        name: readings.name.clone(),
     };
-
-    // Recording starts only after consecutive good reads, so a mismatched
-    // profile can never write plausible-looking rows.
-    engine.good_reads = if matches!(state, "gaining" | "idle") {
-        engine.good_reads.saturating_add(1)
-    } else {
-        0
-    };
-    let verified = engine.good_reads >= profile::VERIFY_READS || profile::VERIFY_READS == 0;
+    let (state, verified, death) =
+        match engine.guard.judge(&point, exp_table::required(readings.lv)) {
+            guard::Verdict::Accept {
+                state,
+                verified,
+                death,
+            } => (state, verified, death),
+            guard::Verdict::Hold(reason) => {
+                log_once(&format!("guard: {reason}"));
+                (guard::State::Idle, false, false)
+            }
+            guard::Verdict::Reject(reason) => return Err(TickError::Guarded(reason)),
+        };
 
     Ok(TickOutcome {
         sample: Sample {
@@ -894,9 +891,11 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
             exp: readings.exp,
             pct: readings.pct,
             map: readings.map,
-            state: state.into(),
+            state: state.as_str().into(),
             conf: readings.conf,
             map_hidden: readings.map_hidden,
+            name: readings.name.clone(),
+            event: death.then(|| "death".to_string()),
         },
         profile: Profile {
             name: readings.name.clone(),

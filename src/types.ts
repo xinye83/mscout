@@ -8,6 +8,10 @@ export type Sample = {
   conf: number;
   /** True when the minimap is collapsed and no map name is on screen. */
   mapHidden?: boolean;
+  /** Character name when it was read. */
+  name?: string;
+  /** "death" on the first row after a confirmed death. */
+  event?: "death";
 };
 
 export type Rect = { x: number; y: number; w: number; h: number };

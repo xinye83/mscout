@@ -147,7 +147,7 @@ Notifications exist so a broken capture is discovered while playing, not three h
 - **Never write a zero or a guess.** A failed parse produces no sample. Broken capture therefore appears as missing data, never as "stopped gaining EXP".
 - **Reject impossible jumps.** An EXP delta not explained by a level-up or a death marks that segment unreliable and excludes it from rate calculations.
 - **Three distinguishable states in the recording**: samples present and EXP rising (`gaining`), samples present and EXP unchanged (`idle`), no samples at all (`not_recording`).
-- Deaths and level-ups are recorded as events, not as negative EXP.
+- Deaths are recorded as an event (`"event":"death"` on the first row after a confirmed death), not rejected as negative EXP. Level-ups are derived from the level field.
 
 ---
 

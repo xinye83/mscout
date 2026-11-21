@@ -27,19 +27,23 @@ One JSON object per line, one line per second of captured play, grouped by local
 | `map` | string | Matched map name, literal OCR name, or `unknown` |
 | `state` | string | `gaining` or `idle` |
 | `conf` | number | Parse confidence 0–1 |
+| `mapHidden` | boolean | Optional. The minimap is collapsed, so no map name was on screen |
+| `name` | string | Optional. Character name when it was read; lets a restart tell characters apart |
+| `event` | string | Optional. `death` on the first row after a confirmed death |
 | `bad` | boolean | Optional. The row is a known misread; every reader skips it |
 
 ### Invariants
 
 - **No guesses.** An unreadable frame produces no row. `exp` is never fabricated.
 - **No synthetic rows.** `not_recording` is represented by the absence of rows; a gap > 5 s means "not recording".
-- **Monotonic within a level.** `exp` only decreases on level-up (reset) or death (penalty). A decrease that does not hold is rejected at capture time.
-- **Levels never go backwards.** A derivation that lands below the last accepted one is a misread however self-consistent it looks; it is rejected.
+- **Recorded only after consecutive good reads.** Rows are written once three readings in a row have been accepted; any rejected or unreadable frame starts the count again.
+- **Monotonic within a level, except at a death.** A same-level drop is accepted only after five consecutive readings agree on it. A drop of at least 1% of the level's requirement (or to zero) is written with `"event":"death"`; a smaller one means the previous row was the misread, and recording simply continues from the confirmed value. A drop that does not hold is rejected.
+- **Levels never go backwards** for the same character. A lower level is a misread however self-consistent it looks — unless the character name changed, which starts a fresh baseline.
 - **Cross-check.** `pct ≈ exp / required(lv) × 100`, within about 0.02 pp for confirmed levels 1–49 (rounding) and 1 pp where the requirement is estimated. A close difference (up to 1 pp) is repaired from the valid EXP and level; a larger disagreement invalidates both the EXP and level for that frame.
 
 ### Repairing recorded history
 
-`repair_history` (the **repair history** button on the History page) marks rows that break those invariants with `bad: true`. A row is only marked when it sits below the running high-water mark *and* the recording later climbs back over it — a genuine loss of EXP never recovers, so it is left alone. Rows are flagged rather than deleted: the file stays as evidence of how often the reader failed, and a mistaken flag can be removed by hand.
+`repair_history` (the **repair history** button on the History page) marks rows that break those invariants with `bad: true`. A row is only marked when it sits below the running high-water mark *and* the recording later climbs back over it — a genuine loss of EXP never recovers, so it is left alone. A `death` row starts a new high-water mark, so regaining the level afterwards does not flag the rows in between. Rows are flagged rather than deleted: the file stays as evidence of how often the reader failed, and a mistaken flag can be removed by hand.
 
 ## Profiles — `data/profiles/<W>x<H>[@mode].json`
 

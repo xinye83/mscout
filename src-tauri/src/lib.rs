@@ -16,6 +16,7 @@ mod exp_table;
 mod font_seed;
 mod fsutil;
 mod game_font;
+mod guard;
 mod jobs;
 mod map_names;
 mod notify;
@@ -183,12 +184,21 @@ pub(crate) fn last_sample_record() -> Option<Value> {
 /// Indices of rows that fall below the running high-water mark and later climb back
 /// over it. A genuine loss of EXP — dying costs EXP — never recovers, so it is left
 /// alone; a misread always does, because the next good read overtakes it.
-fn find_misreads(rows: &[(u32, i64)]) -> Vec<usize> {
+///
+/// The third field marks a recorded death (`"event":"death"`). It starts a new
+/// high-water mark: without that, the next level-up would "climb back" over the
+/// pre-death mark and flag every row in between.
+fn find_misreads(rows: &[(u32, i64, bool)]) -> Vec<usize> {
     let mut flagged = Vec::new();
     let mut parked: Vec<usize> = Vec::new();
     let mut baseline: Option<(u32, i64)> = None;
 
-    for (index, (level, exp)) in rows.iter().enumerate() {
+    for (index, (level, exp, death)) in rows.iter().enumerate() {
+        if *death {
+            parked.clear();
+            baseline = Some((*level, *exp));
+            continue;
+        }
         match baseline {
             Some((base_level, base_exp))
                 if *level < base_level || (*level == base_level && *exp < base_exp) =>
@@ -267,12 +277,13 @@ fn repair_history() -> Result<RepairSummary, String> {
     rows.sort_by_key(|(_, _, value)| value.get("t").and_then(Value::as_i64).unwrap_or(0));
     let checked = rows.len();
 
-    let series: Vec<(u32, i64)> = rows
+    let series: Vec<(u32, i64, bool)> = rows
         .iter()
         .map(|(_, _, row)| {
             (
                 row.get("lv").and_then(Value::as_u64).unwrap_or(0) as u32,
                 row.get("exp").and_then(Value::as_i64).unwrap_or(0),
+                row.get("event").and_then(Value::as_str) == Some("death"),
             )
         })
         .collect();
@@ -731,7 +742,7 @@ mod tests {
     fn flags_the_dips_the_reader_used_to_record() {
         // The shape of the recorded history: a two-EXP blip, then a truncated read
         // whose derived level falls away and later comes back.
-        let rows = vec![
+        let rows = no_events(&[
             (35, 21_478),
             (35, 21_476),
             (35, 21_476),
@@ -740,20 +751,37 @@ mod tests {
             (19, 2_106),
             (35, 21_704),
             (35, 21_710),
-        ];
+        ]);
         assert_eq!(find_misreads(&rows), vec![1, 2, 4, 5]);
+    }
+
+    /// History rows with no recorded events.
+    fn no_events(rows: &[(u32, i64)]) -> Vec<(u32, i64, bool)> {
+        rows.iter().map(|&(lv, exp)| (lv, exp, false)).collect()
+    }
+
+    #[test]
+    fn a_recorded_death_is_not_flagged_when_the_level_is_regained() {
+        let rows = vec![
+            (35, 100_000, false),
+            (35, 82_579, true), // the death row
+            (35, 90_000, false),
+            (35, 170_000, false),
+            (36, 1_000, false), // level-up: climbs past the pre-death mark
+        ];
+        assert_eq!(find_misreads(&rows), Vec::<usize>::new());
     }
 
     #[test]
     fn keeps_a_loss_that_never_recovers() {
         // Dying costs EXP and the recording stays lower, so nothing is flagged.
-        let rows = vec![(35, 50_000), (35, 49_000), (35, 49_500), (35, 49_800)];
+        let rows = no_events(&[(35, 50_000), (35, 49_000), (35, 49_500), (35, 49_800)]);
         assert_eq!(find_misreads(&rows), Vec::<usize>::new());
     }
 
     #[test]
     fn keeps_an_ordinary_climb() {
-        let rows = vec![(35, 1_000), (35, 2_000), (36, 10), (36, 900)];
+        let rows = no_events(&[(35, 1_000), (35, 2_000), (36, 10), (36, 900)]);
         assert_eq!(find_misreads(&rows), Vec::<usize>::new());
     }
 

@@ -5,9 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::settings::{self, Atlas, Calibration, Identities, Template, UiMode};
 
-/// Good consecutive reads required before a profile is trusted to record.
-pub const VERIFY_READS: usize = 3;
-
 /// One calibration set, scoped to a client size *and* a UI Size option.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
