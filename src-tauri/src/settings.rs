@@ -50,7 +50,7 @@ fn parse_object(raw: &str) -> Option<Value> {
         .filter(Value::is_object)
 }
 
-fn update<F>(apply: F) -> Result<(), String>
+pub fn update<F>(apply: F) -> Result<(), String>
 where
     F: FnOnce(&mut Map<String, Value>),
 {
@@ -91,13 +91,6 @@ where
     crate::fsutil::write_atomic(&file, text.as_bytes()).map_err(|e| e.to_string())?;
     *cache = Some((file, raw));
     Ok(())
-}
-
-pub fn update_settings<F>(apply: F) -> Result<(), String>
-where
-    F: FnOnce(&mut Map<String, Value>),
-{
-    update(apply)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -274,140 +267,6 @@ pub fn clear_overlay_position() -> Result<(), String> {
     update(|object| {
         object.remove("overlayPosition");
     })
-}
-
-pub fn load_calibration() -> Calibration {
-    crate::profile::active()
-        .map(|profile| profile.calibration)
-        .unwrap_or_default()
-}
-
-pub fn save_calibration(calibration: &Calibration) -> Result<(), String> {
-    let calibration = calibration.clone();
-    crate::profile::update(move |profile| {
-        profile.calibration = calibration;
-    })
-    .map(|_| ())
-}
-
-pub fn load_atlas() -> StoredAtlas {
-    let mut atlas = crate::profile::active()
-        .map(|profile| profile.atlas)
-        .unwrap_or_default();
-    if atlas.cell_w == 0 || atlas.cell_h == 0 {
-        atlas.cell_w = crate::ocr::CELL_W as u32;
-        atlas.cell_h = crate::ocr::CELL_H as u32;
-    }
-    atlas
-}
-
-pub fn save_atlas(atlas: &StoredAtlas) -> Result<(), String> {
-    let atlas = atlas.clone();
-    crate::profile::update(move |profile| {
-        profile.atlas = atlas;
-    })
-    .map(|_| ())
-}
-
-pub fn load_map_atlas() -> StoredAtlas {
-    let mut atlas = crate::profile::active()
-        .map(|profile| profile.map_atlas)
-        .unwrap_or_default();
-    if atlas.cell_w == 0 || atlas.cell_h == 0 {
-        atlas.cell_w = crate::ocr::CELL_W as u32;
-        atlas.cell_h = crate::ocr::CELL_H as u32;
-    }
-    atlas
-}
-
-pub fn save_map_atlas(atlas: &StoredAtlas) -> Result<(), String> {
-    let atlas = atlas.clone();
-    crate::profile::update(move |profile| {
-        profile.map_atlas = atlas;
-    })
-    .map(|_| ())
-}
-
-/// The name/job text atlas. Seeded from the Windows Arial face; the taught
-/// fingerprints stay as the exact fallback.
-pub fn load_identity_atlas() -> StoredAtlas {
-    let mut atlas = crate::profile::active()
-        .map(|profile| profile.identity_atlas)
-        .unwrap_or_default();
-    if atlas.cell_w == 0 || atlas.cell_h == 0 {
-        atlas.cell_w = crate::ocr::CELL_W as u32;
-        atlas.cell_h = crate::ocr::CELL_H as u32;
-    }
-    atlas
-}
-
-pub fn save_identity_atlas(atlas: &StoredAtlas) -> Result<(), String> {
-    let atlas = atlas.clone();
-    crate::profile::update(move |profile| {
-        profile.identity_atlas = atlas;
-    })
-    .map(|_| ())
-}
-
-pub fn load_level_atlas() -> StoredAtlas {
-    let mut atlas = crate::profile::active()
-        .map(|profile| profile.level_atlas)
-        .unwrap_or_default();
-    if atlas.cell_w == 0 || atlas.cell_h == 0 {
-        atlas.cell_w = crate::ocr::CELL_W as u32;
-        atlas.cell_h = crate::ocr::CELL_H as u32;
-    }
-    atlas
-}
-
-pub fn save_level_atlas(atlas: &StoredAtlas) -> Result<(), String> {
-    let atlas = atlas.clone();
-    crate::profile::update(move |profile| {
-        profile.level_atlas = atlas;
-    })
-    .map(|_| ())
-}
-
-pub fn load_maps() -> Vec<Template> {
-    crate::profile::active()
-        .map(|profile| profile.maps)
-        .unwrap_or_default()
-}
-
-pub fn save_maps(maps: &[Template]) -> Result<(), String> {
-    let maps = maps.to_vec();
-    crate::profile::update(move |profile| {
-        profile.maps = maps;
-    })
-    .map(|_| ())
-}
-
-pub fn load_streets() -> Vec<Template> {
-    crate::profile::active()
-        .map(|profile| profile.streets)
-        .unwrap_or_default()
-}
-
-pub fn save_streets(streets: &[Template]) -> Result<(), String> {
-    let streets = streets.to_vec();
-    crate::profile::update(move |profile| {
-        profile.streets = streets;
-    })
-    .map(|_| ())
-}
-
-pub fn load_identities() -> Identities {
-    crate::profile::active()
-        .map(|profile| profile.identities)
-        .unwrap_or_default()
-}
-
-pub fn save_identities(identities: &Identities) -> Result<(), String> {
-    let identities = identities.clone();
-    crate::profile::update(move |profile| {
-        profile.identities = identities;
-    })
-    .map(|_| ())
 }
 
 pub fn to_hex(bytes: &[u8]) -> String {

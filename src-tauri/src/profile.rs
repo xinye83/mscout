@@ -300,6 +300,32 @@ where
     Ok(current.profile.clone())
 }
 
+/// One part of the active profile, cloned on its own ([`active`] clones the
+/// whole profile, every atlas included). The part's default when no profile is
+/// active.
+pub fn read<T: Clone + Default>(part: impl FnOnce(&Profile) -> &T) -> T {
+    lock(&ACTIVE)
+        .as_ref()
+        .map(|active| part(&active.profile).clone())
+        .unwrap_or_default()
+}
+
+/// [`read`] for an atlas, with the legacy cell size filled in for sets written
+/// before it was stored.
+pub fn read_atlas(part: impl FnOnce(&Profile) -> &StoredAtlas) -> StoredAtlas {
+    let mut atlas = read(part);
+    if atlas.cell_w == 0 || atlas.cell_h == 0 {
+        atlas.cell_w = crate::ocr::CELL_W as u32;
+        atlas.cell_h = crate::ocr::CELL_H as u32;
+    }
+    atlas
+}
+
+/// Change the active profile and save it.
+pub fn write(apply: impl FnOnce(&mut Profile)) -> Result<(), String> {
+    update(apply).map(|_| ())
+}
+
 /// [`update`], but only while `key` is still the active profile.
 ///
 /// The engine computes a seed from the profile it activated at the start of a
@@ -405,7 +431,7 @@ pub fn migrate_legacy() -> Option<String> {
         return None;
     }
 
-    let _ = settings::update_settings(|object| {
+    let _ = settings::update(|object| {
         for key in ["calibration", "atlas", "maps", "identities"] {
             object.remove(key);
         }

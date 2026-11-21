@@ -1717,7 +1717,7 @@ fn match_map(
     // snaps to a name that was taught explicitly. Both outcomes come from the
     // learned letter atlas, so they are reported as `glyphs` — a support reader
     // must not mistake them for OCR text or for the rendered-name DTW above.
-    let map_atlas = Atlas::from_settings(&settings::load_map_atlas());
+    let map_atlas = Atlas::from_settings(&profile::read_atlas(|p| &p.map_atlas));
     if let Some(lines) = ocr::read_map_text(frame, &map_atlas) {
         // The map name is the bottom line; the street is matched separately.
         let text = lines.last().cloned().unwrap_or_default();
@@ -2487,7 +2487,7 @@ pub fn get_profile() -> Profile {
         return profile;
     }
 
-    let identities = settings::load_identities();
+    let identities = profile::read(|p| &p.identities);
     Profile {
         name: identities.name.map(|template| template.label),
         job: identities.job.map(|template| template.label),
@@ -3237,7 +3237,7 @@ mod tests {
             None => println!("minimap label not detected"),
         }
 
-        let streets = settings::load_streets();
+        let streets = profile::read(|p| &p.streets);
         match read_frame(
             &frame,
             &calibration,

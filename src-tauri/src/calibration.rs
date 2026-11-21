@@ -77,13 +77,13 @@ fn digit_coverage(atlas: &Atlas) -> String {
 /// disk, so the window cannot report a different source than the reader uses.
 fn learning_info(stored: &settings::StoredAtlas) -> LearningInfo {
     let atlas = Atlas::from_settings(stored);
-    let level_stored = settings::load_level_atlas();
+    let level_stored = profile::read_atlas(|p| &p.level_atlas);
     let level_atlas = Atlas::from_settings(&level_stored);
     let level_size = level_stored.common_glyph_size();
-    let map_atlas = Atlas::from_settings(&settings::load_map_atlas());
-    let identity_stored = settings::load_identity_atlas();
+    let map_atlas = Atlas::from_settings(&profile::read_atlas(|p| &p.map_atlas));
+    let identity_stored = profile::read_atlas(|p| &p.identity_atlas);
     let identity_atlas = Atlas::from_settings(&identity_stored);
-    let identities = settings::load_identities();
+    let identities = profile::read(|p| &p.identities);
 
     LearningInfo {
         learned: atlas.learned(),
@@ -91,7 +91,7 @@ fn learning_info(stored: &settings::StoredAtlas) -> LearningInfo {
         level_learned: level_atlas.learned(),
         level_coverage: digit_coverage(&level_atlas),
         map_letters: map_atlas.learned(),
-        maps: settings::load_maps()
+        maps: profile::read(|p| &p.maps)
             .into_iter()
             .map(|template| template.label)
             .collect(),
@@ -153,7 +153,7 @@ pub fn get_calibration(state: State<'_, window_target::TargetState>) -> Calibrat
             }
         }
     }
-    settings::load_calibration()
+    profile::read(|p| &p.calibration)
 }
 
 #[tauri::command]
@@ -195,13 +195,13 @@ pub fn set_calibration(
         name,
         job,
     };
-    settings::save_calibration(&calibration)?;
+    profile::write(|p| p.calibration = calibration.clone())?;
     Ok(calibration)
 }
 
 #[tauri::command]
 pub fn get_learning() -> LearningInfo {
-    learning_info(&settings::load_atlas())
+    learning_info(&profile::read_atlas(|p| &p.atlas))
 }
 
 /// Make the profile for this preview frame active, so every teach/probe command
@@ -225,7 +225,7 @@ pub fn learn_level_atlas(serial: u64, text: String) -> Result<LearningInfo, Stri
 fn learn_region(serial: u64, text: String, target: &str) -> Result<LearningInfo, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
-    let calibration = settings::load_calibration();
+    let calibration = profile::read(|p| &p.calibration);
     let level = target == "level";
     let (region, what) = if level {
         (calibration.level, "level")
@@ -246,9 +246,9 @@ fn learn_region(serial: u64, text: String, target: &str) -> Result<LearningInfo,
     // Each readout owns its atlas — see `Profile::level_atlas`. Learning level
     // glyphs into the EXP atlas used to change how EXP was read, and vice versa.
     let mut atlas = if level {
-        Atlas::from_settings(&settings::load_level_atlas())
+        Atlas::from_settings(&profile::read_atlas(|p| &p.level_atlas))
     } else {
-        Atlas::from_settings(&settings::load_atlas())
+        Atlas::from_settings(&profile::read_atlas(|p| &p.atlas))
     };
     if let Err(error) = atlas.learn(&text, &gray) {
         // Without this the failed teach left no trace at all, which is why a box
@@ -258,9 +258,9 @@ fn learn_region(serial: u64, text: String, target: &str) -> Result<LearningInfo,
     }
     let stored = atlas.to_settings();
     if level {
-        settings::save_level_atlas(&stored)?;
+        profile::write(|p| p.level_atlas = stored.clone())?;
     } else {
-        settings::save_atlas(&stored)?;
+        profile::write(|p| p.atlas = stored.clone())?;
     }
     log(&format!(
         "learn_region: atlas now {} glyphs",
@@ -277,7 +277,7 @@ fn learn_region(serial: u64, text: String, target: &str) -> Result<LearningInfo,
 pub fn seed_atlas(serial: u64) -> Result<LearningInfo, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
-    let calibration = settings::load_calibration();
+    let calibration = profile::read(|p| &p.calibration);
     let region = calibration
         .exp
         .filter(Region::is_usable)
@@ -285,7 +285,7 @@ pub fn seed_atlas(serial: u64) -> Result<LearningInfo, String> {
     let gray = ocr::crop_gray(&frame, region).ok_or("the EXP box is outside the window")?;
     let dir = settings::mscw_dir().ok_or("choose your MapleStory MSCW folder first")?;
     let (stored, height) = crate::game_font::seed_exp_atlas(&gray, std::path::Path::new(&dir))?;
-    settings::save_atlas(&stored)?;
+    profile::write(|p| p.atlas = stored.clone())?;
 
     // The level box is optional, but when it is drawn and reads digits, seed it
     // too — it is the same font drawn wider, so it needs no teaching.
@@ -293,7 +293,7 @@ pub fn seed_atlas(serial: u64) -> Result<LearningInfo, String> {
     if let Some(level_region) = calibration.level.filter(Region::is_usable) {
         match crate::game_font::seed_level_best(&frame, level_region, std::path::Path::new(&dir)) {
             Some((level_stored, (w, h), _text)) => {
-                settings::save_level_atlas(&level_stored)?;
+                profile::write(|p| p.level_atlas = level_stored.clone())?;
                 level_note = format!(", level {w}x{h}");
             }
             None => log("seed_atlas: level not seeded"),
@@ -302,7 +302,7 @@ pub fn seed_atlas(serial: u64) -> Result<LearningInfo, String> {
 
     // Name/job are Arial and can be seeded from the same frozen frame. A taught
     // set is left alone; a font set is refreshed, since the size is measured.
-    let identity_stored = settings::load_identity_atlas();
+    let identity_stored = profile::read_atlas(|p| &p.identity_atlas);
     let mut identity_note = String::new();
     if identity_stored.glyphs.is_empty() || identity_stored.source == "font" {
         for region in [calibration.job, calibration.name] {
@@ -313,7 +313,7 @@ pub fn seed_atlas(serial: u64) -> Result<LearningInfo, String> {
                 continue;
             };
             if let Some((identity, px)) = crate::font_seed::seed_identity(&identity_gray) {
-                settings::save_identity_atlas(&identity)?;
+                profile::write(|p| p.identity_atlas = identity.clone())?;
                 identity_note = format!(", name/job {px}px");
                 break;
             }
@@ -337,14 +337,14 @@ pub fn teach_map(serial: u64, name: String) -> Result<LearningInfo, String> {
 
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
-    let calibration = settings::load_calibration();
+    let calibration = profile::read(|p| &p.calibration);
 
     // The map is identified by the whole two-line label, so fingerprint that. The
     // label stored is just the map name; the street is taught and matched on its own.
     let gray = ocr::map_label(&frame, calibration.map_box())
         .ok_or("could not find the minimap — draw the map box first")?;
 
-    let mut maps = settings::load_maps();
+    let mut maps = profile::read(|p| &p.maps);
     maps.retain(|template| template.label != name);
     maps.push(settings::Template {
         label: name.clone(),
@@ -352,20 +352,20 @@ pub fn teach_map(serial: u64, name: String) -> Result<LearningInfo, String> {
         h: gray.h as u32,
         pixels: settings::to_hex(&gray.px),
     });
-    settings::save_maps(&maps)?;
+    profile::write(|p| p.maps = maps.clone())?;
 
     // Learn the map-name line (the bottom one) into the label letter atlas.
     if let Some(line) = ocr::map_label_lines(&frame).and_then(|lines| lines.last().cloned()) {
-        let mut map_atlas = Atlas::from_settings(&settings::load_map_atlas());
+        let mut map_atlas = Atlas::from_settings(&profile::read_atlas(|p| &p.map_atlas));
         let _ = map_atlas.learn_text(&name, &line);
-        settings::save_map_atlas(&map_atlas.to_settings())?;
+        profile::write(|p| p.map_atlas = map_atlas.to_settings())?;
         log(&format!(
             "teach_map: learned letters {:?}",
-            Atlas::from_settings(&settings::load_map_atlas()).learned()
+            Atlas::from_settings(&profile::read_atlas(|p| &p.map_atlas)).learned()
         ));
     }
 
-    Ok(learning_info(&settings::load_atlas()))
+    Ok(learning_info(&profile::read_atlas(|p| &p.atlas)))
 }
 
 /// Taught separately from the map: a street is shared by several maps, so it is
@@ -380,7 +380,7 @@ pub fn teach_street(serial: u64, street: String) -> Result<LearningInfo, String>
 
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
-    let calibration = settings::load_calibration();
+    let calibration = profile::read(|p| &p.calibration);
 
     let region = calibration
         .street
@@ -388,7 +388,7 @@ pub fn teach_street(serial: u64, street: String) -> Result<LearningInfo, String>
         .ok_or("draw the street box first, then teach")?;
     let gray = ocr::crop_gray(&frame, region).ok_or("the street box is outside the window")?;
 
-    let mut streets = settings::load_streets();
+    let mut streets = profile::read(|p| &p.streets);
     streets.retain(|template| template.label != street);
     streets.push(settings::Template {
         label: street.clone(),
@@ -396,16 +396,16 @@ pub fn teach_street(serial: u64, street: String) -> Result<LearningInfo, String>
         h: gray.h as u32,
         pixels: settings::to_hex(&gray.px),
     });
-    settings::save_streets(&streets)?;
+    profile::write(|p| p.streets = streets.clone())?;
 
     // Learn the street line (the top one) into the label letter atlas.
     if let Some(line) = ocr::map_label_lines(&frame).and_then(|lines| lines.first().cloned()) {
-        let mut map_atlas = Atlas::from_settings(&settings::load_map_atlas());
+        let mut map_atlas = Atlas::from_settings(&profile::read_atlas(|p| &p.map_atlas));
         let _ = map_atlas.learn_text(&street, &line);
-        settings::save_map_atlas(&map_atlas.to_settings())?;
+        profile::write(|p| p.map_atlas = map_atlas.to_settings())?;
     }
 
-    Ok(learning_info(&settings::load_atlas()))
+    Ok(learning_info(&profile::read_atlas(|p| &p.atlas)))
 }
 
 /// A digit readout: each owns its own glyph atlas.
@@ -483,7 +483,7 @@ pub fn teach_identity(
 
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
-    let calibration = settings::load_calibration();
+    let calibration = profile::read(|p| &p.calibration);
     let region = match kind {
         IdentityBox::Name => calibration.name,
         IdentityBox::Job => calibration.job,
@@ -503,14 +503,14 @@ pub fn teach_identity(
         pixels: settings::to_hex(&gray.px),
     };
 
-    let mut identities = settings::load_identities();
+    let mut identities = profile::read(|p| &p.identities);
     match kind {
         IdentityBox::Name => identities.name = Some(template),
         IdentityBox::Job => identities.job = Some(template),
     }
-    settings::save_identities(&identities)?;
+    profile::write(|p| p.identities = identities.clone())?;
 
-    Ok(learning_info(&settings::load_atlas()))
+    Ok(learning_info(&profile::read_atlas(|p| &p.atlas)))
 }
 
 /// The calibration window's probe.
@@ -530,23 +530,23 @@ pub struct Probe {
 pub fn parse_probe(serial: u64) -> Result<Probe, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
-    let calibration = settings::load_calibration();
+    let calibration = profile::read(|p| &p.calibration);
     if !calibration.is_ready() {
         return Err("save the EXP box first".into());
     }
 
-    let exp_atlas = settings::load_atlas();
-    let level_atlas = settings::load_level_atlas();
-    let identity_atlas = settings::load_identity_atlas();
+    let exp_atlas = profile::read_atlas(|p| &p.atlas);
+    let level_atlas = profile::read_atlas(|p| &p.level_atlas);
+    let identity_atlas = profile::read_atlas(|p| &p.identity_atlas);
     let (readings, mut provenance, rejected) = match engine::read_frame_detailed(
         &frame,
         &calibration,
         &Atlas::from_settings(&exp_atlas),
         &Atlas::from_settings(&level_atlas),
         &Atlas::from_settings(&identity_atlas),
-        &settings::load_maps(),
-        &settings::load_streets(),
-        &settings::load_identities(),
+        &profile::read(|p| &p.maps),
+        &profile::read(|p| &p.streets),
+        &profile::read(|p| &p.identities),
     ) {
         Ok(readings) => {
             let provenance = readings.provenance.clone();
@@ -581,10 +581,10 @@ pub fn parse_probe(serial: u64) -> Result<Probe, String> {
 pub fn save_diagnostic(serial: u64) -> Result<String, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
-    let calibration = settings::load_calibration();
-    let exp_atlas = settings::load_atlas();
-    let level_atlas = settings::load_level_atlas();
-    let identity_atlas = settings::load_identity_atlas();
+    let calibration = profile::read(|p| &p.calibration);
+    let exp_atlas = profile::read_atlas(|p| &p.atlas);
+    let level_atlas = profile::read_atlas(|p| &p.level_atlas);
+    let identity_atlas = profile::read_atlas(|p| &p.identity_atlas);
     let started = std::time::Instant::now();
     // Where the stored atlases came from, stamped on every arm below: the frame
     // that failed to read is exactly the one where it matters whether the digits
@@ -603,9 +603,9 @@ pub fn save_diagnostic(serial: u64) -> Result<String, String> {
             &Atlas::from_settings(&exp_atlas),
             &Atlas::from_settings(&level_atlas),
             &Atlas::from_settings(&identity_atlas),
-            &settings::load_maps(),
-            &settings::load_streets(),
-            &settings::load_identities(),
+            &profile::read(|p| &p.maps),
+            &profile::read(|p| &p.streets),
+            &profile::read(|p| &p.identities),
         ) {
             Ok(mut readings) => {
                 stamp(&mut readings.provenance);
@@ -886,17 +886,17 @@ pub struct ExpGlyph {
 #[tauri::command]
 pub fn box_glyphs(serial: u64, kind: DigitBox) -> Result<Vec<ExpGlyph>, String> {
     let frame = cached_frame(serial)?;
-    let calibration = settings::load_calibration();
+    let calibration = profile::read(|p| &p.calibration);
     let level = kind == DigitBox::Level;
     let (region, atlas) = if level {
         (
             calibration.level,
-            Atlas::from_settings(&settings::load_level_atlas()),
+            Atlas::from_settings(&profile::read_atlas(|p| &p.level_atlas)),
         )
     } else {
         (
             calibration.exp,
-            Atlas::from_settings(&settings::load_atlas()),
+            Atlas::from_settings(&profile::read_atlas(|p| &p.atlas)),
         )
     };
     let region = region
@@ -955,9 +955,9 @@ pub fn label_glyph(
     // produced it will look for it.
     let level = kind == DigitBox::Level;
     let stored = if level {
-        settings::load_level_atlas()
+        profile::read_atlas(|p| &p.level_atlas)
     } else {
-        settings::load_atlas()
+        profile::read_atlas(|p| &p.atlas)
     };
     let source = stored.source.clone();
     let mut atlas = Atlas::from_settings(&stored);
@@ -971,9 +971,9 @@ pub fn label_glyph(
         source
     };
     if level {
-        settings::save_level_atlas(&updated)?;
+        profile::write(|p| p.level_atlas = updated.clone())?;
     } else {
-        settings::save_atlas(&updated)?;
+        profile::write(|p| p.atlas = updated.clone())?;
     }
     Ok(learning_info(&updated))
 }
@@ -1131,7 +1131,7 @@ pub struct LabelCrop {
 pub fn box_crop(serial: u64, kind: BoxKind) -> Result<LabelCrop, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
-    let calibration = settings::load_calibration();
+    let calibration = profile::read(|p| &p.calibration);
 
     let (gray, lines) = match kind {
         BoxKind::Street | BoxKind::Map => {
