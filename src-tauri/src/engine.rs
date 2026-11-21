@@ -511,7 +511,49 @@ fn anchor_overlay<R: Runtime>(
 }
 
 pub fn start<R: Runtime>(app: AppHandle<R>) {
-    std::thread::spawn(move || run(app));
+    std::thread::spawn(move || supervise(app));
+}
+
+/// The longest wait before restarting the engine after a panic.
+const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(60);
+
+/// Run the engine loop, and restart it if it panics.
+///
+/// A panic (a poisoned lock reaching an `expect`, a bad index in a reader) used to
+/// end the thread silently: reading stopped while the overlay kept showing the
+/// last status. Now the panic is logged, the overlay and a notification say the
+/// capture is lost, and the loop starts again from a fresh state, waiting longer
+/// after each consecutive failure so a panic on every tick cannot spin.
+fn supervise<R: Runtime>(app: AppHandle<R>) {
+    let mut backoff = Duration::from_secs(1);
+    loop {
+        let started = std::time::Instant::now();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(app.clone())));
+        let Err(payload) = outcome else {
+            return;
+        };
+        let reason = format!("reader crashed and restarted: {}", panic_message(&*payload));
+        crate::calibration::log(&reason);
+        let _ = app.emit("capture-status", CaptureStatus::lost(reason.clone()));
+        crate::notify::capture_lost(&reason);
+        // A run that lasted a while was a one-off; start the backoff again.
+        if started.elapsed() > RESTART_BACKOFF_MAX {
+            backoff = Duration::from_secs(1);
+        }
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(RESTART_BACKOFF_MAX);
+    }
+}
+
+/// The text of a panic payload (`panic!` with a literal or a formatted message).
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_string()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "unknown panic".to_string()
+    }
 }
 
 fn run<R: Runtime>(app: AppHandle<R>) {
@@ -3166,5 +3208,14 @@ mod tests {
             Ok(readings) => println!("{readings:?}"),
             Err(error) => println!("read failed: {error}"),
         }
+    }
+
+    #[test]
+    fn a_panic_payload_becomes_its_message() {
+        let literal = std::panic::catch_unwind(|| panic!("poisoned")).unwrap_err();
+        assert_eq!(panic_message(&*literal), "poisoned");
+        let formatted =
+            std::panic::catch_unwind(|| panic!("index {} out of range", 7)).unwrap_err();
+        assert_eq!(panic_message(&*formatted), "index 7 out of range");
     }
 }
