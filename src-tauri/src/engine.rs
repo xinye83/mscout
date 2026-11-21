@@ -95,7 +95,7 @@ pub struct Sample {
     pub exp: i64,
     pub pct: f64,
     pub map: String,
-    pub state: String,
+    pub state: guard::State,
     pub conf: f64,
     /// True when the minimap is collapsed to its title bar, so no map name is on
     /// screen. Absent in older rows, so it defaults to false.
@@ -991,7 +991,7 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
             exp: readings.exp,
             pct: readings.pct,
             map: readings.map,
-            state: state.as_str().into(),
+            state,
             conf: readings.conf,
             map_hidden: readings.map_hidden,
             name: readings.name.clone(),

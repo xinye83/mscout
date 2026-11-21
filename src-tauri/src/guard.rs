@@ -37,19 +37,12 @@ pub struct Point {
     pub name: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Whether EXP moved on this reading. Recorded as `"gaining"` / `"idle"`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum State {
     Gaining,
     Idle,
-}
-
-impl State {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            State::Gaining => "gaining",
-            State::Idle => "idle",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -378,5 +371,11 @@ mod tests {
             judge(&mut guard, at(35, 21_476)),
             Verdict::Reject(_)
         ));
+    }
+
+    #[test]
+    fn the_state_is_recorded_in_the_existing_format() {
+        assert_eq!(serde_json::to_value(State::Gaining).unwrap(), "gaining");
+        assert_eq!(serde_json::to_value(State::Idle).unwrap(), "idle");
     }
 }
