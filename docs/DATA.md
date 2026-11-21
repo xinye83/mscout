@@ -211,4 +211,4 @@ When the engine first sees a client size with no `data/profiles/<W>x<H>[@mode].j
 
 ## Mock data
 
-`node scripts/gen-mock.mjs` writes three days of plausible rows for UI work. They are indistinguishable in format from real captures — delete `data/samples/*.jsonl` before recording real play.
+`node scripts/gen-mock.mjs` writes three days of plausible rows for UI work into `data-mock/samples/`, or `$MSCOUT_DATA_DIR/samples/` when that is set. The rows are indistinguishable in format from real captures, so the script refuses the real `data/` folder and refuses to overwrite any existing day file. Run the app with `MSCOUT_DATA_DIR` pointing at the mock folder to view them; delete that folder to regenerate.

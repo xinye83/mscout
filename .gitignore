@@ -10,6 +10,9 @@ src-tauri/gen/schemas/
 # captured samples and any backups. Everything here is machine-specific.
 data/
 
+# Mock samples from scripts/gen-mock.mjs
+data-mock/
+
 # Local agent/tooling state
 .commandcode/
 

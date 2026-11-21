@@ -84,7 +84,7 @@ data/                runtime data (gitignored — personal, machine-specific)
 
 ## Dev helper
 
-`node scripts/gen-mock.mjs` writes three days of plausible samples into `data/samples/` so the chart and history window can be exercised without the game. Delete `data/samples/*.jsonl` afterwards so mock rows never mix with real captures.
+`node scripts/gen-mock.mjs` writes three days of plausible samples into `data-mock/samples/` (or `$MSCOUT_DATA_DIR/samples/`) so the chart and history window can be exercised without the game. Point the app at that folder with `$env:MSCOUT_DATA_DIR = "$PWD\data-mock"` before `npm run tauri dev`. The script refuses the real `data/` folder and never overwrites an existing day file, so real captures are never touched.
 
 ## License
 

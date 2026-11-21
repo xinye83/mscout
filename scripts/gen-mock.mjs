@@ -1,13 +1,26 @@
-// Dev-only mock data generator. Writes plausible Classic World samples to data/samples/.
-// Run: node scripts/gen-mock.mjs
+// Dev-only mock data generator. Writes plausible Classic World samples so the
+// chart and history window can be exercised without the game.
+//
+// It never touches real captures: it writes to $MSCOUT_DATA_DIR/samples, or to
+// data-mock/samples when that is unset, refuses the real data/ folder, and
+// refuses to overwrite any existing day file. Run the app against the same
+// folder to see the rows:
+//
+//   node scripts/gen-mock.mjs
+//   $env:MSCOUT_DATA_DIR = "$PWD\data-mock"; npm run tauri dev
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const outDir = join(root, "data", "samples");
-mkdirSync(outDir, { recursive: true });
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const dataDir = resolve(process.env.MSCOUT_DATA_DIR || join(root, "data-mock"));
+if (dataDir.toLowerCase() === resolve(root, "data").toLowerCase()) {
+  console.error(`Refusing to write mock rows into the real data folder (${dataDir}).`);
+  console.error("Unset MSCOUT_DATA_DIR or point it at a separate folder.");
+  process.exit(1);
+}
+const outDir = join(dataDir, "samples");
 
 const CONFIRMED = {
   1: 15, 2: 34, 3: 57, 4: 92, 5: 135, 6: 372, 7: 560, 8: 840, 9: 1242,
@@ -100,6 +113,9 @@ const sessions = [
   { daysAgo: 0, hours: 1.5, step: 1 },
 ];
 
+// Collect every session first: a session that runs past midnight spills into the
+// next day, and writing per session would let a later session clobber it.
+const byDay = new Map();
 for (const session of sessions) {
   const start = new Date(now);
   start.setDate(start.getDate() - session.daysAgo);
@@ -110,16 +126,28 @@ for (const session of sessions) {
   const limitedEnd = Math.min(endSec, Math.floor(now.getTime() / 1000));
 
   const rows = simulate(startSec, limitedEnd, session.step, MAPS[session.daysAgo % MAPS.length]);
-
-  const byDay = new Map();
   for (const row of rows) {
     const key = dayStamp(new Date(row.t * 1000));
     if (!byDay.has(key)) byDay.set(key, []);
     byDay.get(key).push(row);
   }
-
-  for (const [day, list] of byDay) {
-    writeFileSync(join(outDir, `${day}.jsonl`), list.map((r) => JSON.stringify(r)).join("\n") + "\n");
-    console.log(`${day}: ${list.length} samples, lv ${list[0].lv} -> ${list[list.length - 1].lv}`);
-  }
 }
+
+const targets = [...byDay.keys()].map((day) => join(outDir, `${day}.jsonl`));
+const existing = targets.filter((path) => existsSync(path));
+if (existing.length > 0) {
+  console.error("Refusing to overwrite existing day files:");
+  for (const path of existing) console.error(`  ${path}`);
+  console.error(`Delete ${outDir} (mock data only) and run again.`);
+  process.exit(1);
+}
+
+mkdirSync(outDir, { recursive: true });
+for (const [day, list] of [...byDay].sort(([a], [b]) => a.localeCompare(b))) {
+  list.sort((a, b) => a.t - b.t);
+  writeFileSync(join(outDir, `${day}.jsonl`), list.map((r) => JSON.stringify(r)).join("\n") + "\n", {
+    flag: "wx",
+  });
+  console.log(`${day}: ${list.length} samples, lv ${list[0].lv} -> ${list[list.length - 1].lv}`);
+}
+console.log(`Wrote mock samples to ${outDir}`);
