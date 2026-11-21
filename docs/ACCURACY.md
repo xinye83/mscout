@@ -4,7 +4,9 @@ What the capture readers actually score on the committed corpus, published with
 the command that produced the numbers and the limits of the measurement stated
 next to them.
 
-Last measured: **2026-11-16**, MScout `0.6.0` (no version bump), corpus at
+Re-run **2026-11-21** on `0.7.0` plus the post-release storage, guard and reader fixes, with the local build runner's temp data folder: unchanged, 18/18 exact and the hold-out exact.
+
+Last measured in full below: **2026-11-16**, MScout `0.6.0` (no version bump), corpus at
 [`../src-tauri/testdata`](../src-tauri/testdata): 6 `WxH@mode` pairs, 18 frame
 cases. This is one dated run of one small corpus — not a release claim, and not a
 general accuracy estimate for the reader.

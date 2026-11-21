@@ -100,7 +100,7 @@ product features.
 - [ ] **UI Size auto-detection.** Choose the box set from the status bar instead
   of the manual setting; fall back to manual when the match is not unique. The
   manual setting remains authoritative until this ships.
-- [ ] **Version-bump script.** One command to set the project version everywhere
+- [x] **Version-bump script** (`scripts/bump-version.mjs`). One command to set the project version everywhere
   it is stored: `src-tauri/Cargo.toml`, the `mscout` entry in
   `src-tauri/Cargo.lock`, `package.json`, the root/workspace entries in
   `package-lock.json`, and `src-tauri/tauri.conf.json`; optionally move the

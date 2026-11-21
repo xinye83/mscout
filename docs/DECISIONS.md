@@ -31,6 +31,7 @@ Consequence: a long break visibly drags the rate down and it takes one window le
 
 ## D7 — Windows: 1 min (solid), 5 min (faint), 30 min (ETA)
 1-minute is the responsive line; 5-minute is the stable trend; 30-minute drives the ETA so the number does not flicker.
+*Superseded in part by D16:* the prominent rate and the ETA now use the 5-minute average.
 Consequence: ETA shows `—` until 30 minutes of clean data exist.
 
 ## D8 — Idle and not-recording are different states
@@ -66,6 +67,7 @@ The same character is stored once per size: EXP, level and HP/MP use different f
 Consequence: learning is per-resolution and per-font-size; coverage is reported per character, so a digit visually present only at another size still needs a variant from the target ROI.
 
 ## D15 — ETA requires a full 30-minute baseline and is hidden while idle
+*Superseded in part by D16:* the ETA source is now the 5-minute average; the full-window rule below still applies to every window.
 `rateOver` now requires a sample at or before `now − window`, so the 30-minute rate is not computed from a few seconds of data at session start. While there has been no gain for two minutes, the ETA is shown as `—` rather than climbing as the 30-minute rate decays.
 Consequence: the ETA can be blank for the first half hour and during breaks; rates and the chart still show the wall-clock decay, which is intentional (D6).
 

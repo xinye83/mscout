@@ -4,7 +4,7 @@ A local, read-only companion overlay for **MapleStory Classic World**. It watche
 
 Target is Classic World specifically — not original MapleStory, not a pre-Big Bang private server. Formulas, EXP tables, map lists and level cap all come from Classic World data (cap 100, four jobs, 2nd job ceiling).
 
-**Implementation status (2026-11-16, 0.6.0 work):** WGC capture, calibration, HUD-atlas digit seeding, bitmap matching, map/name/job text and JSONL storage are implemented. 0.6.0 adds 1920×1080 Default and Filtered: both pairs are calibrated from shipped boxes and read the saved-frame corpus exactly, using the saturation-aware level key and Windows OCR fallbacks for the filtered identity/map label. 1366×768 remains supported in all three UI sizes, and 1920×1080 Ideal is unchanged. Remaining work is listed in [docs/ROADMAP.md](ROADMAP.md), rationale in [docs/DECISIONS.md](DECISIONS.md).
+**Implementation status (2026-11-21, 0.7.0):** 0.7.0 adds a closed job vocabulary and the 0.7 storage and reader fixes (deaths recorded as events, atomic writes, per-level EXP rows for Lv 50–89). Earlier: WGC capture, calibration, HUD-atlas digit seeding, bitmap matching, map/name/job text and JSONL storage are implemented. 0.6.0 adds 1920×1080 Default and Filtered: both pairs are calibrated from shipped boxes and read the saved-frame corpus exactly, using the saturation-aware level key and Windows OCR fallbacks for the filtered identity/map label. 1366×768 remains supported in all three UI sizes, and 1920×1080 Ideal is unchanged. Remaining work is listed in [docs/ROADMAP.md](ROADMAP.md), rationale in [docs/DECISIONS.md](DECISIONS.md).
 
 ---
 
@@ -200,7 +200,7 @@ Collapsed state (default), roughly 300 × 140 px:
 - Level and percentage use tabular figures so updating digits do not shift the layout.
 - Thin EXP bar, because a percentage alone does not read at a glance.
 - 5-minute average rate and ETA are the two prominent numbers.
-- Character name and job appear under the map once taught (bitmap fingerprints, not OCR).
+- Character name and job appear under the map: read as Arial text (§4.2), with a taught fingerprint as the exact fallback.
 - Optional 15-minute sparkline, shape only, no axes.
 - No buttons in this state.
 
@@ -242,6 +242,8 @@ Behavior:
 ## 9. History window
 
 A normal, resizable, non-overlay window opened by hotkey or tray. It is read-only: the JSONL files remain the source of truth.
+
+*Status:* the window ships the 1/7/30-day presets, the EXP chart with gap breaks, a range summary and the repair button. The fidelity badge, rate lines, markers, zoom/pan/brush and the All/Custom ranges below are not built yet (see ROADMAP).
 
 Layout, top to bottom:
 
