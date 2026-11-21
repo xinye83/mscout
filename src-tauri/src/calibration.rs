@@ -156,12 +156,6 @@ pub fn get_calibration(state: State<'_, window_target::TargetState>) -> Calibrat
     settings::load_calibration()
 }
 
-/// The calibration set for a specific client size, without switching to it.
-#[tauri::command]
-pub fn calibration_for(client_w: u32, client_h: u32) -> Option<Calibration> {
-    profile::load(client_w, client_h).map(|profile| profile.calibration)
-}
-
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // the IPC payload is one flat object per box
 pub fn set_calibration(
@@ -870,11 +864,6 @@ pub fn box_glyphs(serial: u64, kind: String) -> Result<Vec<ExpGlyph>, String> {
         .collect())
 }
 
-#[tauri::command]
-pub fn exp_glyphs(serial: u64) -> Result<Vec<ExpGlyph>, String> {
-    box_glyphs(serial, "exp".into())
-}
-
 /// Label one shape as a character. The native bitmap comes straight from
 /// `box_glyphs`, so the exact pixels the player looked at are what gets stored —
 /// no re-cropping, which would reject one-pixel shapes like `.`.
@@ -926,15 +915,6 @@ pub fn label_glyph(
         settings::save_atlas(&updated)?;
     }
     Ok(learning_info(&updated))
-}
-
-/// Forget every taught map fingerprint for this size, so stale or bad ones can be
-/// re-taught (e.g. after the label crop changed).
-#[tauri::command]
-pub fn clear_maps(client_w: u32, client_h: u32) -> Result<LearningInfo, String> {
-    profile::activate(client_w, client_h)?;
-    crate::profile::update(|profile| profile.maps.clear())?;
-    Ok(learning_info(&settings::load_atlas()))
 }
 
 /// Restore a size to its shipped preset: the boxes are replaced and both digit

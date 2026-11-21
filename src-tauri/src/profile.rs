@@ -133,7 +133,7 @@ fn parse_profile(text: &str) -> Option<Profile> {
     Some(profile)
 }
 
-/// The read half of [`load_for_mode`]: parse a profile file and keep it only if
+/// The read half of [`load_or_quarantine`]: parse a profile file and keep it only if
 /// it is for `client_w`×`client_h`, with the *file name*'s UI mode forced on it.
 ///
 /// Split out from the disk half so the upgrade fixtures can exercise the code
@@ -149,11 +149,9 @@ fn parse_for_mode(text: &str, client_w: u32, client_h: u32, ui_mode: UiMode) -> 
     Some(profile)
 }
 
-/// The set for the client size under the UI Size currently selected.
-pub fn load(client_w: u32, client_h: u32) -> Option<Profile> {
-    load_for_mode(client_w, client_h, settings::ui_mode())
-}
-
+/// Read a saved set without quarantining a bad file. Tests and probes only; the
+/// app goes through [`load_or_quarantine`].
+#[cfg(test)]
 pub fn load_for_mode(client_w: u32, client_h: u32, ui_mode: UiMode) -> Option<Profile> {
     let path = path_for(client_w, client_h, ui_mode).ok()?;
     let text = std::fs::read_to_string(path).ok()?;
@@ -596,7 +594,7 @@ mod tests {
 
     /// Load a fixture through the code that runs on load: `parse_for_mode`, with
     /// the client size and the UI mode read out of the file name exactly as
-    /// `load_for_mode` reads them. The disk half of `load_for_mode` is
+    /// `load_or_quarantine` reads them. The disk half of `load_or_quarantine` is
     /// deliberately not exercised — it would need a data root — but the size
     /// check and the filename-authoritative override are the production lines,
     /// not a copy of them.
@@ -920,7 +918,7 @@ mod tests {
     /// The file name decides the UI mode, not the `uiMode` field: the bare name
     /// is Default, `@filtered` and `@ideal` are the others, and `path_for` writes
     /// exactly the name each fixture stands in for. Every assertion goes through
-    /// `parse_for_mode`, the code `load_for_mode` runs after reading the file, so
+    /// `parse_for_mode`, the code `load_or_quarantine` runs after reading the file, so
     /// dropping or reordering the override there fails this test.
     #[test]
     fn file_name_is_authoritative_for_ui_mode() {

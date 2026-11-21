@@ -100,11 +100,6 @@ fn test_data_dir() -> PathBuf {
     .clone()
 }
 
-#[tauri::command]
-fn append_sample(record: Value) -> Result<(), String> {
-    samples::append(&record)
-}
-
 /// Recorded rows in `[from, to]`. `bucket` (seconds) thins long ranges on the
 /// Rust side. Async, like the repair: a sync command runs on the main thread,
 /// and reading weeks of history there froze every window, the overlay included.
@@ -116,34 +111,6 @@ fn read_samples(from: i64, to: i64, bucket: Option<i64>) -> Result<Vec<Value>, S
 #[tauri::command(async)]
 fn repair_history() -> Result<samples::RepairSummary, String> {
     samples::repair()
-}
-
-#[tauri::command]
-fn get_settings() -> Result<Value, String> {
-    let path = data_dir()?.join("settings.json");
-    if !path.exists() {
-        return Ok(Value::Null);
-    }
-    let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&raw).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn set_settings(value: Value) -> Result<(), String> {
-    let Value::Object(replacement) = value else {
-        return Err("settings must be a JSON object".into());
-    };
-    settings::update_settings(move |object| *object = replacement)
-}
-
-#[tauri::command]
-fn set_interactive<R: Runtime>(app: AppHandle<R>, interactive: bool) -> Result<(), String> {
-    // Only records the override; the hover thread applies click-through, so this
-    // never pulls focus and never fights the hover state.
-    app.state::<OverlayState>()
-        .interactive
-        .store(interactive, Ordering::Relaxed);
-    Ok(())
 }
 
 fn cursor_position() -> (i32, i32) {
@@ -427,11 +394,7 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
-            append_sample,
             read_samples,
-            get_settings,
-            set_settings,
-            set_interactive,
             set_mode,
             resize_overlay,
             window_target::list_windows,
@@ -442,7 +405,6 @@ pub fn run() {
             calibration::capture_preview,
             calibration::save_diagnostic,
             calibration::get_calibration,
-            calibration::calibration_for,
             calibration::set_calibration,
             calibration::get_learning,
             calibration::learn_atlas,
@@ -457,10 +419,8 @@ pub fn run() {
             calibration::teach_identity,
             calibration::parse_probe,
             calibration::split_identity,
-            calibration::exp_glyphs,
             calibration::box_glyphs,
             calibration::label_glyph,
-            calibration::clear_maps,
             calibration::apply_preset,
             calibration::open_calibration,
             repair_history,
