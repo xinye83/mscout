@@ -570,16 +570,41 @@ fn open_history_on_main<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-fn register_shortcuts<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::Error>> {
+/// The global hotkeys, by the key pressed with Ctrl+Alt.
+const SHORTCUT_KEYS: [(Code, &str); 4] = [
+    (Code::KeyM, "M"),
+    (Code::KeyV, "V"),
+    (Code::KeyH, "H"),
+    (Code::KeyT, "T"),
+];
+
+/// Register every hotkey that is free. A hotkey another app already holds is
+/// skipped, not fatal: it used to abort startup, so one taken Ctrl+Alt
+/// combination stopped MScout from running at all. Returns the ones that failed.
+fn register_shortcuts<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
     let modifiers = Modifiers::CONTROL | Modifiers::ALT;
-    for code in [Code::KeyM, Code::KeyV, Code::KeyH, Code::KeyT] {
-        app.global_shortcut()
+    let mut failed = Vec::new();
+    for (code, key) in SHORTCUT_KEYS {
+        if let Err(error) = app
+            .global_shortcut()
             .register(Shortcut::new(Some(modifiers), code))
-            .map_err(|e| e.to_string())?;
+        {
+            failed.push(format!("Ctrl+Alt+{key} ({error})"));
+        }
     }
-    Ok(())
+    failed
+}
+
+/// The notice shown when some hotkeys could not be registered.
+fn shortcut_failure_notice(failed: &[String]) -> Option<String> {
+    (!failed.is_empty()).then(|| {
+        format!(
+            "Hotkeys in use by another app, so they are off: {}",
+            failed.join(", ")
+        )
+    })
 }
 
 fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
@@ -722,7 +747,11 @@ pub fn run() {
                 let _ = handle.emit("profile-migrated", key);
             }
 
-            register_shortcuts(&handle)?;
+            let failed = register_shortcuts(&handle);
+            if let Some(notice) = shortcut_failure_notice(&failed) {
+                calibration::log(&notice);
+                notify::notify(notify::Notice::Degraded(&notice));
+            }
             build_tray(&handle)?;
             engine::start(handle.clone());
             start_hover_interactivity(handle.clone());
@@ -838,5 +867,12 @@ mod tests {
         }
         let dir = data_dir().expect("data dir");
         assert!(dir.starts_with(std::env::temp_dir()), "{}", dir.display());
+    }
+
+    #[test]
+    fn a_taken_hotkey_is_reported_not_fatal() {
+        assert_eq!(shortcut_failure_notice(&[]), None);
+        let notice = shortcut_failure_notice(&["Ctrl+Alt+M (taken)".into()]).expect("notice");
+        assert!(notice.contains("Ctrl+Alt+M"), "{notice}");
     }
 }

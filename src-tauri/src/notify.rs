@@ -25,18 +25,21 @@ pub const APP_ID: &str = "MScout.Notifications";
 pub enum Notice<'a> {
     /// The game window is gone, minimised, or could not be captured.
     CaptureLost(&'a str),
+    /// Something at startup did not work but MScout carried on without it.
+    Degraded(&'a str),
 }
 
 impl Notice<'_> {
     fn title(&self) -> &'static str {
         match self {
             Notice::CaptureLost(_) => "MScout — not reading",
+            Notice::Degraded(_) => "MScout — running without a feature",
         }
     }
 
     fn body(&self) -> &str {
         match self {
-            Notice::CaptureLost(reason) => reason,
+            Notice::CaptureLost(reason) | Notice::Degraded(reason) => reason,
         }
     }
 }
