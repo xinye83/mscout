@@ -1,0 +1,44 @@
+{
+  "version": 3,
+  "added": "2026-11-15",
+  "verified": true,
+  "truth": {
+    "name": "Euroblood",
+    "job": "Page",
+    "level": 35,
+    "expText": "109,284[62.73%]",
+    "exp": 109284,
+    "pct": 62.73,
+    "street": "Victoria Road",
+    "map": "Parched Land"
+  },
+  "images": [
+    {
+      "id": "hud-main",
+      "kind": "hud",
+      "file": "hud-main.png",
+      "crop": { "x": 250, "y": 720, "w": 610, "h": 48 }
+    },
+    {
+      "id": "minimap-expanded",
+      "kind": "minimap",
+      "state": "expanded",
+      "file": "minimap-expanded.png",
+      "crop": { "x": 8, "y": 8, "w": 160, "h": 200 }
+    },
+    {
+      "id": "minimap-titlebar",
+      "kind": "minimap",
+      "state": "titlebar",
+      "file": "minimap-titlebar.png",
+      "crop": { "x": 8, "y": 8, "w": 160, "h": 200 }
+    },
+    {
+      "id": "minimap-folded",
+      "kind": "minimap",
+      "state": "folded",
+      "file": "minimap-folded.png",
+      "crop": { "x": 8, "y": 6, "w": 260, "h": 36 }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "version": 3,
+  "clientW": 1920,
+  "clientH": 1080,
+  "uiMode": "ideal",
+  "settingsDisplay": {
+    "resolution": "1920 x 1080",
+    "uiSize": "Ideal Ratio"
+  },
+  "settingsPanel": {
+    "file": "settings-panel.png",
+    "crop": { "x": 650, "y": 255, "w": 405, "h": 525 }
+  }
+}

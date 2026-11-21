@@ -9,5 +9,5 @@ encodes the release that wrote it plus the `data/profiles/` name the file stands
 in for (`[release]-<W>x<H>[@mode].json`).
 
 See `docs/DATA.md` ("Upgrade fixtures") and the `profile::tests` module in
-`src-tauri/src/profile.rs`. These files sit outside `testdata/` on purpose: the
-regression frame walker must never read them as image pairs.
+`src-tauri/src/profile.rs`. These files sit outside `testdata/frames/` on
+purpose: the frame walker must never read them as image pairs.

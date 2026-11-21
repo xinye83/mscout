@@ -294,7 +294,8 @@ digit sweep records the gap and the roadmap tracks the filtered atlas-variant
 work.
 
 Fixtures: `1920x1080@filtered/exp-21865.png`, `exp-26487.png` and
-`exp-36818.png`, seeded by the live `hud-low-percent.png`; hermetic tests
+`exp-36818.png`, seeded by the live `hud-low-percent.png` (since 0.8 under
+`testdata/crops/1920x1080@filtered/`, the last renamed `exp-2056-hud.png`); hermetic tests
 `ocr::tests::readout_accepts_a_near_miss_digit` and
 `ocr::tests::level_reads_a_near_miss_digit`; client-tier
 `game_font::tests::reads_filtered_exp_digit_sweep`.

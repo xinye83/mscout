@@ -1,0 +1,17 @@
+{
+  "version": 3,
+  "kind": "exp",
+  "added": "2026-11-16",
+  "verified": true,
+  "readCrop": {
+    "x": 650,
+    "y": 15,
+    "w": 155,
+    "h": 18
+  },
+  "truth": {
+    "expText": "2,056[1.06%]",
+    "exp": 2056,
+    "pct": 1.06
+  }
+}

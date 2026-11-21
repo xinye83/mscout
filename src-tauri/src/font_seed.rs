@@ -814,7 +814,7 @@ mod tests {
                 .join("\n")
         };
         for pair in ["1920x1080", "1920x1080@filtered"] {
-            let path = crate::regression::fixture_image(pair, "minimap-folded").0;
+            let path = crate::corpus::fixture_image(pair, "minimap-folded").0;
             let image = image::open(&path).expect("folded fixture").to_rgba8();
             let frame = crate::capture::Frame {
                 width: image.width(),
@@ -890,7 +890,7 @@ mod tests {
             .expect("MSCW dir");
         let dir = std::path::Path::new(&dir);
         for pair in ["1920x1080", "1920x1080@filtered"] {
-            let path = crate::regression::fixture_image(pair, "minimap-expanded").0;
+            let path = crate::corpus::fixture_image(pair, "minimap-expanded").0;
             let image = image::open(&path).expect("minimap fixture").to_rgba8();
             let frame = crate::capture::Frame {
                 width: image.width(),
@@ -1109,7 +1109,7 @@ mod tests {
             } else {
                 "1920x1080@filtered"
             };
-            let path = crate::regression::fixture_image(pair_key, "hud-main").0;
+            let path = crate::corpus::fixture_image(pair_key, "hud-main").0;
             let hud = image::open(&path).expect("hud fixture").to_rgba8();
             let frame = crate::capture::Frame {
                 width: hud.width(),

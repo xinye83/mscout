@@ -10,6 +10,8 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 
 mod calibration;
 mod capture;
+#[cfg(test)]
+mod corpus;
 mod engine;
 mod exp_table;
 mod font_seed;

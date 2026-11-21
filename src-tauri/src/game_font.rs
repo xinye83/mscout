@@ -993,8 +993,8 @@ mod tests {
     #[test]
     #[ignore = "requires MSCW: live 21,865 EXP punctuation"]
     fn reads_live_exp_21865() {
-        let (_, fixture) = crate::regression::fixture_image("1920x1080@filtered", "exp-21865");
-        let frame = crate::regression::fixture_frame("1920x1080@filtered", "exp-21865");
+        let (_, fixture) = crate::corpus::fixture_image("1920x1080@filtered", "exp-21865");
+        let frame = crate::corpus::fixture_frame("1920x1080@filtered", "exp-21865");
         let region = fixture.read_region();
         let gray = crate::ocr::crop_gray(&frame, region).expect("exp crop");
         let (stored, height) = seed_exp_atlas(&gray, &game_dir()).expect("exp seed");
@@ -1011,15 +1011,14 @@ mod tests {
         // Seed from the value the Filtered profile started with; the live
         // leading `3` is a near miss that the strict threshold used to drop,
         // yielding a plausible but wrong `6,818[18.90%]`.
-        let (_, seed_fixture) =
-            crate::regression::fixture_image("1920x1080@filtered", "hud-low-percent");
-        let frame = crate::regression::fixture_frame("1920x1080@filtered", "hud-low-percent");
+        let (_, seed_fixture) = crate::corpus::fixture_image("1920x1080@filtered", "exp-2056-hud");
+        let frame = crate::corpus::fixture_frame("1920x1080@filtered", "exp-2056-hud");
         let seed = crate::ocr::crop_gray(&frame, seed_fixture.read_region()).expect("seed crop");
         let (stored, height) = seed_exp_atlas(&seed, &game_dir()).expect("exp seed");
         let atlas = crate::ocr::Atlas::from_settings(&stored);
 
-        let (_, live_fixture) = crate::regression::fixture_image("1920x1080@filtered", "exp-36818");
-        let frame = crate::regression::fixture_frame("1920x1080@filtered", "exp-36818");
+        let (_, live_fixture) = crate::corpus::fixture_image("1920x1080@filtered", "exp-36818");
+        let frame = crate::corpus::fixture_frame("1920x1080@filtered", "exp-36818");
         let gray = crate::ocr::crop_gray(&frame, live_fixture.read_region()).expect("exp crop");
         let (text, confidence) = atlas.recognize_readout(&gray).expect("exp read");
         assert_eq!(text, "36,818[18.90%]");
@@ -1036,9 +1035,8 @@ mod tests {
         // 2,056[1.06%] HUD), must read every digit and the punctuation across
         // the live EXP crops. This is the coverage check the per-value fixes
         // were missing.
-        let (_, seed_fixture) =
-            crate::regression::fixture_image("1920x1080@filtered", "hud-low-percent");
-        let seed_frame = crate::regression::fixture_frame("1920x1080@filtered", "hud-low-percent");
+        let (_, seed_fixture) = crate::corpus::fixture_image("1920x1080@filtered", "exp-2056-hud");
+        let seed_frame = crate::corpus::fixture_frame("1920x1080@filtered", "exp-2056-hud");
         let seed =
             crate::ocr::crop_gray(&seed_frame, seed_fixture.read_region()).expect("seed crop");
         let (stored, height) = seed_exp_atlas(&seed, &game_dir()).expect("exp seed");
@@ -1052,8 +1050,8 @@ mod tests {
         // `26,467[13.59%]` it used to produce. Replace this with the exact read once
         // the Filtered atlas variants land.
         {
-            let (_, fixture) = crate::regression::fixture_image("1920x1080@filtered", "exp-26487");
-            let frame = crate::regression::fixture_frame("1920x1080@filtered", "exp-26487");
+            let (_, fixture) = crate::corpus::fixture_image("1920x1080@filtered", "exp-26487");
+            let frame = crate::corpus::fixture_frame("1920x1080@filtered", "exp-26487");
             let gray = crate::ocr::crop_gray(&frame, fixture.read_region()).expect("exp crop");
             let error = atlas
                 .recognize_readout(&gray)
@@ -1063,7 +1061,7 @@ mod tests {
         }
 
         let cases = [
-            ("hud-low-percent", "2,056[1.06%]", (2056, 1.06)),
+            ("exp-2056-hud", "2,056[1.06%]", (2056, 1.06)),
             ("exp-21865", "21,865[11.22%]", (21865, 11.22)),
             ("exp-36818", "36,818[18.90%]", (36818, 18.90)),
         ];
@@ -1079,8 +1077,8 @@ mod tests {
 
         let mut digits = BTreeSet::new();
         for (name, expected, parsed) in cases {
-            let (_, fixture) = crate::regression::fixture_image("1920x1080@filtered", name);
-            let frame = crate::regression::fixture_frame("1920x1080@filtered", name);
+            let (_, fixture) = crate::corpus::fixture_image("1920x1080@filtered", name);
+            let frame = crate::corpus::fixture_frame("1920x1080@filtered", name);
             let gray = crate::ocr::crop_gray(&frame, fixture.read_region()).expect("exp crop");
             let (text, _) = atlas.recognize_readout(&gray).expect("exp read");
             assert_eq!(text, expected, "{name}");
@@ -1105,9 +1103,8 @@ mod tests {
     #[test]
     #[ignore = "requires MSCW: low-percent EXP period on the Filtered HUD"]
     fn reads_filtered_low_percent_exp() {
-        let (_, fixture) =
-            crate::regression::fixture_image("1920x1080@filtered", "hud-low-percent");
-        let frame = crate::regression::fixture_frame("1920x1080@filtered", "hud-low-percent");
+        let (_, fixture) = crate::corpus::fixture_image("1920x1080@filtered", "exp-2056-hud");
+        let frame = crate::corpus::fixture_frame("1920x1080@filtered", "exp-2056-hud");
         let gray = crate::ocr::crop_gray(&frame, fixture.read_region()).expect("exp crop");
         let (stored, height) = seed_exp_atlas(&gray, &game_dir()).expect("exp seed");
         let atlas = crate::ocr::Atlas::from_settings(&stored);
@@ -1122,9 +1119,7 @@ mod tests {
     fn probe_1920_filtered() {
         let hud_path = std::env::var("MSCOUT_HUD_PNG")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| {
-                crate::regression::fixture_image("1920x1080@filtered", "hud-main").0
-            });
+            .unwrap_or_else(|_| crate::corpus::fixture_image("1920x1080@filtered", "hud-main").0);
         let hud = image::open(&hud_path).expect("hud fixture").to_rgba8();
         let frame = Frame {
             width: hud.width(),
@@ -1246,7 +1241,7 @@ mod tests {
             }
         }
 
-        let mm_path = crate::regression::fixture_image("1920x1080@filtered", "minimap-expanded").0;
+        let mm_path = crate::corpus::fixture_image("1920x1080@filtered", "minimap-expanded").0;
         let mm = image::open(&mm_path).expect("minimap fixture").to_rgba8();
         let mm_frame = Frame {
             width: mm.width(),
@@ -1292,7 +1287,7 @@ mod tests {
     #[test]
     #[ignore = "diagnostic: explains the 1920 Default job/name read"]
     fn probe_1920_default_identity() {
-        let hud_path = crate::regression::fixture_image("1920x1080", "hud-main").0;
+        let hud_path = crate::corpus::fixture_image("1920x1080", "hud-main").0;
         let hud = image::open(&hud_path).expect("hud fixture").to_rgba8();
         let frame = Frame {
             width: hud.width(),

@@ -1382,7 +1382,7 @@ mod tests {
             ),
         ];
         for (pair, drawn, job_rows, name_rows) in cases {
-            let frame = crate::regression::fixture_frame(pair, "hud-main");
+            let frame = crate::corpus::fixture_frame(pair, "hud-main");
             let lines =
                 split_lines(&frame, drawn).unwrap_or_else(|error| panic!("{pair}: {error}"));
             assert_eq!(lines.len(), 2, "{pair}: {lines:?}");

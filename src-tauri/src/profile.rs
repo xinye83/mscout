@@ -542,8 +542,8 @@ mod tests {
     // -----------------------------------------------------------------------
     // Per-release upgrade fixtures.
     //
-    // The fixtures live in `tests/fixtures/upgrade/`, outside `testdata/`, so
-    // the regression frame walker can never mistake them for image pairs. Each
+    // The fixtures live in `testdata/profiles/upgrade/`, outside
+    // `testdata/frames/`, so the frame walker can never mistake them for pairs. Each
     // one is reconstructed from the `Profile` struct a tagged release wrote, not
     // captured from a player, so the hex payloads are synthetic patterns. They
     // are covered without touching a store: nothing here writes to
@@ -561,7 +561,7 @@ mod tests {
 
     /// The directory the release-shaped profiles are kept in.
     fn upgrade_fixtures() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/upgrade")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/profiles/upgrade")
     }
 
     fn fixture_text(name: &str) -> String {
@@ -674,10 +674,10 @@ mod tests {
             dir.is_dir(),
             "upgrade fixture directory is missing: {dir:?}"
         );
-        // The frame walker only reads `testdata/`. Keeping the upgrade fixtures
-        // outside it is what stops them being read as (broken) image pairs.
+        // The frame walker only reads `testdata/frames/`. Keeping the upgrade
+        // fixtures outside it is what stops them being read as (broken) pairs.
         assert!(
-            !dir.starts_with(crate::regression::fixtures_dir()),
+            !dir.starts_with(crate::corpus::frames_dir()),
             "{dir:?} must not live under the frame corpus"
         );
 

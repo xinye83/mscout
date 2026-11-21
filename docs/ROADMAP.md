@@ -97,8 +97,9 @@ switch, and the overlay under the CSP in the dev build.
   `package-lock.json`, and `src-tauri/tauri.conf.json`; optionally move the
   `CHANGELOG` Unreleased section to a dated release. Add a `--check` mode so a
   release or CI run fails when the versions drift apart.
-- [ ] **Screenshot import tool.** Turn a client screenshot + ground truth into a
-  complete `testdata/<WxH@mode>/` fixture and its manifest image entries.
+- [ ] **Screenshot import tool.** Turn a full client screenshot + ground truth
+  into a `testdata/frames/<WxH@mode>/<scene>/` with its `scene.json`. (A saved
+  diagnostic already imports as focused crops: `corpus::import_diagnostic`.)
 - [ ] **Multi-resolution portability.** Anchor-relative boxes + scale-aware
   matching so one calibration serves several resolutions; blocked on a
   two-resolution capture diff.

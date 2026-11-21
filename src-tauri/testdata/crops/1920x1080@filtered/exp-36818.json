@@ -1,0 +1,11 @@
+{
+  "version": 3,
+  "kind": "exp",
+  "added": "2026-11-16",
+  "verified": true,
+  "truth": {
+    "expText": "36,818[18.90%]",
+    "exp": 36818,
+    "pct": 18.9
+  }
+}

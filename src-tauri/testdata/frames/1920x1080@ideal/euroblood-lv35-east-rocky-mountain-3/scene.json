@@ -1,0 +1,45 @@
+{
+  "version": 3,
+  "added": "2026-11-15",
+  "verified": true,
+  "truth": {
+    "name": "Euroblood",
+    "job": "Page",
+    "level": 35,
+    "expText": "123,044[70.63%]",
+    "exp": 123044,
+    "pct": 70.63,
+    "street": "Victoria Road",
+    "map": "East Rocky Mountain III"
+  },
+  "images": [
+    {
+      "id": "hud-main",
+      "kind": "hud",
+      "file": "hud-main.png",
+      "crop": { "x": 560, "y": 1036, "w": 574, "h": 44 }
+    },
+    {
+      "id": "minimap-expanded",
+      "kind": "minimap",
+      "state": "expanded",
+      "holdout": true,
+      "file": "minimap-expanded.png",
+      "crop": { "x": 18, "y": 12, "w": 200, "h": 210 }
+    },
+    {
+      "id": "minimap-titlebar",
+      "kind": "minimap",
+      "state": "titlebar",
+      "file": "minimap-titlebar.png",
+      "crop": { "x": 18, "y": 12, "w": 200, "h": 210 }
+    },
+    {
+      "id": "minimap-folded",
+      "kind": "minimap",
+      "state": "folded",
+      "file": "minimap-folded.png",
+      "crop": { "x": 12, "y": 4, "w": 320, "h": 40 }
+    }
+  ]
+}

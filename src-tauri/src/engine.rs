@@ -2019,7 +2019,7 @@ mod tests {
     #[test]
     #[ignore = "requires MSCW: live Tree That Grew I minimap label"]
     fn reads_live_tree_that_grew_one() {
-        let frame = crate::regression::fixture_frame("1920x1080@filtered", "map-tree-1");
+        let frame = crate::corpus::fixture_frame("1920x1080@filtered", "map-tree-1");
 
         let read = match_label_ocr(&frame).expect("map label");
         assert_eq!(read.street.as_deref(), Some("Victoria Road"));
@@ -2158,7 +2158,7 @@ mod tests {
     #[test]
     #[ignore = "requires MSCW: Tree That Grew Roman-numeral DTW fallback"]
     fn reads_tree_roman_from_table_dtw() {
-        let frame = crate::regression::fixture_frame("1920x1080@filtered", "map-tree-1");
+        let frame = crate::corpus::fixture_frame("1920x1080@filtered", "map-tree-1");
         assert_eq!(
             match_map_name(&frame).as_deref(),
             Some("The Tree That Grew I")
@@ -2190,7 +2190,7 @@ mod tests {
     #[test]
     #[ignore = "requires MSCW: Deep Valley minimap label"]
     fn reads_deep_valley_label() {
-        let frame = crate::regression::fixture_frame("1920x1080@filtered", "map-deep-valley");
+        let frame = crate::corpus::fixture_frame("1920x1080@filtered", "map-deep-valley");
         let read = match_label_ocr(&frame).expect("map label");
         assert_eq!(read.street.as_deref(), Some("Warning Street"));
         assert_eq!(read.map.as_deref(), Some("Deep Valley I"));

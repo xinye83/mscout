@@ -34,9 +34,9 @@ an improvement cannot be manufactured by editing an expectation here.
 Covered by the counts: the 18 frame cases — 6 pairs × 3 minimap states
 (`expanded`, `titlebar`, `folded`).
 
-Not covered by the counts: the focused `exp`/`map-label` images in
-`1920x1080@filtered` (`hud-low-percent`, `exp-21865`, `exp-26487`, `exp-36818`,
-`map-tree-1`, `map-deep-valley`). They are validated hermetically and read by
+Not covered by the counts: the focused crops in `crops/1920x1080@filtered/`
+(`exp-2056-hud`, `exp-21865`, `exp-26487`, `exp-36818`, `map-tree-1`,
+`map-deep-valley`). They are validated hermetically and read by
 their own targeted tests, not by this report.
 
 ## Measured counts — 2026-11-16
@@ -114,14 +114,14 @@ a fresh clone reproduces by default.
 ## The hold-out is retrospective
 
 One state is the frozen hold-out: **`1920x1080@ideal`, `expanded`** (case key
-`1920x1080@ideal/expanded`), marked `"holdout": true` in
-[`../src-tauri/testdata/1920x1080@ideal/meta.json`](../src-tauri/testdata/1920x1080@ideal/meta.json)
+`1920x1080@ideal/euroblood-lv35-east-rocky-mountain-3/expanded` since the 0.8
+test-data layout), marked `"holdout": true` in
+[its `scene.json`](../src-tauri/testdata/frames/1920x1080@ideal/euroblood-lv35-east-rocky-mountain-3/scene.json)
 on 2026-11-16. `exactly_one_frozen_holdout` (hermetic tier) fails if the corpus has
-zero or more than one, and fails if the flagged case is not that key: the key is
-pinned in the test, so moving the flag to a state that already reads exact does not
-move the reservation, it breaks the guard. A `holdout` flag on any non-minimap
-image (`hud`, `settings`, `exp`, `map-label`) is rejected when the corpus loads
-instead of being silently ignored. The accuracy report always names the hold-out.
+zero or more than one. The manifest flag is the one record of which case it is;
+moving it is forbidden by the rules below, not by a second copy of the key in the
+test. A `holdout` flag on a HUD image is rejected when the corpus loads instead
+of being silently ignored. The accuracy report always names the hold-out.
 
 **It was frozen after the fact, not before the work.** Every frame in this corpus
 was captured, cropped and labelled during the `0.5` → `0.6` work, and every one of

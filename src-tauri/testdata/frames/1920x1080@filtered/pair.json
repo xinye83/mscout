@@ -1,0 +1,14 @@
+{
+  "version": 3,
+  "clientW": 1920,
+  "clientH": 1080,
+  "uiMode": "filtered",
+  "settingsDisplay": {
+    "resolution": "1920 x 1080",
+    "uiSize": "Default Ratio (Filter Applied)"
+  },
+  "settingsPanel": {
+    "file": "settings-panel.png",
+    "crop": { "x": 685, "y": 145, "w": 550, "h": 755 }
+  }
+}
