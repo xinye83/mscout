@@ -81,6 +81,12 @@ const SEED_RETRY: Duration = Duration::from_secs(30);
 /// heavier than the digit seed, so a failed attempt backs off the same way.
 const TEXT_SEED_RETRY: Duration = Duration::from_secs(30);
 
+/// How long the last captured frame may stand in for a new one. The game redraws
+/// continuously while it runs (animated maps, the character's idle motion), so a
+/// frame this old means a hung client or a long black screen: re-reading it would
+/// keep recording `idle` rows of a picture that is no longer on screen.
+const STALE_FRAME: Duration = Duration::from_secs(30);
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Sample {
@@ -360,7 +366,10 @@ enum TickError {
 
 struct EngineState {
     capturer: Option<(i64, Capturer)>,
-    last_frame: Option<Frame>,
+    /// The last frame the capture delivered, and when. Windows Graphics Capture
+    /// only delivers a frame when the window changes, so a quiet screen reuses
+    /// it; [`STALE_FRAME`] bounds how long.
+    last_frame: Option<(Frame, std::time::Instant)>,
     outcomes: VecDeque<bool>,
     /// Decides which readings become history rows; holds the last recorded one.
     guard: Guard,
@@ -827,11 +836,17 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
     {
         Ok(Some(frame)) => {
             let cropped = capture::crop_to_client(frame, hwnd).map_err(TickError::Lost)?;
-            engine.last_frame = Some(cropped.clone());
+            engine.last_frame = Some((cropped.clone(), std::time::Instant::now()));
             cropped
         }
         Ok(None) => match &engine.last_frame {
-            Some(frame) => frame.clone(),
+            Some((frame, at)) if at.elapsed() <= STALE_FRAME => frame.clone(),
+            Some(_) => {
+                return Err(TickError::Transient(format!(
+                    "no new frame from the game for {} s",
+                    STALE_FRAME.as_secs()
+                )))
+            }
             None => return Err(TickError::Transient("waiting for the first frame".into())),
         },
         Err(error) => return Err(TickError::Lost(format!("capture failed: {error}"))),
