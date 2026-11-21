@@ -51,7 +51,8 @@ where
     }
 
     let text = serde_json::to_string_pretty(&raw).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join("settings.json"), text).map_err(|e| e.to_string())
+    crate::fsutil::write_atomic(&dir.join("settings.json"), text.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 pub fn update_settings<F>(apply: F) -> Result<(), String>

@@ -14,6 +14,7 @@ mod capture;
 mod engine;
 mod exp_table;
 mod font_seed;
+mod fsutil;
 mod game_font;
 mod jobs;
 mod map_names;

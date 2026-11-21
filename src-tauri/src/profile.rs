@@ -168,9 +168,9 @@ pub fn save(profile: &Profile) -> Result<(), String> {
     let dir = dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let text = serde_json::to_string_pretty(profile).map_err(|e| e.to_string())?;
-    std::fs::write(
-        path_for(profile.client_w, profile.client_h, profile.ui_mode)?,
-        text,
+    crate::fsutil::write_atomic(
+        &path_for(profile.client_w, profile.client_h, profile.ui_mode)?,
+        text.as_bytes(),
     )
     .map_err(|e| e.to_string())
 }
