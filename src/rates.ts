@@ -34,19 +34,30 @@ export function rateOver(samples: Sample[], windowSec: number): number | null {
   // Require a full window of history: the baseline must be at or before the
   // cutoff. Without this, a session that just started computes a "30-minute"
   // rate from a few seconds of data and the ETA drifts wildly while idle.
-  let first: Sample | null = null;
+  let firstIndex = -1;
   for (let i = samples.length - 2; i >= 0; i -= 1) {
     if (samples[i].t <= cutoff) {
-      first = samples[i];
+      firstIndex = i;
       break;
     }
   }
-  if (!first) return null;
+  if (firstIndex < 0) return null;
+  const first = samples[firstIndex];
 
   const elapsed = last.t - first.t;
   if (elapsed <= 0) return null;
 
-  return ((total(last) - total(first)) / elapsed) * 3600;
+  // The rate is EXP earned per hour. EXP lost to a recorded death is added back,
+  // so one death does not turn the window's rate negative and send the ETA to
+  // "never"; the time spent re-earning it is still in the window.
+  let lostToDeaths = 0;
+  for (let i = firstIndex + 1; i < samples.length; i += 1) {
+    if (samples[i].event === "death") {
+      lostToDeaths += Math.max(0, total(samples[i - 1]) - total(samples[i]));
+    }
+  }
+
+  return ((total(last) - total(first) + lostToDeaths) / elapsed) * 3600;
 }
 
 export function etaSeconds(sample: Sample, ratePerHour: number | null): number | null {

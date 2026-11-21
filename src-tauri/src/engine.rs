@@ -105,6 +105,17 @@ pub struct Sample {
     pub event: Option<String>,
 }
 
+/// A sample as the overlay receives it. `recorded` says whether the row also
+/// went into the history: the overlay shows every read at once, but computes
+/// rates and the chart only from recorded rows, so its rates match the history's
+/// (an unverified read can be a misread the guard would not record).
+#[derive(Clone, Serialize)]
+struct LiveSample<'a> {
+    #[serde(flatten)]
+    sample: &'a Sample,
+    recorded: bool,
+}
+
 /// The reader stage that produced one field of a reading.
 ///
 /// The ids are part of the diagnostic format (`atlas`, `font`, `fingerprint`,
@@ -613,6 +624,7 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                 // A history row that cannot be written is reported at once: the
                 // overlay must not say "reading" while nothing is being recorded.
                 let mut history_error = None;
+                let mut recorded = false;
                 if outcome.verified {
                     // An unrecognised level still updates the overlay, but it is kept
                     // out of the history: a row with level 0 has no place on the EXP
@@ -621,17 +633,26 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                         let written = serde_json::to_value(&outcome.sample)
                             .map_err(|error| error.to_string())
                             .and_then(|record| crate::append_sample_record(&record));
-                        if let Err(error) = written {
-                            let reason = format!("history not saved: {error}");
-                            log_once(&reason);
-                            history_error = Some(reason);
+                        match written {
+                            Ok(()) => recorded = true,
+                            Err(error) => {
+                                let reason = format!("history not saved: {error}");
+                                log_once(&reason);
+                                history_error = Some(reason);
+                            }
                         }
                     }
                 }
                 // Display each successful read immediately; only the history write
                 // waits for consecutive good reads. That keeps a map change from
                 // waiting three ticks before the overlay shows the new name.
-                let _ = app.emit("live-sample", &outcome.sample);
+                let _ = app.emit(
+                    "live-sample",
+                    LiveSample {
+                        sample: &outcome.sample,
+                        recorded,
+                    },
+                );
                 engine.keep_outcome(outcome.warning.is_none());
                 let status = match history_error {
                     Some(reason) => CaptureStatus::degraded(Some(reason)),

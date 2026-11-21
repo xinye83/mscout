@@ -48,3 +48,10 @@ test("the rate across a character switch is not negative", () => {
   assert.equal(rateOver(currentCharacterRun(samples), 80), null, "no full window yet");
   assert.equal(rateOver(currentCharacterRun(samples), 60), 600);
 });
+
+test("EXP lost to a recorded death is not counted against the rate", () => {
+  const death: Sample = { ...row(120, 30, 900, "Main"), event: "death" };
+  const samples = [row(0, 30, 1000, "Main"), row(60, 30, 1000, "Main"), death, row(180, 30, 1000, "Main")];
+  // 100 lost at the death, 100 re-earned: 100 EXP earned over 180 s.
+  assert.equal(rateOver(samples, 180), 2000);
+});

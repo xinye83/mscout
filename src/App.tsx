@@ -129,8 +129,13 @@ export default function App() {
   // chart and the rates: with level 0 the cumulative total has no meaning, and the
   // curve would bend towards the origin. Only the character now on screen is
   // charted: a rate across a character switch compares two unrelated totals.
+  // Live reads the history did not record (not yet verified, or held by the
+  // guard) are shown but not charted, so the overlay's rates match the history's.
   const charted = useMemo(
-    () => currentCharacterRun(samples.filter((sample) => sample.lv > 0)),
+    () =>
+      currentCharacterRun(
+        samples.filter((sample) => sample.lv > 0 && sample.recorded !== false),
+      ),
     [samples],
   );
 

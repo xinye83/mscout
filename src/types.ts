@@ -12,6 +12,11 @@ export type Sample = {
   name?: string;
   /** "death" on the first row after a confirmed death. */
   event?: "death";
+  /**
+   * Live samples only: whether the read also went into the history. History
+   * rows carry no flag (they are recorded by definition).
+   */
+  recorded?: boolean;
 };
 
 export type Rect = { x: number; y: number; w: number; h: number };
