@@ -107,7 +107,10 @@ fn learning_info(stored: &settings::Atlas) -> LearningInfo {
     }
 }
 
-#[tauri::command]
+// The frame-reading commands below are async: a plain command runs on the main
+// thread, so a capture, a WZ atlas parse or a full read there froze every window,
+// the overlay included, for as long as it took.
+#[tauri::command(async)]
 pub fn capture_preview(
     state: State<'_, window_target::TargetState>,
 ) -> Result<tauri::ipc::Response, String> {
@@ -276,7 +279,7 @@ fn learn_region(serial: u64, text: String, target: &str) -> Result<LearningInfo,
 /// Seed the EXP atlas from the installed client's bitmap atlas. The rendered
 /// size comes from the live EXP box, so the same client atlas serves every
 /// resolution that draws at that size.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn seed_atlas(serial: u64) -> Result<LearningInfo, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
@@ -330,7 +333,7 @@ pub fn seed_atlas(serial: u64) -> Result<LearningInfo, String> {
     Ok(learning_info(&stored))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn teach_map(serial: u64, name: String) -> Result<LearningInfo, String> {
     let name = name.trim().to_string();
     log(&format!("teach_map serial={serial} name={name:?}"));
@@ -373,7 +376,7 @@ pub fn teach_map(serial: u64, name: String) -> Result<LearningInfo, String> {
 
 /// Taught separately from the map: a street is shared by several maps, so it is
 /// fingerprinted and matched on its own line.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn teach_street(serial: u64, street: String) -> Result<LearningInfo, String> {
     let street = street.trim().to_string();
     log(&format!("teach_street serial={serial} street={street:?}"));
@@ -411,7 +414,7 @@ pub fn teach_street(serial: u64, street: String) -> Result<LearningInfo, String>
     Ok(learning_info(&settings::load_atlas()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn teach_identity(serial: u64, kind: String, label: String) -> Result<LearningInfo, String> {
     let label = label.trim().to_string();
     log(&format!(
@@ -468,7 +471,7 @@ pub struct Probe {
     pub rejected: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn parse_probe(serial: u64) -> Result<Probe, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
@@ -519,7 +522,7 @@ pub fn parse_probe(serial: u64) -> Result<Probe, String> {
 /// and where each field of the read came from. This is the "why did it not read?"
 /// artefact; it contains no full screenshot and is written only under
 /// `data/diagnostics/`.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_diagnostic(serial: u64) -> Result<String, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
