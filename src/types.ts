@@ -201,7 +201,7 @@ export type ProfileSummary = {
 
 /** One option of the game's Graphics → UI Size setting. */
 export type UiModeOption = {
-  id: string;
+  id: "default" | "filtered" | "ideal";
   label: string;
   active: boolean;
 };

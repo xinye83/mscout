@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import type { RepairSummary, Sample } from "./types";
+import * as api from "./api";
+import type { Sample } from "./types";
 import { formatRate, total } from "./rates";
 import ExpChart, { type ChartPoint } from "./ExpChart";
 import { downsample } from "./chartData";
@@ -25,7 +25,7 @@ export default function History() {
     // Longer ranges come thinned to one row a minute (deaths and character
     // switches kept), so weeks of 1 Hz history do not flood the window.
     const bucket = days > 1 ? 60 : undefined;
-    invoke<Sample[]>("read_samples", { from: now - days * 86_400, to: now, bucket })
+    api.readSamples({ from: now - days * 86_400, to: now, bucket })
       .then(setSamples)
       .catch(() => setSamples([]));
   }, [days, reload]);
@@ -33,7 +33,7 @@ export default function History() {
   const repair = async () => {
     setNote(null);
     try {
-      const summary = await invoke<RepairSummary>("repair_history");
+      const summary = await api.repairHistory();
       setNote(
         summary.flagged === 0
           ? `Checked ${summary.checked.toLocaleString()} rows — none needed flagging.`

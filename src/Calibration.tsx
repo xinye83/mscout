@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import * as api from "./api";
 import { listen } from "@tauri-apps/api/event";
 import type {
   Calibration,
@@ -245,7 +245,7 @@ function CropPreview({
       setCrop(null);
       return;
     }
-    invoke<LabelCrop>("box_crop", { serial, kind })
+    api.boxCrop({ serial, kind })
       .then(setCrop)
       .catch(() => setCrop(null));
   }, [kind, serial]);
@@ -328,7 +328,7 @@ function ShapeList({
       setGlyphs([]);
       return;
     }
-    invoke<GlyphGuess[]>("box_glyphs", { serial, kind })
+    api.boxGlyphs({ serial, kind })
       .then(setGlyphs)
       .catch(() => setGlyphs([]));
   }, [kind, serial]);
@@ -340,7 +340,7 @@ function ShapeList({
 
   const labelShape = async (guess: GlyphGuess, character: string) => {
     try {
-      const info = await invoke<LearningInfo>("label_glyph", {
+      const info = await api.labelGlyph({
         clientW,
         clientH,
         kind,
@@ -487,7 +487,7 @@ export default function Calibration() {
     async (serial: number) => {
       if (!serial) return;
       try {
-        applyProbe(await invoke<Probe>("parse_probe", { serial }));
+        applyProbe(await api.parseProbe({ serial }));
       } catch (cause) {
         applyProbe(null, cause);
       }
@@ -503,7 +503,7 @@ export default function Calibration() {
     // The reader detects both lines; mirror those regions so the preview overlays
     // and the cards show the pixels the overlay actually reads. Saved boxes in an
     // older profile can hold the whole label and are only the fallback.
-    invoke<Region[]>("map_line_regions", { serial })
+    api.mapLineRegions({ serial })
       .then((lines) => {
         if (lines.length > 0) {
           setRegions((current) => ({
@@ -514,13 +514,13 @@ export default function Calibration() {
           return;
         }
 
-        return invoke<Region | null>("map_region", { serial }).then(
+        return api.mapRegion({ serial }).then(
           async (region) => {
             if (!region) return;
             let street: Region | null = null;
             let map: Region = region;
             try {
-              const pair = await invoke<Region[]>("split_identity", {
+              const pair = await api.splitIdentity({
                 serial,
                 x: region.x,
                 y: region.y,
@@ -545,16 +545,16 @@ export default function Calibration() {
   }, []);
 
   const refreshProfiles = useCallback(() => {
-    invoke<ProfileSummary[]>("list_profiles")
+    api.listProfiles()
       .then(setProfiles)
       .catch(() => undefined);
-    invoke<ProfileSummary | null>("active_profile")
+    api.activeProfile()
       .then(setActiveProfile)
       .catch(() => undefined);
-    invoke<UiModeOption[]>("ui_modes")
+    api.uiModes()
       .then(setUiModes)
       .catch(() => undefined);
-    invoke<MscwStatus>("get_mscw_status")
+    api.getMscwStatus()
       .then(setMscw)
       .catch(() => undefined);
   }, []);
@@ -565,7 +565,7 @@ export default function Calibration() {
   const persist = useCallback(
     async (next: Calibration) => {
       if (!preview) throw new Error("freeze a frame first");
-      const saved = await invoke<Calibration>("set_calibration", {
+      const saved = await api.setCalibration({
         clientW: preview.width,
         clientH: preview.height,
         exp: next.exp,
@@ -602,7 +602,7 @@ export default function Calibration() {
         (learning.source === "" || learning.coverage.length < 10)
       ) {
         try {
-          const info = await invoke<LearningInfo>("seed_atlas", {
+          const info = await api.seedAtlas({
             serial: preview.serial,
           });
           setLearning(info);
@@ -628,10 +628,10 @@ export default function Calibration() {
       setMessage(null);
       try {
         if (preview) await persist(regions);
-        await invoke("set_ui_mode", { mode: option.id });
+        await api.setUiMode({ mode: option.id });
         const [cal, info] = await Promise.all([
-          invoke<Calibration>("get_calibration"),
-          invoke<LearningInfo>("get_learning"),
+          api.getCalibration(),
+          api.getLearning(),
         ]);
         setRegions(cal);
         setLearning(info);
@@ -651,7 +651,7 @@ export default function Calibration() {
     setError(null);
     setMessage(null);
     try {
-      const path = await invoke<string>("save_diagnostic", {
+      const path = await api.saveDiagnostic({
         serial: preview.serial,
       });
       setMessage(`Diagnostic saved: ${path}`);
@@ -665,7 +665,7 @@ export default function Calibration() {
     setMessage(null);
     applyProbe(null);
     try {
-      const raw = await invoke<ArrayBuffer | number[]>("capture_preview");
+      const raw = await api.capturePreview();
       const bytes =
         raw instanceof ArrayBuffer ? new Uint8Array(raw) : new Uint8Array(raw);
 
@@ -697,13 +697,13 @@ export default function Calibration() {
       bumpShapes();
       // The active profile can change under us (the engine picks it by client
       // size), so re-read what is learned as well as the shapes.
-      const info = await invoke<LearningInfo>("get_learning").catch(() => null);
+      const info = await api.getLearning().catch(() => null);
       if (info) setLearning(info);
-      const status = await invoke<MscwStatus>("get_mscw_status").catch(() => null);
+      const status = await api.getMscwStatus().catch(() => null);
       if (status) setMscw(status);
       // Read the boxes back: the freeze callback was built before this render's
       // drags, so `regions` here can be a frame behind. The saved set cannot.
-      const calibration = await invoke<Calibration>("get_calibration").catch(
+      const calibration = await api.getCalibration().catch(
         () => null,
       );
       if (calibration) setRegions(calibration);
@@ -721,7 +721,7 @@ export default function Calibration() {
           (levelBox && info.levelSource !== "game" && info.levelCoverage.length < 10));
       if (needsSeed) {
         try {
-          const seeded = await invoke<LearningInfo>("seed_atlas", { serial });
+          const seeded = await api.seedAtlas({ serial });
           setLearning(seeded);
           bumpShapes();
           setMessage(`Digits loaded from the game (${seeded.glyphSize})`);
@@ -745,7 +745,7 @@ export default function Calibration() {
     setMessage(null);
     try {
       await persist(regions);
-      const info = await invoke<LearningInfo>("seed_atlas", {
+      const info = await api.seedAtlas({
         serial: preview.serial,
       });
       setLearning(info);
@@ -761,9 +761,9 @@ export default function Calibration() {
     setError(null);
     setMessage(null);
     try {
-      const path = await invoke<string | null>("pick_mscw_dir");
+      const path = await api.pickMscwDir();
       if (!path) return;
-      const status = await invoke<MscwStatus>("set_mscw_dir", { path });
+      const status = await api.setMscwDir({ path });
       setMscw(status);
       if (status.atlasFound) {
         setMessage(`Game assets found: ${status.path}`);
@@ -777,10 +777,10 @@ export default function Calibration() {
   };
 
   useEffect(() => {
-    invoke<Calibration>("get_calibration")
+    api.getCalibration()
       .then(setRegions)
       .catch(() => undefined);
-    invoke<LearningInfo>("get_learning")
+    api.getLearning()
       .then(setLearning)
       .catch(() => undefined);
     void freeze();
@@ -791,7 +791,7 @@ export default function Calibration() {
       setPresetCal(null);
       return;
     }
-    invoke<Calibration | null>("preset_calibration", {
+    api.presetCalibration({
       clientW: preview.width,
       clientH: preview.height,
     })
@@ -816,7 +816,7 @@ export default function Calibration() {
 
     const set = (status: TargetStatus) =>
       setClient(status.client ? { w: status.client.w, h: status.client.h } : null);
-    invoke<TargetStatus>("get_target_status").then(set).catch(() => undefined);
+    api.getTargetStatus().then(set).catch(() => undefined);
 
     const unlisten = listen<TargetStatus>("target-status", (event) => set(event.payload));
     return () => {
@@ -880,7 +880,7 @@ export default function Calibration() {
     // to nudge.
     let pair: Region[] | null = null;
     try {
-      pair = await invoke<Region[]>("split_identity", {
+      pair = await api.splitIdentity({
         serial: preview.serial,
         x: drawn.x,
         y: drawn.y,
@@ -917,7 +917,7 @@ export default function Calibration() {
     setMessage(null);
     try {
       await persist(regions);
-      const info = await invoke<LearningInfo>("learn_atlas", {
+      const info = await api.learnAtlas({
         serial: preview?.serial ?? 0,
         text: typed,
       });
@@ -935,7 +935,7 @@ export default function Calibration() {
     setMessage(null);
     try {
       await persist(regions);
-      const info = await invoke<LearningInfo>("learn_level_atlas", {
+      const info = await api.learnLevelAtlas({
         serial: preview?.serial ?? 0,
         text: typedLevel,
       });
@@ -954,7 +954,7 @@ export default function Calibration() {
     const name = mapName.trim();
     try {
       await persist(regions);
-      const info = await invoke<LearningInfo>("teach_map", {
+      const info = await api.teachMap({
         serial: preview?.serial ?? 0,
         name,
       });
@@ -973,7 +973,7 @@ export default function Calibration() {
     const street = streetName.trim();
     try {
       await persist(regions);
-      const info = await invoke<LearningInfo>("teach_street", {
+      const info = await api.teachStreet({
         serial: preview?.serial ?? 0,
         street,
       });
@@ -992,7 +992,7 @@ export default function Calibration() {
     const label = kind === "name" ? nameLabel : jobLabel;
     try {
       await persist(regions);
-      const info = await invoke<LearningInfo>("teach_identity", {
+      const info = await api.teachIdentity({
         serial: preview?.serial ?? 0,
         kind,
         label,
@@ -1012,7 +1012,7 @@ export default function Calibration() {
     applyProbe(null);
     try {
       await persist(regions);
-      const result = await invoke<Probe>("parse_probe", {
+      const result = await api.parseProbe({
         serial: preview?.serial ?? 0,
       });
       applyProbe(result);
@@ -1027,13 +1027,13 @@ export default function Calibration() {
     setError(null);
     setMessage(null);
     try {
-      await invoke("apply_preset", {
+      await api.applyPreset({
         clientW: preview.width,
         clientH: preview.height,
       });
       const [cal, info] = await Promise.all([
-        invoke<Calibration>("get_calibration"),
-        invoke<LearningInfo>("get_learning"),
+        api.getCalibration(),
+        api.getLearning(),
       ]);
       setRegions(cal);
       setLearning(info);
@@ -1044,7 +1044,7 @@ export default function Calibration() {
       // the player wait for the next engine tick or press Load digits.
       if (mscw?.atlasFound && usable(cal.exp)) {
         try {
-          const seeded = await invoke<LearningInfo>("seed_atlas", {
+          const seeded = await api.seedAtlas({
             serial: preview.serial,
           });
           setLearning(seeded);
@@ -1068,7 +1068,7 @@ export default function Calibration() {
     setMessage(null);
     setBusyKey(profile.key);
     try {
-      await invoke("delete_profile", {
+      await api.deleteProfile({
         clientW: profile.clientW,
         clientH: profile.clientH,
         uiMode: profile.uiMode,

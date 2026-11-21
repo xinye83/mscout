@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import * as api from "./api";
 import { listen } from "@tauri-apps/api/event";
 import type { TargetStatus, WindowInfo } from "./types";
 
@@ -28,13 +28,13 @@ export default function Target() {
   const [error, setError] = useState<string | null>(null);
 
   const scan = useCallback(() => {
-    invoke<WindowInfo[]>("list_windows")
+    api.listWindows()
       .then(setWindows)
       .catch((cause) => {
         setWindows([]);
         setError(String(cause));
       });
-    invoke<TargetStatus>("get_target_status")
+    api.getTargetStatus()
       .then(setStatus)
       .catch(() => undefined);
   }, []);
@@ -54,7 +54,7 @@ export default function Target() {
 
   const attach = (window: WindowInfo) => {
     setError(null);
-    invoke<TargetStatus>("set_target", {
+    api.setTarget({
       title: window.title,
       process: window.process,
     })
@@ -64,7 +64,7 @@ export default function Target() {
 
   const detach = () => {
     setError(null);
-    invoke<TargetStatus>("clear_target").catch((cause) => setError(String(cause)));
+    api.clearTarget().catch((cause) => setError(String(cause)));
   };
 
   const current = status?.selector ?? null;
@@ -93,7 +93,7 @@ export default function Target() {
           </button>
           <button
             className="ghost"
-            onClick={() => void invoke("open_calibration")}
+            onClick={() => void api.openCalibration()}
           >
             Calibrate
           </button>

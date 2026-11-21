@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import * as api from "./api";
 import { listen } from "@tauri-apps/api/event";
 import type { CaptureStatus, Profile, Sample, TargetStatus } from "./types";
 import {
@@ -55,7 +55,7 @@ export default function App() {
     const now = Math.floor(Date.now() / 1000);
     const start = new Date();
     start.setHours(0, 0, 0, 0);
-    void invoke<Sample[]>("read_samples", {
+    void api.readSamples({
       from: Math.floor(start.getTime() / 1000),
       to: now,
     })
@@ -94,7 +94,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void invoke<Profile>("get_profile").then(setProfile).catch(() => undefined);
+    void api.getProfile().then(setProfile).catch(() => undefined);
     const unlisten = listen<Profile>("profile", (event) => setProfile(event.payload));
     return () => {
       void unlisten.then((fn) => fn());
@@ -102,7 +102,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void invoke<TargetStatus>("get_target_status")
+    void api.getTargetStatus()
       .then(setTarget)
       .catch(() => undefined);
     const unlisten = listen<TargetStatus>("target-status", (event) =>
@@ -114,7 +114,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void invoke("set_mode", { expanded }).catch(() => undefined);
+    void api.setMode({ expanded }).catch(() => undefined);
   }, [expanded]);
 
   // Only a reading captured during this run counts as live. On-disk history is
@@ -206,7 +206,7 @@ export default function App() {
       const height = Math.ceil(panel.getBoundingClientRect().height);
       if (Math.abs(height - lastHeight.current) < 1) return;
       lastHeight.current = height;
-      void invoke("resize_overlay", { height }).catch(() => undefined);
+      void api.resizeOverlay({ height }).catch(() => undefined);
     };
 
     push();
@@ -337,13 +337,13 @@ export default function App() {
             <span className="foot-actions">
               <button
                 className="ghost"
-                onClick={() => void invoke("open_target_window")}
+                onClick={() => void api.openTargetWindow()}
               >
                 pick
               </button>
               <button
                 className="ghost"
-                onClick={() => void invoke("open_calibration")}
+                onClick={() => void api.openCalibration()}
               >
                 calibrate
               </button>
@@ -360,13 +360,13 @@ export default function App() {
           <span className="foot-actions">
             <button
               className="ghost"
-              onClick={() => void invoke("open_target_window")}
+              onClick={() => void api.openTargetWindow()}
             >
               pick
             </button>
             <button
               className="ghost"
-              onClick={() => void invoke("open_calibration")}
+              onClick={() => void api.openCalibration()}
             >
               calibrate
             </button>
