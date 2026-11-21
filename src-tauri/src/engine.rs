@@ -11,7 +11,7 @@ use crate::exp_table;
 use crate::guard::{self, Guard};
 use crate::ocr::{self, Atlas};
 use crate::profile;
-use crate::settings::{self, Calibration, Identities, Region, Template};
+use crate::settings::{self, Calibration, Identities, Region, StoredAtlas, Template};
 use crate::window_target::{self, TargetStatus};
 
 const OUTCOME_WINDOW: usize = 10;
@@ -384,6 +384,9 @@ struct EngineState {
     restored_position: Option<(i32, i32)>,
     last_seed_attempt: Option<std::time::Instant>,
     identity_seed_attempt: Option<std::time::Instant>,
+    /// The EXP, level and name/job atlases decoded from the profile, each with
+    /// the fingerprint of the stored set it came from.
+    decoded: [Option<(u64, Atlas)>; 3],
 }
 
 impl EngineState {
@@ -395,6 +398,7 @@ impl EngineState {
             guard: Guard::new(),
             published: None,
             published_profile: None,
+            decoded: [None, None, None],
             anchored: None,
             restored_position: settings::load_overlay_position(),
             last_seed_attempt: None,
@@ -563,6 +567,16 @@ fn supervise<R: Runtime>(app: AppHandle<R>) {
         std::thread::sleep(backoff);
         backoff = (backoff * 2).min(RESTART_BACKOFF_MAX);
     }
+}
+
+/// The decoded form of `stored`, reusing the slot's copy while the stored glyphs
+/// are unchanged.
+fn decoded<'a>(slot: &'a mut Option<(u64, Atlas)>, stored: &StoredAtlas) -> &'a Atlas {
+    let fingerprint = stored.fingerprint();
+    if slot.as_ref().map(|(seen, _)| *seen) != Some(fingerprint) {
+        *slot = Some((fingerprint, Atlas::from_settings(stored)));
+    }
+    &slot.as_ref().expect("just filled").1
 }
 
 /// The fields of the last recorded row the guard needs after a restart.
@@ -930,15 +944,16 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
     }
 
     let calibration = profile.calibration.clone();
-    let atlas = Atlas::from_settings(&profile.atlas);
-    let level_atlas = Atlas::from_settings(&profile.level_atlas);
-    let identity_atlas = Atlas::from_settings(&profile.identity_atlas);
+    let [exp_slot, level_slot, identity_slot] = &mut engine.decoded;
+    let atlas = decoded(exp_slot, &profile.atlas);
+    let level_atlas = decoded(level_slot, &profile.level_atlas);
+    let identity_atlas = decoded(identity_slot, &profile.identity_atlas);
     let mut readings = read_frame_detailed(
         &frame,
         &calibration,
-        &atlas,
-        &level_atlas,
-        &identity_atlas,
+        atlas,
+        level_atlas,
+        identity_atlas,
         &profile.maps,
         &profile.streets,
         &profile.identities,

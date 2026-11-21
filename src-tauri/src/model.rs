@@ -100,6 +100,18 @@ pub struct StoredAtlas {
 }
 
 impl StoredAtlas {
+    /// A hash of the glyphs, so a decoded copy can be reused until the stored
+    /// set changes (decoding hex into bitmaps and cells every tick is waste).
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.format.hash(&mut hasher);
+        for glyph in &self.glyphs {
+            (&glyph.ch, glyph.w, glyph.h, &glyph.bitmap, &glyph.cell).hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     /// The most common stored glyph size, e.g. `5x7`. It is the size the atlas is
     /// actually working at, so the UI can report it next to `game` / `taught`.
     pub fn common_glyph_size(&self) -> String {
@@ -131,4 +143,36 @@ pub struct Template {
 pub struct Identities {
     pub name: Option<Template>,
     pub job: Option<Template>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn glyph(ch: &str, bitmap: &str) -> GlyphCell {
+        GlyphCell {
+            ch: ch.into(),
+            w: 1,
+            h: 2,
+            bitmap: bitmap.into(),
+            cell: String::new(),
+        }
+    }
+
+    #[test]
+    fn the_fingerprint_follows_the_glyphs_only() {
+        let mut atlas = StoredAtlas {
+            glyphs: vec![glyph("1", "ffff")],
+            ..StoredAtlas::default()
+        };
+        let before = atlas.fingerprint();
+        atlas.source = "game".into();
+        assert_eq!(
+            atlas.fingerprint(),
+            before,
+            "the label is not part of the glyphs"
+        );
+        atlas.glyphs[0] = glyph("1", "ff00");
+        assert_ne!(atlas.fingerprint(), before);
+    }
 }
