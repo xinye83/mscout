@@ -1012,6 +1012,10 @@ pub(crate) fn open_calibration_window_on_main<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Largest `debug.log` before it is rotated to `debug.log.1` (the previous
+/// `.1` is dropped). Two files at most, so the log can never fill the disk.
+const LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
 /// Append a line to `data/debug.log`. The calibration window has no console, so a
 /// click that appears to do nothing has to leave a trace somewhere.
 pub(crate) fn log(message: &str) {
@@ -1019,19 +1023,32 @@ pub(crate) fn log(message: &str) {
         return;
     };
     let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("debug.log");
+    rotate_log(&path, LOG_MAX_BYTES);
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join("debug.log"))
+        .open(&path)
     else {
         return;
     };
     use std::io::Write;
-    let _ = writeln!(
-        file,
-        "{} {message}",
-        chrono::Local::now().format("%H:%M:%S")
+    // One write per line, dated: the log spans days and used to carry the time only.
+    let line = format!(
+        "{} {message}\n",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
     );
+    let _ = file.write_all(line.as_bytes());
+}
+
+/// Move `path` to `<path>.1` once it reaches `max` bytes.
+fn rotate_log(path: &std::path::Path, max: u64) {
+    let full = std::fs::metadata(path).is_ok_and(|meta| meta.len() >= max);
+    if full {
+        let mut rotated = path.as_os_str().to_owned();
+        rotated.push(".1");
+        let _ = std::fs::rename(path, std::path::PathBuf::from(rotated));
+    }
 }
 
 /// A minimap label at full resolution, so the window can show what it is looking at.
@@ -1234,5 +1251,23 @@ mod tests {
         )
         .is_none());
         assert!(hud_strip_region(&frame, &Calibration::default()).is_none());
+    }
+
+    #[test]
+    fn a_full_log_is_rotated_once() {
+        let dir = std::env::temp_dir().join(format!("mscout-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("debug.log");
+        std::fs::write(&path, b"0123456789").expect("write");
+        rotate_log(&path, 100);
+        assert!(path.exists(), "a log under the cap stays");
+        rotate_log(&path, 10);
+        assert!(!path.exists());
+        assert_eq!(
+            std::fs::read(dir.join("debug.log.1")).expect("rotated"),
+            b"0123456789"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
