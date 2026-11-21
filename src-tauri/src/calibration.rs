@@ -609,6 +609,15 @@ pub fn save_diagnostic(serial: u64) -> Result<String, String> {
             }))
         })
         .collect::<Vec<_>>();
+    // The HUD strip around every read box, as raw RGBA. It is lossless, so a
+    // misread frame can become a `testdata/` fixture without a second capture.
+    let hud_strip = hud_strip_region(&frame, &calibration).and_then(|region| {
+        let rgba = crop_rgba(&frame, region)?;
+        Some(serde_json::json!({
+            "region": region,
+            "rgba": settings::to_hex(&rgba),
+        }))
+    });
     let payload = serde_json::json!({
         "version": 2,
         "capturedAt": chrono::Local::now().to_rfc3339(),
@@ -630,6 +639,7 @@ pub fn save_diagnostic(serial: u64) -> Result<String, String> {
         "levelGlyphs": box_glyphs(serial, "level".into()).unwrap_or_default(),
         "mapLines": lines,
         "identityCrops": identity_crops,
+        "hudStrip": hud_strip,
         "atlas": {
             "expGlyphs": exp_atlas.glyphs.len(),
             "expSize": exp_atlas.common_glyph_size(),
@@ -651,6 +661,61 @@ pub fn save_diagnostic(serial: u64) -> Result<String, String> {
     )
     .map_err(|error| error.to_string())?;
     Ok(path.display().to_string())
+}
+
+/// Margin kept around the read boxes in a diagnostic's HUD strip, so a fixture
+/// cut from it is not flush to the glyphs.
+const HUD_STRIP_MARGIN: i32 = 8;
+
+/// The union of the level, job, name and EXP boxes plus a margin, clamped to the
+/// frame. `None` when no box is set.
+fn hud_strip_region(frame: &Frame, calibration: &settings::Calibration) -> Option<Region> {
+    let boxes = [
+        calibration.level,
+        calibration.job,
+        calibration.name,
+        calibration.exp,
+    ];
+    let mut bounds: Option<(i32, i32, i32, i32)> = None;
+    for region in boxes.into_iter().flatten().filter(Region::is_usable) {
+        let (x0, y0, x1, y1) = (region.x, region.y, region.x + region.w, region.y + region.h);
+        bounds = Some(match bounds {
+            None => (x0, y0, x1, y1),
+            Some((a, b, c, d)) => (a.min(x0), b.min(y0), c.max(x1), d.max(y1)),
+        });
+    }
+    let (x0, y0, x1, y1) = bounds?;
+    let x0 = (x0 - HUD_STRIP_MARGIN).max(0);
+    let y0 = (y0 - HUD_STRIP_MARGIN).max(0);
+    let x1 = (x1 + HUD_STRIP_MARGIN).min(frame.width as i32);
+    let y1 = (y1 + HUD_STRIP_MARGIN).min(frame.height as i32);
+    (x1 > x0 && y1 > y0).then_some(Region {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
+    })
+}
+
+/// The frame's RGBA bytes inside `region`, row by row. `None` when the region
+/// leaves the frame.
+fn crop_rgba(frame: &Frame, region: Region) -> Option<Vec<u8>> {
+    if region.x < 0
+        || region.y < 0
+        || region.w <= 0
+        || region.h <= 0
+        || (region.x + region.w) as u32 > frame.width
+        || (region.y + region.h) as u32 > frame.height
+    {
+        return None;
+    }
+    let stride = frame.width as usize * 4;
+    let mut out = Vec::with_capacity(region.w as usize * region.h as usize * 4);
+    for y in region.y as usize..(region.y + region.h) as usize {
+        let start = y * stride + region.x as usize * 4;
+        out.extend_from_slice(&frame.rgba[start..start + region.w as usize * 4]);
+    }
+    Some(out)
 }
 
 /// Split a single name/job box into the two stacked lines it encloses, top
@@ -1126,4 +1191,65 @@ pub fn map_region(serial: u64) -> Result<Option<Region>, String> {
         return Ok(None);
     };
     Ok(ocr::detect_map_label(&frame, panel))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_hud_strip_wraps_every_box_and_stays_in_the_frame() {
+        let frame = Frame {
+            width: 20,
+            height: 10,
+            rgba: (0..20 * 10 * 4).map(|i| i as u8).collect(),
+        };
+        let calibration = Calibration {
+            level: Some(Region {
+                x: 2,
+                y: 4,
+                w: 3,
+                h: 3,
+            }),
+            exp: Some(Region {
+                x: 10,
+                y: 5,
+                w: 6,
+                h: 2,
+            }),
+            ..Calibration::default()
+        };
+        let region = hud_strip_region(&frame, &calibration).expect("region");
+        assert_eq!(
+            region,
+            Region {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 10
+            }
+        );
+        let inner = Region {
+            x: 1,
+            y: 2,
+            w: 2,
+            h: 1,
+        };
+        let start = (2 * 20 + 1) * 4;
+        assert_eq!(
+            crop_rgba(&frame, inner).expect("crop"),
+            frame.rgba[start..start + 8].to_vec()
+        );
+        assert!(crop_rgba(
+            &frame,
+            Region {
+                x: 19,
+                y: 0,
+                w: 2,
+                h: 1
+            }
+        )
+        .is_none());
+        assert!(hud_strip_region(&frame, &Calibration::default()).is_none());
+    }
 }
