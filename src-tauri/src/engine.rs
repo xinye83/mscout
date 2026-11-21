@@ -53,10 +53,12 @@ fn check_exp_level(exp: i64, pct: f64, lv: u32) -> LevelCheck {
         return LevelCheck::Agrees;
     };
     let expected = exp as f64 / required * 100.0;
-    let tolerance = if lv <= 49 || lv >= 90 {
-        0.02
-    } else {
+    // Confirmed rows only differ from the bar by rounding; the estimated rows
+    // get a wider band until they are confirmed in play.
+    let tolerance = if exp_table::ESTIMATED.contains(&lv) {
         CROSS_CHECK_TOLERANCE
+    } else {
+        0.02
     };
     let difference = (pct - expected).abs();
     if difference <= tolerance {
@@ -289,6 +291,8 @@ struct TickOutcome {
     profile: Profile,
     /// Write the sample to history (the guard has seen enough good reads).
     verified: bool,
+    /// The frame was shown but did not count as a good read (see `tick`).
+    warning: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -586,10 +590,10 @@ fn run<R: Runtime>(app: AppHandle<R>) {
                 // waits for consecutive good reads. That keeps a map change from
                 // waiting three ticks before the overlay shows the new name.
                 let _ = app.emit("live-sample", &outcome.sample);
-                engine.keep_outcome(true);
+                engine.keep_outcome(outcome.warning.is_none());
                 let status = match history_error {
                     Some(reason) => CaptureStatus::degraded(Some(reason)),
-                    None => engine.status(None),
+                    None => engine.status(outcome.warning),
                 };
                 publish_capture(&app, &mut engine, status);
             }
@@ -865,6 +869,13 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
     // go up, EXP only goes up within a level except at a confirmed death, and rows
     // are written only after consecutive good reads (see `guard`). A truncated
     // 21,476 read as level 19, and a two-EXP blip, are what it was written against.
+    // A level that does not cross-check against the EXP table comes back with EXP
+    // and level blanked (the only time a parsed reading carries an EXP rejection).
+    // Map, name and job are still worth showing, but the frame must count as a
+    // failed read so the overlay goes degraded instead of saying "reading" while
+    // nothing is recorded.
+    let warning = readings.provenance.exp.reason.clone();
+
     let point = guard::Point {
         lv: readings.lv,
         exp: readings.exp,
@@ -902,6 +913,7 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
             job: readings.job.clone(),
         },
         verified,
+        warning,
     })
 }
 

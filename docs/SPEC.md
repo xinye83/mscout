@@ -310,7 +310,7 @@ Recording is gated: a size with no calibrated profile reports **lost** and write
 | Range | Status | Source |
 |---|---|---|
 | Lv 1–49 | confirmed in-game | Classic World wiki |
-| Lv 50–89 | **estimated** (~5.5% per level, pre-BB shaped) | extrapolated, labeled as such |
+| Lv 50–89 | **estimated** (not yet confirmed in Classic World) | NiaMeowDB planning rows, labeled as such |
 | Lv 90–100 | exact anchors + 2.1× per level | Nexon/launch data |
 
 - Level 30 = 95,700 EXP; total to 90 = 103,322,764; total to 100 = 18,194,778,397.
