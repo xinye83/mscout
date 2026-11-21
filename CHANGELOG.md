@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Internal
+- Test data is reorganised into `frames/<pair>/<scene>/` (each scene with its own
+  truth, so a pair can hold several characters and levels), `crops/<pair>/`
+  (focused crops with JSON sidecars) and `profiles/upgrade/`. Unverified truth
+  fails the gate; the hold-out is recorded once, by its flag.
+- `corpus::import_diagnostic` turns a saved diagnostic into focused crops,
+  marked unverified until checked.
+
 ## [0.8.0] - 2026-11-21
 
 ### Added
