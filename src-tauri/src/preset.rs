@@ -1,7 +1,100 @@
 use std::path::PathBuf;
 
 use crate::profile::Profile;
-use crate::settings::UiMode;
+use crate::settings::{Region, UiMode};
+
+/// Name/job boxes that earlier presets shipped, with the width that replaced
+/// them. The old boxes were measured on one character and only fit "Page" and
+/// "Euroblood": a longer job such as "Beginner", or a longer name, was clipped
+/// and reported unrecognised. The new widths run to just short of the divider
+/// that closes the level panel, measured on every `testdata/` HUD frame.
+///
+/// (client width, client height, old box, new width). The 1366×768 boxes are
+/// shared by all three UI Sizes. 1920×1080 Default and Filtered keep their boxes
+/// for now: their anti-aliased name/job reader is sensitive to how much empty
+/// panel follows the text, and the corpus has one name and one job to check a
+/// wider box against.
+const NARROW_IDENTITY_BOXES: &[(u32, u32, Region, i32)] = &[
+    (
+        1366,
+        768,
+        Region {
+            x: 366,
+            y: 737,
+            w: 34,
+            h: 12,
+        },
+        120,
+    ),
+    (
+        1366,
+        768,
+        Region {
+            x: 366,
+            y: 751,
+            w: 60,
+            h: 13,
+        },
+        120,
+    ),
+    (
+        1920,
+        1080,
+        Region {
+            x: 645,
+            y: 1050,
+            w: 27,
+            h: 11,
+        },
+        118,
+    ),
+    (
+        1920,
+        1080,
+        Region {
+            x: 645,
+            y: 1064,
+            w: 55,
+            h: 9,
+        },
+        118,
+    ),
+];
+
+/// Widen a saved profile's name/job box that is still exactly an old shipped
+/// one. A box the player drew is left alone, and so is a box with a taught
+/// fingerprint, because the fingerprint is cropped to the box and would stop
+/// matching. Returns whether anything changed.
+pub fn widen_identity_boxes(profile: &mut Profile) -> bool {
+    let (w, h) = (profile.client_w, profile.client_h);
+    let widen = |region: &mut Option<Region>, taught: bool| -> bool {
+        let Some(current) = region.as_mut() else {
+            return false;
+        };
+        if taught {
+            return false;
+        }
+        match NARROW_IDENTITY_BOXES
+            .iter()
+            .find(|(cw, ch, old, _)| (*cw, *ch) == (w, h) && old == current)
+        {
+            Some((_, _, _, new_w)) => {
+                current.w = *new_w;
+                true
+            }
+            None => false,
+        }
+    };
+    let name = widen(
+        &mut profile.calibration.name,
+        profile.identities.name.is_some(),
+    );
+    let job = widen(
+        &mut profile.calibration.job,
+        profile.identities.job.is_some(),
+    );
+    name || job
+}
 
 /// Where presets are looked up, in order. A `data/presets/` file wins so a
 /// preset can be corrected or added without rebuilding; otherwise the copy that
@@ -53,6 +146,69 @@ pub fn for_size(client_w: u32, client_h: u32, ui_mode: UiMode) -> Option<Profile
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn old_ideal_profile() -> Profile {
+        let mut profile = Profile::new_for_mode(1920, 1080, UiMode::Ideal);
+        profile.calibration.job = Some(Region {
+            x: 645,
+            y: 1050,
+            w: 27,
+            h: 11,
+        });
+        profile.calibration.name = Some(Region {
+            x: 645,
+            y: 1064,
+            w: 55,
+            h: 9,
+        });
+        profile
+    }
+
+    #[test]
+    fn old_shipped_identity_boxes_are_widened() {
+        let mut profile = old_ideal_profile();
+        assert!(widen_identity_boxes(&mut profile));
+        assert_eq!(profile.calibration.job.map(|r| r.w), Some(118));
+        assert_eq!(profile.calibration.name.map(|r| r.w), Some(118));
+        assert!(!widen_identity_boxes(&mut profile), "widening runs once");
+    }
+
+    #[test]
+    fn drawn_or_taught_identity_boxes_are_left_alone() {
+        let mut drawn = old_ideal_profile();
+        drawn.calibration.job = Some(Region {
+            x: 640,
+            y: 1048,
+            w: 60,
+            h: 14,
+        });
+        drawn.identities.name = Some(crate::settings::Template {
+            label: "Euroblood".into(),
+            w: 55,
+            h: 9,
+            pixels: String::new(),
+        });
+        assert!(!widen_identity_boxes(&mut drawn));
+        assert_eq!(drawn.calibration.job.map(|r| r.w), Some(60));
+        assert_eq!(drawn.calibration.name.map(|r| r.w), Some(55));
+    }
+
+    #[test]
+    fn shipped_presets_use_the_wide_identity_boxes() {
+        for (w, h, mode) in [
+            (1366, 768, UiMode::Default),
+            (1366, 768, UiMode::Ideal),
+            (1366, 768, UiMode::Filtered),
+            (1920, 1080, UiMode::Ideal),
+        ] {
+            let mut profile = for_size(w, h, mode).expect("shipped preset");
+            assert!(
+                !widen_identity_boxes(&mut profile),
+                "{} still ships a narrow name/job box",
+                profile.key()
+            );
+        }
+    }
 
     #[test]
     fn known_size_ships_with_boxes() {

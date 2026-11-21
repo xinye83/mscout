@@ -260,7 +260,16 @@ pub fn activate(client_w: u32, client_h: u32) -> Result<Profile, String> {
     }
 
     let profile = match load_or_quarantine(client_w, client_h, ui_mode)? {
-        Some(profile) => profile,
+        Some(mut profile) => {
+            if crate::preset::widen_identity_boxes(&mut profile) {
+                crate::calibration::log(&format!(
+                    "widened the name/job boxes of profile {} to fit longer text",
+                    profile.key()
+                ));
+                let _ = save(&profile);
+            }
+            profile
+        }
         // A known size starts from its shipped preset and is saved straight
         // away, so it reads without any drawing and shows up as a normal,
         // editable profile. Deleting it just restores this starting point.
