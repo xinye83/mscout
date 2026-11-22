@@ -1,9 +1,9 @@
-//! Desktop notifications for capture failures.
+//! Desktop notifications, for the one case the overlay cannot show: a feature
+//! that failed at startup (a hotkey another app holds).
 //!
-//! The overlay is only visible when the player looks at it, but a broken capture
-//! matters while they are playing. `docs/SPEC.md` therefore requires a desktop
-//! notification when the capture is lost, so the failure is discovered at the time
-//! it happens instead of three hours later in the history.
+//! A lost capture is **not** notified: the overlay's red banner says it, and a
+//! toast on every drop to `lost` (closing or minimising the game included) was
+//! more noise than help.
 //!
 //! This is a **WinRT toast**, not a tray balloon. A balloon is the obvious older
 //! API, but Windows 11 no longer draws one: `Shell_NotifyIconW` accepts the call
@@ -23,8 +23,6 @@ pub const APP_ID: &str = "MScout.Notifications";
 
 /// What a notification is about, so callers do not pass raw UI text around.
 pub enum Notice<'a> {
-    /// The game window is gone, minimised, or could not be captured.
-    CaptureLost(&'a str),
     /// Something at startup did not work but MScout carried on without it.
     Degraded(&'a str),
 }
@@ -32,14 +30,13 @@ pub enum Notice<'a> {
 impl Notice<'_> {
     fn title(&self) -> &'static str {
         match self {
-            Notice::CaptureLost(_) => "MScout — not reading",
             Notice::Degraded(_) => "MScout — running without a feature",
         }
     }
 
     fn body(&self) -> &str {
         match self {
-            Notice::CaptureLost(reason) | Notice::Degraded(reason) => reason,
+            Notice::Degraded(reason) => reason,
         }
     }
 }
@@ -182,27 +179,22 @@ pub fn notify(notice: Notice<'_>) {
     }
 }
 
-/// Tell the player the capture stopped.
-pub fn capture_lost(reason: &str) {
-    notify(Notice::CaptureLost(reason));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn the_notice_carries_the_reason_as_its_body() {
-        let notice = Notice::CaptureLost("game window not found");
-        assert_eq!(notice.title(), "MScout — not reading");
-        assert_eq!(notice.body(), "game window not found");
+        let notice = Notice::Degraded("Ctrl+Alt+M is taken");
+        assert_eq!(notice.title(), "MScout — running without a feature");
+        assert_eq!(notice.body(), "Ctrl+Alt+M is taken");
     }
 
     #[test]
     fn a_notification_failure_does_not_panic() {
         // The real call is a WinRT activation; what matters is that an unavailable
         // shell is a reported false, never a panic.
-        notify(Notice::CaptureLost("test reason"));
+        notify(Notice::Degraded("test reason"));
     }
 
     #[test]

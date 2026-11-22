@@ -136,7 +136,7 @@ Three visible states, always shown in the overlay:
 |---|---|---|
 | **Reading** | Last sample parsed cleanly | normal |
 | **Degraded** | ≥3 parse failures in the last 10 attempts | yellow banner; chart shades the unreliable span |
-| **Lost** | Window gone, minimized, capture denied, or ROI no longer readable | red banner naming the cause, "recalibrate" action, **desktop notification** |
+| **Lost** | Window gone, minimized, capture denied, or ROI no longer readable | red banner naming the cause, "recalibrate" action; no desktop notification (dropped in 0.9) |
 
 Notifications exist so a broken capture is discovered while playing, not three hours later.
 
@@ -234,7 +234,7 @@ Behavior:
 - **Scaling** respects display scale (no postage stamp on 4K).
 - **Never steals focus** — expanding, banner changes and notifications must not pull focus from the game.
 - **Degraded** replaces the top line with a yellow strip: `EXP reading unstable — check calibration`.
-- **Lost** replaces it red and expands the panel once: `Not reading EXP — game window not found`, plus a `Recalibrate` button and a desktop notification.
+- **Lost** replaces it red and expands the panel once: `Not reading EXP — game window not found`, plus a `Recalibrate` button. No desktop notification: the banner is the signal.
 - **Idle** shows a muted `idle` pill after 2 minutes without gain; the rate visibly decays (wall-clock model, §7.1).
 
 ---

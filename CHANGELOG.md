@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Removed
+- The "MScout — not reading" desktop notification. A lost capture (including
+  closing or minimising the game) is shown by the overlay's red banner only;
+  the toast is kept for a startup problem the overlay cannot show, such as a
+  hotkey another app holds.
+
 ### Internal
 - Test data is reorganised into `frames/<pair>/<scene>/` (each scene with its own
   truth, so a pair can hold several characters and levels), `crops/<pair>/`

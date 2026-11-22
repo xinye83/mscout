@@ -541,8 +541,7 @@ const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(60);
 ///
 /// A panic (a poisoned lock reaching an `expect`, a bad index in a reader) used to
 /// end the thread silently: reading stopped while the overlay kept showing the
-/// last status. Now the panic is logged, the overlay and a notification say the
-/// capture is lost, and the loop starts again from a fresh state, waiting longer
+/// last status. Now the panic is logged, the overlay says the capture is lost, and the loop starts again from a fresh state, waiting longer
 /// after each consecutive failure so a panic on every tick cannot spin.
 fn supervise<R: Runtime>(app: AppHandle<R>) {
     let mut backoff = Duration::from_secs(1);
@@ -554,8 +553,7 @@ fn supervise<R: Runtime>(app: AppHandle<R>) {
         };
         let reason = format!("reader crashed and restarted: {}", panic_message(&*payload));
         crate::calibration::log(&reason);
-        let _ = app.emit("capture-status", CaptureStatus::lost(reason.clone()));
-        crate::notify::capture_lost(&reason);
+        let _ = app.emit("capture-status", CaptureStatus::lost(reason));
         // A run that lasted a while was a one-off; start the backoff again.
         if started.elapsed() > RESTART_BACKOFF_MAX {
             backoff = Duration::from_secs(1);
@@ -684,18 +682,9 @@ fn run<R: Runtime>(app: AppHandle<R>) {
             }
             Err(TickError::Lost(reason)) => {
                 engine.reset_target();
-                // The player may not be looking at the overlay, so a lost capture
-                // is announced: that is the whole point of having a notification.
-                // Only on the transition, so a sustained outage does not notify
-                // once a second.
-                if engine
-                    .published
-                    .as_ref()
-                    .map(|status| status.state.as_str())
-                    != Some("lost")
-                {
-                    crate::notify::capture_lost(&reason);
-                }
+                // The overlay's red banner is the signal. A desktop toast on every
+                // drop to `lost` (closing or minimising the game included) was more
+                // noise than help, so none is posted.
                 publish_capture(&app, &mut engine, CaptureStatus::lost(reason));
             }
             Err(TickError::Uncalibrated(reason)) => {
