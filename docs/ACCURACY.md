@@ -148,7 +148,7 @@ work, and this document says so on purpose.
   `127,028[72.91%]`). The live Filtered digit sweep that found the `8`-as-`6`/`9`
   glyph gap was a separate live probe; **that specific failure is not representable
   in this corpus**, which is why it is still listed in
-  [ROADMAP → Known limitations](ROADMAP.md#known-limitations) while the corpus
+  [SPEC → Known limitations](SPEC.md#15-known-limitations) while the corpus
   reads exactly.
 - **Three map labels.** `Victoria Road` / `Parched Land` (all `1366x768` pairs),
   `Hidden Street` / `Free Market <8>` (`1920x1080` Default and Filtered), and
@@ -184,7 +184,7 @@ work, and this document says so on purpose.
   accuracy.
 - They do not say the Filtered glyph gaps are fixed. The known `8` → `6`/`9` EXP
   error and the percentage `3` → `8` misread are found by the live digit sweep and
-  remain listed in [ROADMAP → Known limitations](ROADMAP.md#known-limitations).
+  remain listed in [SPEC → Known limitations](SPEC.md#15-known-limitations).
 - They do not say the hold-out is unbiased — see
   [The hold-out is retrospective](#the-hold-out-is-retrospective).
 

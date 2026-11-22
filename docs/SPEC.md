@@ -35,6 +35,7 @@ Target is Classic World specifically — not original MapleStory, not a pre-Big 
 12. [Events](#12-events)
 13. [Explicit non-goals for v1](#13-explicit-non-goals-for-v1)
 14. [Decisions and open work](#14-decisions-and-open-work)
+15. [Known limitations](#15-known-limitations)
 
 ---
 
@@ -346,3 +347,37 @@ Recorded inline and/or derived on read:
 ## 14. Decisions and open work
 
 Architecture and behavior decisions live in [DECISIONS.md](DECISIONS.md). Forward-looking work, including Default/Filtered UI-size support and multi-resolution portability, is tracked in [ROADMAP.md](ROADMAP.md).
+
+---
+
+## 15. Known limitations
+
+What the current version does, not a task list. Work that addresses one is
+an item in [ROADMAP.md](ROADMAP.md).
+
+- **Support matrix:** 1366×768 and 1920×1080, all three UI sizes. 1920×1200 has
+  no preset or fixture and needs manual calibration (roadmap).
+- **UI Size is selected manually.** A wrong mode selects the wrong profile and
+  boxes, so it reads nothing or misreads. Auto-detection is deferred (roadmap).
+- **Profiles are physical-pixel and UI-scale specific.** A size/UI-size change
+  switches profiles; a transient client size can create an empty profile (e.g.
+  `1920x1081@ideal`). Move it aside if the app selects it.
+- **Glyph coverage is reported by character, not size.** A digit learned from
+  HP/MP at a smaller size does not parse the larger EXP font.
+- **The EXP box is sized for the current digit count.** A much longer EXP number
+  can clip the ROI until it is redrawn.
+- **Filtered atlas gaps.** A live `8` can read as `6`/`9` (20-EXP error; the
+  20-EXP change can pass the rounding check), and a percentage `3` can read as
+  `8` (the percentage is repaired from EXP/level). See the roadmap's filtered glyph variants.
+- **Map matching depends on the client table.** It has 347 names and 11 streets
+  in the current build; the count is version-specific. A name absent from the
+  table is shown from the OCR line; a one-line label has no street; an ambiguous
+  `<N>` suffix stays `unknown`. Exact OCR beats the whole-line DTW, but the DTW
+  fallback can still confuse Roman-numeral siblings; see the roadmap.
+- **Windows dependencies:** Arial is used for name/job and label rendering;
+  `Windows.Media.Ocr` is used for the Default/Filtered name/job and map label.
+  Neither is bundled or installed by the app.
+- **History ranges are presets only** (no brush/zoom); see the roadmap.
+- **`window-error.log`** is still written when history-window creation fails;
+  see the roadmap.
+- **Dev build expects Vite.** A direct `cargo run` needs `npm run dev` running.

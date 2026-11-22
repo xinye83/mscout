@@ -8,7 +8,7 @@ A read-only companion overlay for **MapleStory Classic World**. It reads support
 
 > **This is a vibecoded project.** It was built by pairing with an AI coding agent rather than written by hand, line by line. The behaviour is tested against the real game and the Rust side has a unit-test suite, but expect the rough edges of a fast, AI-assisted codebase: uneven comments, the occasional over-engineered abstraction, and design choices that were reasoned through in conversation rather than reviewed by a second human. Read it accordingly.
 
-See [docs/SPEC.md](docs/SPEC.md) for supported behaviour and constraints, [docs/PRESETS.md](docs/PRESETS.md) for the current preset/support matrix, and [docs/ROADMAP.md](docs/ROADMAP.md) for what is built and what is next.
+See [docs/SPEC.md](docs/SPEC.md) for supported behaviour and constraints, [docs/PRESETS.md](docs/PRESETS.md) for the current preset/support matrix, and [docs/ROADMAP.md](docs/ROADMAP.md) for open work.
 
 ## Getting started
 
@@ -43,7 +43,7 @@ Sample format and invariants are documented in [docs/DATA.md](docs/DATA.md).
 | [docs/PRESETS.md](docs/PRESETS.md) | Preset and support matrix, reset behavior, limitations |
 | [CHANGELOG.md](CHANGELOG.md) | What each version added, changed and fixed |
 | [docs/SPEC.md](docs/SPEC.md) | Behavioral spec |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Current release, scheduled/deferred work, known limitations |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Open work |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Decision log — why things are the way they are |
 | [docs/DATA.md](docs/DATA.md) | File formats, profiles, schema, invariants |
 | [docs/ACCURACY.md](docs/ACCURACY.md) | Measured accuracy of the tracked fixture corpus, with the commands and its limits |
