@@ -222,6 +222,19 @@ pub fn learn_level_atlas(serial: u64, text: String) -> Result<LearningInfo, Stri
     learn_region(serial, text, "level")
 }
 
+/// `stored` plus the glyphs of `text` as drawn in `region` of the frame.
+fn learn_box(
+    frame: &Frame,
+    region: Region,
+    stored: &settings::StoredAtlas,
+    text: &str,
+) -> Result<Atlas, String> {
+    let gray = ocr::crop_gray(frame, region).ok_or("the box is outside the window")?;
+    let mut atlas = Atlas::from_settings(stored);
+    atlas.learn(text, &gray)?;
+    Ok(atlas)
+}
+
 fn learn_region(serial: u64, text: String, target: &str) -> Result<LearningInfo, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
@@ -235,27 +248,26 @@ fn learn_region(serial: u64, text: String, target: &str) -> Result<LearningInfo,
     let region = region
         .filter(Region::is_usable)
         .ok_or_else(|| format!("save the {what} box first"))?;
-    let gray = ocr::crop_gray(&frame, region)
-        .ok_or_else(|| format!("the {what} box is outside the window"))?;
-
     log(&format!(
-        "learn_region target={target} box={:?} crop {}x{} text={text:?}",
-        region, gray.w, gray.h
+        "learn_region target={target} box={region:?} text={text:?}"
     ));
 
     // Each readout owns its atlas — see `Profile::level_atlas`. Learning level
     // glyphs into the EXP atlas used to change how EXP was read, and vice versa.
-    let mut atlas = if level {
-        Atlas::from_settings(&profile::read_atlas(|p| &p.level_atlas))
+    let current = if level {
+        profile::read_atlas(|p| &p.level_atlas)
     } else {
-        Atlas::from_settings(&profile::read_atlas(|p| &p.atlas))
+        profile::read_atlas(|p| &p.atlas)
     };
-    if let Err(error) = atlas.learn(&text, &gray) {
-        // Without this the failed teach left no trace at all, which is why a box
-        // that could not be learned looked like the button doing nothing.
-        log(&format!("learn_region failed: {error}"));
-        return Err(error);
-    }
+    let atlas = match learn_box(&frame, region, &current, &text) {
+        Ok(atlas) => atlas,
+        Err(error) => {
+            // Without this the failed teach left no trace at all, which is why a
+            // box that could not be learned looked like the button doing nothing.
+            log(&format!("learn_region failed: {error}"));
+            return Err(error);
+        }
+    };
     let stored = atlas.to_settings();
     if level {
         profile::write(|p| p.level_atlas = stored.clone())?;
@@ -1151,14 +1163,18 @@ pub fn box_crop(serial: u64, kind: BoxKind) -> Result<LabelCrop, String> {
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
     let calibration = profile::read(|p| &p.calibration);
+    crop_box(&frame, &calibration, kind)
+}
 
+/// The crop a calibration card shows for `kind`, from a frame and a box set.
+fn crop_box(frame: &Frame, calibration: &Calibration, kind: BoxKind) -> Result<LabelCrop, String> {
     let (gray, lines) = match kind {
         BoxKind::Street | BoxKind::Map => {
             let map_line = kind == BoxKind::Map;
             // The line detector is what the overlay reads. Prefer its regions over
             // legacy saved boxes: an older profile can hold the whole two-line label
             // as `map`, which shows the wrong pixels for both cards.
-            if let Some(lines) = ocr::map_label_line_regions(&frame) {
+            if let Some(lines) = ocr::map_label_line_regions(frame) {
                 let picked = if map_line {
                     lines.last()
                 } else if lines.len() > 1 {
@@ -1189,7 +1205,7 @@ pub fn box_crop(serial: u64, kind: BoxKind) -> Result<LabelCrop, String> {
                 calibration.street.filter(Region::is_usable)
             };
             if let Some(region) = saved {
-                let gray = ocr::crop_gray(&frame, region)
+                let gray = ocr::crop_gray(frame, region)
                     .ok_or_else(|| format!("the {kind} box is outside the window"))?;
                 let lines = if map_line {
                     ocr::text_lines(&gray).len()
@@ -1212,7 +1228,7 @@ pub fn box_crop(serial: u64, kind: BoxKind) -> Result<LabelCrop, String> {
             }
             .filter(Region::is_usable)
             .ok_or_else(|| format!("save the {other} box first"))?;
-            let gray = ocr::crop_gray(&frame, region)
+            let gray = ocr::crop_gray(frame, region)
                 .ok_or_else(|| format!("the {other} box is outside the window"))?;
             (gray, 0)
         }
@@ -1429,5 +1445,71 @@ mod tests {
                 "{pair}: lines keep the box's x and width"
             );
         }
+    }
+
+    /// Every shipped box of every corpus pair crops from its composed frame at
+    /// the box's size, and the map card finds the one-line map name.
+    #[test]
+    fn every_preset_box_crops_from_its_corpus_frame() {
+        for case in crate::corpus::load_cases_in(&crate::corpus::fixtures_dir()) {
+            if case.minimap_state != "expanded" {
+                continue;
+            }
+            let (w, h) = case.client_size();
+            let Some(preset) = crate::preset::for_size(w, h, case.mode()) else {
+                continue;
+            };
+            let frame = crate::corpus::compose_frame(&case);
+            let calibration = &preset.calibration;
+            for (kind, region) in [
+                (BoxKind::Exp, calibration.exp),
+                (BoxKind::Level, calibration.level),
+                (BoxKind::Name, calibration.name),
+                (BoxKind::Job, calibration.job),
+            ] {
+                let region = region.unwrap_or_else(|| panic!("{}: no {kind} box", case.key));
+                let crop = crop_box(&frame, calibration, kind)
+                    .unwrap_or_else(|error| panic!("{}: {kind}: {error}", case.key));
+                assert_eq!(
+                    (crop.w as i32, crop.h as i32),
+                    (region.w, region.h),
+                    "{}: {kind} crop",
+                    case.key
+                );
+                assert_eq!(
+                    crop.px.len(),
+                    (crop.w * crop.h * 2) as usize,
+                    "{}: {kind}",
+                    case.key
+                );
+            }
+            let map = crop_box(&frame, calibration, BoxKind::Map)
+                .unwrap_or_else(|error| panic!("{}: map: {error}", case.key));
+            assert_eq!(map.lines, 1, "{}: the map card shows one line", case.key);
+        }
+    }
+
+    /// Teaching the EXP box its on-screen text from an empty atlas reads the
+    /// same text back (Ideal draws the readout as exact 1-bit glyphs).
+    #[test]
+    fn a_taught_exp_box_reads_its_text_back() {
+        let case = crate::corpus::load_cases_in(&crate::corpus::fixtures_dir())
+            .into_iter()
+            .find(|case| case.pair_key == "1920x1080@ideal" && case.minimap_state == "expanded")
+            .expect("the Ideal expanded case");
+        let frame = crate::corpus::compose_frame(&case);
+        let preset =
+            crate::preset::for_size(1920, 1080, crate::settings::UiMode::Ideal).expect("preset");
+        let region = preset.calibration.exp.expect("EXP box");
+        let atlas = learn_box(
+            &frame,
+            region,
+            &settings::StoredAtlas::default(),
+            &case.truth.exp_text,
+        )
+        .expect("learn");
+        let gray = ocr::crop_gray(&frame, region).expect("crop");
+        let (text, _) = atlas.recognize_readout(&gray).expect("read back");
+        assert_eq!(text, case.truth.exp_text);
     }
 }
