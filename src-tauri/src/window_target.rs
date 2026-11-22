@@ -430,7 +430,19 @@ mod tests {
     #[test]
     fn resolves_a_listed_window() {
         let windows = enumerate_windows();
-        let first = windows.first().expect("no windows to resolve");
+        // A selector names a window by title and process, so it can only pick out
+        // a window that no other listed window shares both with (two copies of
+        // one app, or two of its windows with one title, are not resolvable).
+        let first = windows
+            .iter()
+            .find(|window| {
+                windows
+                    .iter()
+                    .filter(|other| other.title == window.title && other.process == window.process)
+                    .count()
+                    == 1
+            })
+            .expect("no uniquely named window to resolve");
         let selector = WindowSelector {
             title: first.title.clone(),
             process: first.process.clone(),
