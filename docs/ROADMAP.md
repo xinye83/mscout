@@ -12,6 +12,16 @@ in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
   read (`READ_KNOWN_GAPS`). Fit the filter per size (strength,
   alignment) against static HUD art at run time, or read the recovered picture
   with a tolerance the exact 1x readers do not have.
+- [ ] **Full Screen at a small size.** MesoVibe reports that Full Screen at
+  1280×720 or 800×600 on a larger display stretches a 720- or 600-line
+  picture (with black side bars for 4:3 on a wide display). `native.rs`
+  assumes a 768-line picture above 768 lines, so such a frame reads wrong.
+  Capture one, then let `Scaling` try those source heights too.
+- [ ] **Confirm the scaling rules at more sizes.** The Ideal block size
+  (`height / 720`) is measured only at 1080, 1200 and 1440 lines; a 1600- or
+  2160-line Ideal capture settles it. The Default picture-width rounding is
+  measured only at 16:9 and 16:10; a windowed size such as 1600×900 checks it
+  at another width. Add each capture to `testdata/` as a scene.
 - [ ] **Filtered glyph variants (atlas coverage).** The digit sweep found a live
   `8` that the seeded atlas does not represent: at 8×11 the correct `8` scores
   ~29 while `6`/`9` score ~10–12. A 20-EXP error can pass the percentage
@@ -20,11 +30,23 @@ in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
   blurred/thresholded variants from the client glyphs at the measured size, or
   learn a variant only after an EXP/level/pct-consistent read. Rerun the digit
   sweep and promote its known-gap expectations to exact.
+- [ ] **Exact 1x map label match.** On the 1x picture the label is drawn in
+  1-bit Arial Bold at a fixed size, so it can be matched exactly against the
+  client's map table rendered the same way, instead of Windows OCR plus the
+  whole-line DTW. That would also settle the Roman-numeral siblings below and
+  drop the `Windows.Media.Ocr` dependency.
 - [ ] **Roman-numeral DTW fallback.** Exact OCR decides `I`/`II`/`III` when it
   reads the line. When OCR is absent or only fuzzy (small Ideal labels), the
   whole-line `match_map_name` DTW can still choose the wrong sibling. Give that
   path its own suffix/width decision, or require a cross-check before accepting
   a result from it.
+- [ ] **Read the whole EXP field.** The EXP box is sized for the current digit
+  count, so a much longer number can be clipped until the box is redrawn. In
+  the 1x picture the readout always starts at the same place after `EXP.`;
+  read from there to the end of the bar instead of a fitted box.
+- [ ] **EXP bar fill as a cross-check.** The bar's fill length is an
+  independent measure of the percentage (maple-route uses it). Reject a read
+  whose percentage disagrees with the fill by more than its pixel resolution.
 - [ ] **Live Balrog label fixture.** The `Where the Balrogs Live` literal
   fallback is unit-tested, but its live label crop is not in `testdata/`. Add
   the crop as a client-tier regression fixture when the map is available.
@@ -39,6 +61,12 @@ in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
 
 ## Product
 
+- [ ] **Overlay on a full-monitor game.** The overlay's top-left is put at the
+  client's top-right corner (`engine::anchor_overlay`). When the game fills its
+  monitor (2560×1440 on a 2560×1440 display) that corner is on the next
+  display, so the overlay jumps there. Keep it on the game's monitor: place it
+  inside the client's top-right corner when the outside one is off that
+  monitor.
 - [ ] **History window, full design.** Today it has 1/7/30-day presets, the
   EXP chart with gap breaks, a summary and the repair button. Add: All and
   custom ranges (keys `T / 7 / 30 / A`); a rate pane under the EXP pane sharing
@@ -62,6 +90,19 @@ in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
 
 Unscheduled, deferred or out of scope for now.
 
+- [ ] **Retire the client-size reader machinery.** Default and Ideal read the
+  exact 1x picture, so the scaled glyph variants (`scale_variants`), live
+  rendering learning (`learn_rendering`), the near-tie settle
+  (`settle_in_place`), the Default/Filtered seeded atlases and the Windows OCR
+  name/job fusion only serve Filter Applied at 1920×1080. Remove them once
+  Filter Applied reads the 1x picture as well ("Filter Applied above 1080
+  lines").
+- [ ] **Fewer teach flows.** With exact 1x reading the name/job and map teach
+  steps in Calibration should rarely be needed; keep them as overrides, and
+  drop the ones the corpus shows are never used.
+- [ ] **No profile for a transient size.** A window caught mid-resize creates an
+  empty profile (e.g. `1920x1081@ideal`). Only create a profile once a size has
+  been seen for a few seconds, or derive it and keep it unsaved until it reads.
 - [ ] **Screenshot import tool.** Turn a full client screenshot + ground truth
   into a `testdata/frames/<WxH@mode>/<scene>/` with its `scene.json`. (A saved
   diagnostic already imports as focused crops: `corpus::import_diagnostic`.)
