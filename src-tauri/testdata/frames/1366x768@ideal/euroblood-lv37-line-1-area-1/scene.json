@@ -1,0 +1,30 @@
+{
+  "version": 3,
+  "added": "2026-11-22",
+  "verified": true,
+  "truth": {
+    "name": "Euroblood",
+    "job": "Page",
+    "level": 37,
+    "expText": "128,328[59.25%]",
+    "exp": 128328,
+    "pct": 59.25,
+    "street": "Kerning City Subway",
+    "map": "Line 1 <Area 1>"
+  },
+  "images": [
+    {
+      "id": "hud-main",
+      "kind": "hud",
+      "file": "hud-main.png",
+      "crop": { "x": 250, "y": 720, "w": 690, "h": 48 }
+    },
+    {
+      "id": "minimap-expanded",
+      "kind": "minimap",
+      "state": "expanded",
+      "file": "minimap-expanded.png",
+      "crop": { "x": 13, "y": 10, "w": 282, "h": 159 }
+    }
+  ]
+}

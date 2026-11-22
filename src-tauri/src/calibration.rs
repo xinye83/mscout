@@ -1479,7 +1479,14 @@ mod tests {
             ),
         ];
         for (pair, drawn, job_rows, name_rows) in cases {
-            let frame = crate::corpus::fixture_frame(pair, "hud-main");
+            // The box coordinates are this scene's: other scenes at the same
+            // size are other characters.
+            let scene = if pair == "1920x1080" {
+                "euroblood-lv35-free-market-8"
+            } else {
+                "euroblood-lv35-east-rocky-mountain-3"
+            };
+            let frame = crate::corpus::fixture_frame(pair, &format!("{scene}/hud-main"));
             let lines =
                 split_lines(&frame, drawn).unwrap_or_else(|error| panic!("{pair}: {error}"));
             assert_eq!(lines.len(), 2, "{pair}: {lines:?}");

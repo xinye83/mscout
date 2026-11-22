@@ -1,0 +1,30 @@
+{
+  "version": 3,
+  "added": "2026-11-22",
+  "verified": true,
+  "truth": {
+    "name": "Eurovein",
+    "job": "Magician",
+    "level": 10,
+    "expText": "509[29.66%]",
+    "exp": 509,
+    "pct": 29.66,
+    "street": "Victoria Road",
+    "map": "Ellinia Weapon Store"
+  },
+  "images": [
+    {
+      "id": "hud-main",
+      "kind": "hud",
+      "file": "hud-main.png",
+      "crop": { "x": 250, "y": 720, "w": 690, "h": 48 }
+    },
+    {
+      "id": "minimap-folded",
+      "kind": "minimap",
+      "state": "folded",
+      "file": "minimap-folded.png",
+      "crop": { "x": 12, "y": 10, "w": 293, "h": 26 }
+    }
+  ]
+}
