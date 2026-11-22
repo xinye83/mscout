@@ -1181,33 +1181,20 @@ mod tests {
         assert_eq!(fix_identity_case("Dawn Warrior"), "Dawn Warrior");
     }
 
-    /// The live Ideal name crop for `Eurovein` (1920x1080, saved by a diagnostic).
-    /// The `i` is a 1 px bar with a one-pixel gap under its dot; it used to come
-    /// out as an empty shape that matched the `I` bar, so the name read
-    /// `Euroveln` after the case fix.
+    /// The live Ideal name crop for `Eurovein` (testdata, imported from a saved
+    /// diagnostic). The `i` is a 1 px bar with a one-pixel gap under its dot; it
+    /// used to come out as an empty shape that matched the `I` bar, so the name
+    /// read `Euroveln` after the case fix.
     #[test]
     fn a_dotted_i_in_a_name_is_not_read_as_a_bar() {
-        let rows = [
-            "######................................#...........",
-            "#.................................................",
-            "#.......#...#..#.#..###..#...#..###...#..#.##.....",
-            "#.......#...#..##..#...#.#...#.#...#..#..##..#....",
-            "######..#...#..#...#...#..#.#..#...#..#..#...#....",
-            "#.......#...#..#...#...#..#.#..#####..#..#...#....",
-            "#.......#...#..#...#...#..#.#..#......#..#...#....",
-            "#.......#...#..#...#...#...#...#...#..#..#...#....",
-            "######...####..#....###....#....###...#..#...#....",
-        ];
-        let w = rows[0].len();
-        let px = rows
-            .iter()
-            .flat_map(|row| row.bytes().map(|b| if b == b'#' { 239 } else { 60 }))
-            .collect();
-        let gray = Gray {
-            w,
-            h: rows.len(),
-            px,
+        let frame = crate::corpus::fixture_frame("1920x1080@ideal", "name-eurovein");
+        let whole = crate::settings::Region {
+            x: 0,
+            y: 0,
+            w: frame.width as i32,
+            h: frame.height as i32,
         };
+        let gray = ocr::crop_gray(&frame, whole).expect("crop");
         let (stored, _) = seed_identity(&gray).expect("seed");
         let atlas = Atlas::from_settings(&stored);
         let (text, _) = atlas
