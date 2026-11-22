@@ -858,12 +858,16 @@ fn split_lines(frame: &Frame, region: Region) -> Result<Vec<Region>, String> {
         ));
     }
 
+    // Each line keeps the drawn box's full width, not the width of the text on
+    // screen now: the box must fit any name or job, and one cut to the current
+    // text clipped a longer one (a box drawn while "Eurovein" was on screen read
+    // "Euroblood" as "Eurobloc").
     Ok(lines
         .into_iter()
-        .map(|(lx, ly, lw, lh)| Region {
-            x: x + lx,
+        .map(|(_, ly, _, lh)| Region {
+            x,
             y: y + ly,
-            w: lw,
+            w: region.w,
             h: lh,
         })
         .collect())
@@ -1380,6 +1384,19 @@ mod tests {
                 10..33,
                 31..56,
             ),
+            // The box a player drew live (638,1045 72x32 on the client):
+            // text_lines finds both lines here, each narrower than the box.
+            (
+                "1920x1080@ideal",
+                Region {
+                    x: 78,
+                    y: 9,
+                    w: 72,
+                    h: 32,
+                },
+                13..26,
+                26..38,
+            ),
         ];
         for (pair, drawn, job_rows, name_rows) in cases {
             let frame = crate::corpus::fixture_frame(pair, "hud-main");
@@ -1397,9 +1414,9 @@ mod tests {
                 "{pair}: name {name:?}"
             );
             assert_eq!(
-                (job.x, name.x),
-                (drawn.x, drawn.x),
-                "{pair}: lines keep the box's x"
+                (job.x, name.x, job.w, name.w),
+                (drawn.x, drawn.x, drawn.w, drawn.w),
+                "{pair}: lines keep the box's x and width"
             );
         }
     }
