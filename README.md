@@ -10,33 +10,13 @@ A read-only companion overlay for **MapleStory Classic World**. It reads support
 
 See [docs/SPEC.md](docs/SPEC.md) for supported behaviour and constraints, [docs/PRESETS.md](docs/PRESETS.md) for the current preset/support matrix, and [docs/ROADMAP.md](docs/ROADMAP.md) for what is built and what is next.
 
-## Requirements
+## Getting started
 
-- Windows 11 (Windows Graphics Capture; Windows 10 2004+ should work, untested)
-- Node.js 20+ (26 used in development)
-- Rust stable (MSVC toolchain) + Visual Studio Build Tools 2022 (C++ workload) + Windows SDK
-- WebView2 runtime (preinstalled on Windows 11)
-
-Full install-from-scratch instructions, including the failing-linker and missing-runtime cases, are in **[docs/SETUP.md](docs/SETUP.md)**.
-
-## Quick start
-
-```powershell
-fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression
-npm install
-npm run tauri dev
-```
-
-Hotkeys:
-
-| Keys | Action |
-|---|---|
-| `Ctrl+Alt+M` | Toggle interactive (overlay is click-through by default) |
-| `Ctrl+Alt+V` | Show / hide overlay |
-| `Ctrl+Alt+H` | Open history window |
-| `Ctrl+Alt+T` | Open target-window picker (attach to the game) |
-
-Tray menu offers the same actions plus Quit.
+MScout runs on Windows 10 2004+ / 11 and builds with Node.js, Rust (MSVC) and
+the Visual Studio Build Tools; the UI needs the WebView2 runtime.
+**[docs/SETUP.md](docs/SETUP.md)** takes a clean machine to a running app, with
+the hotkeys and the first calibration. [docs/DEV.md](docs/DEV.md) covers the
+traps of this machine setup, the commands and the tests.
 
 ## Calibrating
 

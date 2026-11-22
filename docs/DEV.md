@@ -4,11 +4,7 @@ See [SETUP.md](SETUP.md) for installing the toolchain and running the app from a
 
 ## Environment gotchas (learned the hard way)
 
-**Node is installed via fnm and is not on PATH by default.** A fresh PowerShell has no `npm`. Fix per shell:
-
-```powershell
-fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression
-```
+**Node is installed via fnm and is not on PATH by default.** A fresh PowerShell has no `npm`; see [SETUP.md §2](SETUP.md#2-install-dependencies) for the one-line fix.
 
 **Cargo is not on PATH for tool shells.** Prepend it:
 
