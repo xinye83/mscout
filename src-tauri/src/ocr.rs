@@ -1007,12 +1007,62 @@ impl Atlas {
             }
         }
 
-        Some(Ranked {
+        let ranked = Ranked {
             ch,
             distance,
             rival: rival.0,
             rival_distance: rival.1,
+        };
+        Some(if ranked.ambiguous() {
+            self.settle_in_place(segment, ranked)
+        } else {
+            ranked
         })
+    }
+
+    /// Settle a near tie by how the two characters match **in place**.
+    ///
+    /// The native comparison searches a one-pixel shift, which lets a wrong
+    /// glyph close the gap: on the Filtered HUD a live `3` scored 29.9 against
+    /// the `3` variants and 29.7 against an `8` shifted one pixel, although
+    /// unshifted it is 11 pixels from a `3` and 15 from an `8`. When both
+    /// characters have glyphs of the shape's exact size and one is clearly
+    /// closer without a shift, it wins; otherwise the tie stands and the read
+    /// is refused as before. Only a refused shape can change here.
+    fn settle_in_place(&self, segment: &Segment, ranked: Ranked) -> Ranked {
+        let in_place = |ch: char| -> Option<f64> {
+            self.glyphs
+                .iter()
+                .filter(|glyph| glyph.ch == ch && glyph.w == segment.w && glyph.h == segment.h)
+                .map(|glyph| {
+                    native_distance(
+                        &segment.mask,
+                        &glyph.bitmap,
+                        segment.w as usize,
+                        segment.h as usize,
+                        0,
+                    )
+                })
+                .min_by(f64::total_cmp)
+        };
+        let (Some(own), Some(rival)) = (in_place(ranked.ch), in_place(ranked.rival)) else {
+            return ranked;
+        };
+        // Two whole pixels of the shape, in distance units.
+        let margin = 2.0 * 255.0 / (segment.w * segment.h).max(1) as f64;
+        let settled = |ch: char, rival: char, distance: f64| Ranked {
+            ch,
+            distance,
+            rival,
+            rival_distance: distance + AMBIGUITY_MARGIN,
+        };
+        if rival + margin <= own {
+            settled(ranked.rival, ranked.ch, ranked.rival_distance)
+        } else if own + margin <= rival {
+            settled(ranked.ch, ranked.rival, ranked.distance)
+        } else {
+            ranked
+        }
     }
 
     /// Read an EXP-style readout — a number, then a bracketed percentage — using
@@ -2862,6 +2912,90 @@ mod tests {
             "{ranked:?}"
         );
         // Past the strict threshold, but nothing else is close: this is a read.
+        assert!(!ranked.ambiguous(), "{ranked:?}");
+    }
+
+    /// A live Filtered `3` (`101,013[46.64%]`, 2026-11-21) against the seeded
+    /// 7x11 `3` and `8` variants. With the one-pixel shift search the two were
+    /// 0.2 apart and the read was refused; in place the `3` is clearly closer.
+    #[test]
+    fn a_near_tie_is_settled_by_the_in_place_match() {
+        let bitmap = |rows: &[&str]| -> Vec<u8> {
+            rows.iter()
+                .flat_map(|row| row.bytes().map(|b| if b == b'#' { 255 } else { 0 }))
+                .collect()
+        };
+        let variants: [(char, [&str; 11]); 6] = [
+            (
+                '3',
+                [
+                    ".#####.", ".#####.", "#.....#", "......#", "......#", "...###.", "......#",
+                    "......#", "#.....#", ".#####.", ".#####.",
+                ],
+            ),
+            (
+                '3',
+                [
+                    ".#####.", "#######", "##...##", ".....##", ".....##", "...###.", ".....##",
+                    ".....##", "##...##", "#######", ".#####.",
+                ],
+            ),
+            (
+                '3',
+                [
+                    ".#####.", "######.", "##...##", ".....##", "...####", "...###.", "...####",
+                    ".....##", "##...##", "######.", ".#####.",
+                ],
+            ),
+            (
+                '8',
+                [
+                    ".#####.", ".#####.", "#.....#", "#.....#", "#.....#", ".#####.", "#.....#",
+                    "#.....#", "#.....#", ".#####.", ".#####.",
+                ],
+            ),
+            (
+                '8',
+                [
+                    ".#####.", "#######", "##...##", "##...##", "##...##", ".#####.", "##...##",
+                    "##...##", "##...##", "#######", ".#####.",
+                ],
+            ),
+            (
+                '8',
+                [
+                    ".#####.", ".#####.", "##...##", "##...##", "#######", ".#####.", "#######",
+                    "##...##", "##...##", ".#####.", ".#####.",
+                ],
+            ),
+        ];
+        let atlas = Atlas {
+            glyphs: variants
+                .iter()
+                .map(|(ch, rows)| Glyph {
+                    ch: *ch,
+                    bitmap: bitmap(rows),
+                    cell: [0; CELL_LEN],
+                    w: 7,
+                    h: 11,
+                })
+                .collect(),
+        };
+        let segment = Segment {
+            mask: bitmap(&[
+                "..###..", ".#####.", "##...##", "#....##", ".....##", "..####.", ".....##",
+                "#....##", "##...##", ".#####.", "..###..",
+            ]),
+            cell: [0; CELL_LEN],
+            x: 0,
+            y: 0,
+            w: 7,
+            h: 11,
+        };
+        let ranked = atlas
+            .match_ranked(&segment, "38", READOUT_TOLERANCE)
+            .expect("a read");
+        assert_eq!(ranked.ch, '3', "{ranked:?}");
         assert!(!ranked.ambiguous(), "{ranked:?}");
     }
 
