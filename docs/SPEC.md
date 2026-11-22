@@ -1,383 +1,270 @@
-# MScout — product spec
+# MScout — behaviour spec
 
-A local, read-only companion overlay for **MapleStory Classic World**. It watches the HUD readouts it supports, records EXP samples, and plots how fast you are gaining EXP.
+What MScout must and must not do: the rules a change is checked against. It is
+not a design doc or a status report. How the readers work is in
+[TEXT_RENDERING.md](TEXT_RENDERING.md) and [DECISIONS.md](DECISIONS.md), the
+file formats in [DATA.md](DATA.md), supported sizes in [PRESETS.md](PRESETS.md),
+open work in [ROADMAP.md](ROADMAP.md).
 
-Target is Classic World specifically — not original MapleStory, not a pre-Big Bang private server. Formulas, EXP tables, map lists and level cap all come from Classic World data (cap 100, four jobs, 2nd job ceiling).
-
-**Implementation status (2026-11-21, 0.7.0):** 0.7.0 adds a closed job vocabulary and the 0.7 storage and reader fixes (deaths recorded as events, atomic writes, per-level EXP rows for Lv 50–89). Earlier: WGC capture, calibration, HUD-atlas digit seeding, bitmap matching, map/name/job text and JSONL storage are implemented. 0.6.0 adds 1920×1080 Default and Filtered: both pairs are calibrated from shipped boxes and read the saved-frame corpus exactly, using the saturation-aware level key and Windows OCR fallbacks for the filtered identity/map label. 1366×768 remains supported in all three UI sizes, and 1920×1080 Ideal is unchanged. Remaining work is listed in [docs/ROADMAP.md](ROADMAP.md), rationale in [docs/DECISIONS.md](DECISIONS.md).
+MScout is a local, read-only overlay for **MapleStory Classic World** — not
+original MapleStory or a private server. It reads the HUD, records EXP samples
+and shows how fast EXP is gained. EXP tables, map lists and the level cap come
+from Classic World data.
 
 ---
 
-## Table of contents
+## Contents
 
 1. [Hard constraints](#1-hard-constraints)
-2. [v1 scope](#2-v1-scope)
-3. [Capture contract](#3-capture-contract)
-   - [3.1 Target window](#31-target-window)
-   - [3.2 Calibration](#32-calibration)
-   - [3.3 Cadence](#33-cadence)
-4. [Parsing](#4-parsing)
-   - [4.1 EXP](#41-exp)
-   - [4.2 Name and job](#42-name-and-job)
-   - [4.3 Map name](#43-map-name)
-5. [States and warnings](#5-states-and-warnings)
-6. [Data integrity rules](#6-data-integrity-rules)
+2. [Scope](#2-scope)
+3. [Capture](#3-capture)
+4. [Reading](#4-reading)
+5. [States](#5-states)
+6. [Data integrity](#6-data-integrity)
 7. [Rate math](#7-rate-math)
-   - [7.1 Idle](#71-idle)
-   - [7.2 ETA to next level](#72-eta-to-next-level)
 8. [Live panel](#8-live-panel)
 9. [History window](#9-history-window)
-10. [Storage](#10-storage)
-    - [10.1 Samples](#101-samples)
-    - [10.2 Settings and profiles](#102-settings-and-profiles)
-    - [10.3 Retention](#103-retention)
-11. [EXP table](#11-exp-table)
-12. [Events](#12-events)
-13. [Explicit non-goals for v1](#13-explicit-non-goals-for-v1)
-14. [Decisions and open work](#14-decisions-and-open-work)
-15. [Known limitations](#15-known-limitations)
+10. [EXP table](#10-exp-table)
+11. [Events](#11-events)
+12. [Non-goals](#12-non-goals)
+13. [Known limitations](#13-known-limitations)
 
 ---
 
 ## 1. Hard constraints
 
-The helper must never touch the game process. That is the design boundary, not a preference.
+The app must never touch the game process. That is the design boundary, not a
+preference.
 
 **Allowed**
-- Windows Graphics Capture / DXGI Desktop Duplication of the game window (OS compositor APIs)
-- Cropping, image processing, digit/template matching, text OCR against a known map list
+- Windows Graphics Capture of the game window (an OS compositor API)
+- Cropping, image processing, glyph matching, OCR against the client's own name tables
 - A separate always-on-top window composited by Windows
 - Global hotkeys via `RegisterHotKey` (no low-level keyboard hooks)
-- Local file storage under `./data/`
+- Local files under `data/`
 
 **Forbidden — no exceptions**
 - `ReadProcessMemory` / `WriteProcessMemory`, handles into the game process
 - DLL injection, D3D/API hooking, packet capture or manipulation
-- `SendInput` / `keybd_event` / `PostMessage` to the game window — no auto-pot, auto-attack, macros, auto-relog
+- `SendInput` / `keybd_event` / `PostMessage` to the game window — no auto-pot,
+  auto-attack, macros, auto-relog
 - Any pixel → in-game action loop
 - Process renaming, packing, obfuscation, or anti-cheat evasion
 - Multi-client support
-- Shipping datamined client assets (stats and numbers are fine; art is not)
+- Shipping datamined client assets (stats and numbers are fine; art is not —
+  see [SHIPPING.md](SHIPPING.md))
 
-**Required player setting**: game runs windowed or borderless fullscreen. Exclusive fullscreen cannot be captured or overlaid without hooking, which is forbidden.
+**Required player setting:** the game runs windowed or borderless. Exclusive
+fullscreen cannot be captured or overlaid without hooking, which is forbidden.
 
-Compliance note: per Nexon's rules, botting is using a macro, third-party program or physical method to play the game repetitively. This tool reads and displays; it never plays. That distinction is the whole reason the constraint list above exists, and it must stay true in every future feature.
-
----
-
-## 2. v1 scope
-
-In:
-- Auto-read of the supported HUD: EXP, level, map/street, character name and job
-  (1366×768 and 1920×1080 in Default, Ideal and Filtered)
-- Local sample storage
-- Live panel: current map, level, EXP %, 1-minute rate, 5-minute average, ETA, last-30-minute chart
-- ETA to next level on a 30-minute rate
-- History window: browse and chart all stored data, back through months
-
-Out (later versions): damage/AP/potion calculators, period-to-period comparison, per-map comparison view, multi-character profiles.
+Per Nexon's rules, botting is playing the game repetitively with a macro,
+third-party program or physical method. MScout reads and displays; it never
+plays. Every future feature must keep that true.
 
 ---
 
-## 3. Capture contract
+## 2. Scope
 
-### 3.1 Target window
-- The player selects the game window once. The choice persists via window title/process match.
-- On startup, if the window is not found, report it immediately. Never idle silently.
+- Read the HUD: EXP, level, map and street, character name and job, at the
+  supported client sizes and UI Sizes.
+- Record samples locally, one per second of play.
+- Live panel: map, level, EXP %, rates, ETA, a short chart.
+- History window: browse and chart the stored samples.
 
-### 3.2 Calibration
-Regions of interest (ROIs), stored as physical pixels relative to the game window's client area so moving the window is harmless:
-
-1. **EXP readout** — the status-bar EXP text, e.g. `10,105 [91.53%]` (required)
-2. **Level digits** — the level tile next to the HP/MP bars (optional; without it the level is reported unrecognised, never derived)
-3. **Map label** — optional; only a fallback, since the minimap panel is detected automatically
-4. **Character name**, **Job** — optional; Arial text, read automatically once their boxes are drawn (the taught fingerprints remain the exact fallback)
-
-Calibration flow: show a frozen preview frame, player drags a box for each ROI, live parse feedback appears immediately ("Lv 17 · 10,105 EXP · 91.53% · Henesys"). The digit atlases are not typed in: the player points the app at the MSCW install and the client's own bitmap atlas is read at the rendered size. Typing the readout remains the fallback when the install cannot be found.
-
-Calibration is scoped to the **client size and UI Size**: each pair keeps its own profile (`data/profiles/<W>x<H>[@mode].json`), and the engine activates the profile matching the live window. Re-calibration is required for a pair that has none, or after a patch that moves the status bar; a resolution change switches profiles instead of invalidating them. The app must detect this situation (no profile, parse failure) rather than keep plotting. Calibration boxes ship as presets for 1366×768 and 1920×1080 in all three UI sizes; other pairs fall back to calibration. The digit atlases are seeded from the installed client, not shipped. See [PRESETS.md](PRESETS.md).
-
-### 3.3 Cadence
-- One frame per second, cropped to the ROIs only.
-- Capture continues when the window is unfocused or occluded.
-- Minimized, closed, or capture-denied windows are reported states (see §5), not silent gaps.
+Damage/AP/potion calculators, per-map comparison and anything that plays the
+game are out of scope (§12).
 
 ---
 
-## 4. Parsing
+## 3. Capture
 
-### 4.1 EXP
-- **Digits use bitmap matching, not general OCR.** The client draws them from baked HUD atlases, not a font. The atlas is seeded from `Data/UI/_Canvas/_Canvas_000.wz` at the rendered glyph height (5×7 at 1366 and 1920 Ideal; the Default/Filtered renderings use their own sizes), so no per-character teaching is needed. The Filtered level additionally uses a saturation-aware white key so the coloured tile does not merge with a digit. Typing the readout remains a fallback if the install is unavailable.
-- Parse yields: level, absolute EXP within level, and percentage.
-- **Cross-check**: `percentage ≈ exp / exp_required(lv)`. A small difference (up to 1 percentage point) is a bad percentage read; the percentage is recomputed from the EXP and level and the sample is kept. A larger disagreement invalidates both the EXP and the level for that frame. Map/name/job are kept either way.
-- Level is read from its own box with its own atlas; the level digit is the EXP glyph widened to the rendered size. It is never derived from EXP and the percentage.
-
-### 4.2 Name and job
-
-- **Arial, 1-bit GDI at the measured crop height** (12 px at Ideal; the Default/Filtered renderings are larger and anti-aliased and use the same face plus Windows OCR fusion). The engine renders the face from Windows, stores a native glyph atlas (`identityAtlas`, `source: "font"`), and reads both lines as text. No per-character teaching is needed.
-- The one ambiguity at this size — `l` and `I` are the same 1 px bar — is resolved by case context: a mid-word bar in a mixed-case word is `l`.
-- The taught fingerprints remain as the exact fallback and for correcting a misread.
-
-### 4.3 Map name
-
-- **Client map table, not segmented OCR.** The label is Arial Bold at the measured size (12 px at Ideal); the two lines are the client's own `mapName`/`streetName` strings in `String_000.wz/Map.img`. The reader renders every candidate name, filters by rendered width, and scores the whole line with a column-pattern DTW. A taught fingerprint still wins when it exists, and a taught letter atlas remains as a fallback for a name missing from the client table. Teaching is now only for corrections.
-- **The label is located, not boxed.** The minimap can be moved and resized by the player, so its panel is detected on every frame and the name crop is normalised to a fixed grid before matching. Moving or resizing the minimap therefore never requires re-teaching.
-- The game draws some names on two lines (`Hidden Street` / `1st Accompaniment <Bonus>`); the stored label keeps the newline and the overlay renders it the same way.
-- Known table names snap exact → suffix → fuzzy with a margin; Windows OCR reads the label union, and an exact OCR match beats the whole-line DTW. A name absent from the table is shown as the literal OCR line, and a one-line label has no street. An unreadable or ambiguous label reports `unknown` when no confident match exists. The DTW fallback can still mispick Roman-numeral siblings when OCR is absent or fuzzy (a known limitation).
-- Fingerprints are resolution- and UI-scale-specific; a new client size needs its own taught set.
-- Rationale and rejected alternatives: [docs/DECISIONS.md](DECISIONS.md) D23, D17.
+- The player picks the game window once; the choice persists by window title
+  and process. A window that cannot be found is reported at once, never waited
+  on silently.
+- One frame per second. Capture continues while the game is unfocused or
+  covered. Minimised, closed or capture-denied windows are reported states
+  (§5), not silent gaps.
+- Read boxes are physical pixels relative to the game's client area, kept per
+  **client size × UI Size** in a profile. The profile matching the live window
+  is used; a resolution change switches profiles. A pair with no usable
+  profile reports that instead of reading.
+- The EXP box is required; level, name/job and the map label are optional.
+  Without a level box the level is reported unrecognised, never derived.
+- Digit atlases are read from the player's installed client; nothing from the
+  client is shipped.
 
 ---
 
-## 5. States and warnings
+## 4. Reading
 
-Three visible states, always shown in the overlay:
+- **Digits are matched against the client's own glyphs, not general OCR.** The
+  HUD draws them from baked bitmaps.
+- **The EXP readout is cross-checked:** `percentage ≈ exp / exp_required(level)`.
+  A small disagreement (up to 1 percentage point) is a misread percentage and is
+  recomputed from EXP and level; a larger one invalidates EXP and level for that
+  frame. Map, name and job are kept either way.
+- **The level is read from its own box**, never derived from EXP and percentage.
+- **A shape that cannot be told apart from another is refused, not guessed.**
+- **Name and job** are read as Arial text; a taught fingerprint is the exact
+  fallback and the way to correct a misread. The job must be a known job name.
+- **The map label is located, not boxed:** the minimap is found on every frame,
+  and the name is matched against the client's own map table. A name not in the
+  table is shown as read; a label that cannot be matched confidently is
+  `unknown`.
 
-| State | Meaning | UI |
+---
+
+## 5. States
+
+Always visible in the overlay:
+
+| State | Meaning | Overlay |
 |---|---|---|
-| **Reading** | Last sample parsed cleanly | normal |
-| **Degraded** | ≥3 parse failures in the last 10 attempts | yellow banner; chart shades the unreliable span |
-| **Lost** | Window gone, minimized, capture denied, or ROI no longer readable | red banner naming the cause, "recalibrate" action; no desktop notification (dropped in 0.9) |
+| **Reading** | The last frames read cleanly | normal |
+| **Degraded** | ≥ 3 failed reads in the last 10, or the last read was refused with a reason | yellow, with the reason |
+| **Lost** | Window gone, minimised, or capture denied | red, naming the cause |
+| **Not calibrated** | The live client size and UI Size have no usable profile | names the size, with a calibrate action |
 
-Notifications exist so a broken capture is discovered while playing, not three hours later.
+No desktop notification for a lost capture: the banner is the signal. A
+notification is only used for a startup problem the overlay cannot show (a
+hotkey another app holds).
 
 ---
 
-## 6. Data integrity rules
+## 6. Data integrity
 
-- **Never write a zero or a guess.** A failed parse produces no sample. Broken capture therefore appears as missing data, never as "stopped gaining EXP".
-- **Reject impossible jumps.** An EXP delta not explained by a level-up or a death marks that segment unreliable and excludes it from rate calculations.
-- **Three distinguishable states in the recording**: samples present and EXP rising (`gaining`), samples present and EXP unchanged (`idle`), no samples at all (`not_recording`).
-- Deaths are recorded as an event (`"event":"death"` on the first row after a confirmed death), not rejected as negative EXP. Level-ups are derived from the level field.
+- **Never write a zero or a guess.** A failed or refused read produces no
+  sample, so a broken capture shows as missing data, never as "stopped gaining
+  EXP".
+- **Rows are written only after consecutive good reads**, and only when the
+  frame has a recognised level.
+- **Levels never go down for one character.** A lower level is a misread, or a
+  different character.
+- **EXP never drops within a level, except at a death.** A drop is held until
+  it persists; a confirmed drop of at least 1% of the level is a death,
+  recorded as an event on the row (§11). A short blip is rejected.
+- **Rows carry the character name** when it was read; a different character
+  starts a new run, so rates and charts never compare two characters' totals.
+- **Recording states are distinguishable:** EXP rising (`gaining`), samples with
+  EXP unchanged (`idle`), no samples at all (not recording). Gaps are never
+  filled with synthetic rows.
+- **History files are only appended to**, except by the explicit repair, which
+  flags misreads (`"bad": true`) instead of deleting them.
 
 ---
 
 ## 7. Rate math
 
-All rates use **wall-clock time** and **trailing differences** over stored raw samples. Windows are view parameters — no re-recording is needed to change them.
+All rates use **wall-clock time** and **trailing differences** over recorded
+rows; windows are view parameters, so changing one needs no re-recording.
 
 ```
 rate_per_hour(t, W) = (exp_cumulative(t) − exp_cumulative(t − W)) / W_hours
 ```
 
-- **1-minute rate** (default, solid line): most responsive, visibly jumpy by design — one 300 EXP kill shifts it by ~18,000 EXP/hour.
-- **5-minute average** (faint line underneath): the stable trend. The prominent EXP/hour and the ETA both use this window.
-- **30-minute rate** (dashed): context only; it no longer drives the ETA.
-- Windows are configurable; defaults are 1 / 5 / 30 minutes.
-- The 1-minute line is not drawn until ~60 seconds of clean data exist, so the chart does not open with a meaningless spike.
-- `exp_cumulative` is stitched through level boundaries using the EXP table, so a level-up never looks like a reset to zero.
-
-### 7.1 Idle
-- Idle = samples flowing while EXP does not change.
-- Idle spans over **2 minutes** are shaded on the chart as idle bands.
-- Because the rate is wall-clock, idle drags the rate down and the curve shows a flat plateau followed by a visible climb back. This is intended.
-
-### 7.2 ETA to next level
-```
-eta = (exp_required(level) − exp_in_level) / rate_5m
-```
-- Shown as `—` until the current session has a full 5-minute window, whenever the 5-minute average is zero (or rounds to zero), and after 2 minutes without a gain (idle).
-- The 1-minute and 30-minute rates remain visible in the expanded panel as context.
+- `exp_cumulative` is stitched through level boundaries with the EXP table, so
+  a level-up never looks like a reset to zero.
+- EXP lost at a recorded death is added back: the rate is EXP earned per hour,
+  and the time spent re-earning it stays in the window.
+- Windows: **1 minute** (responsive, jumpy by design), **5 minutes** (the
+  prominent rate and the ETA), **30 minutes** (context).
+- A window's rate is shown only once the session has lived through the whole
+  window; before that it is `—`.
+- **Idle** is samples flowing with EXP unchanged. Because rates are wall-clock,
+  idle visibly drags them down. This is intended; idle is shown, never hidden
+  by splitting the session.
+- **ETA** = `(exp_required(level) − exp_in_level) / rate_5m`, shown as `—` when
+  the 5-minute rate is missing or zero and after 2 minutes without a gain.
+- The overlay computes rates only from rows the history recorded, so overlay
+  and history agree.
 
 ---
 
 ## 8. Live panel
 
-A frameless, always-on-top window composited by the OS. It is a picture first: **click-through by default**, so every click reaches the game.
+A frameless, always-on-top window composited by Windows. **Click-through by
+default**, so every click reaches the game; it becomes clickable while the
+cursor is over it, or by hotkey.
 
-Collapsed state (default), roughly 300 × 140 px:
-
-```
-┌──────────────────────────────────┐
-│ ● Henesys Hunting Ground I   ▁▂▃▅│
-│  Lv 71                62.4%      │
-│  ████████████████████░░░░░░░     │
-│  1.24M/h                 2h 14m  │
-└──────────────────────────────────┘
-```
-
-- Left dot is the capture state from §5: green reading, yellow degraded, red lost.
-- Long map names wrap and the panel grows to fit; the full name is never ellipsized.
-- Level and percentage use tabular figures so updating digits do not shift the layout.
-- Thin EXP bar, because a percentage alone does not read at a glance.
-- 5-minute average rate and ETA are the two prominent numbers.
-- Character name and job appear under the map: read as Arial text (§4.2), with a taught fingerprint as the exact fallback.
-- Optional 15-minute sparkline, shape only, no axes.
-- No buttons in this state.
-
-Expanded state, roughly 360 × 250 px, opens from the same anchor:
-
-```
-┌────────────────────────────────────────┐
-│ ● Henesys Hunting Ground I        ⋮⋮   │
-│  Lv 71  62.4%  ██████████░░░░          │
-│                                        │
-│  1.24M/h  now      1.18M/h  5m         │
-│  ┌──────────────────────────────────┐  │
-│  │        ╱╱╱                       │  │
-│  │   ╱╱╱╱╱                          │  │
-│  │▓▓ idle ▓▓╱╱╱╱                    │  │
-│  └──────────────────────────────────┘  │
-│  last 30m · 1m, 5m            ETA 2h14m│
-└────────────────────────────────────────┘
-```
-
-- Chart covers the **last 30 minutes only**. "How am I doing right now" is this panel's job; anything longer belongs in history.
-- Cumulative EXP stepped, rate line over it, idle shaded — same visual grammar as the history window.
-- Session line: total gained, active vs idle minutes.
-- Drag handle appears only while interactable.
-- Opacity and "open history" live in the tray menu, not in the panel.
-
-Behavior:
-
-- **Interactivity**: holding the interact hotkey makes the panel clickable and draws a 1px accent border plus a small `interactive` chip, so it is always obvious whether the next click lands on the game or the panel.
-- **Position and size persisted**; drag to move.
-- **Scaling** respects display scale (no postage stamp on 4K).
-- **Never steals focus** — expanding, banner changes and notifications must not pull focus from the game.
-- **Degraded** replaces the top line with a yellow strip: `EXP reading unstable — check calibration`.
-- **Lost** replaces it red and expands the panel once: `Not reading EXP — game window not found`, plus a `Recalibrate` button. No desktop notification: the banner is the signal.
-- **Idle** shows a muted `idle` pill after 2 minutes without gain; the rate visibly decays (wall-clock model, §7.1).
+- Collapsed: state dot, map (wrapped, never cut), name and job, level and
+  percentage, an EXP bar, the 5-minute rate and the ETA.
+- Expanded: the 1/5/30-minute rates and a chart of recent EXP.
+- Tabular figures, so changing digits do not shift the layout.
+- Placed outside the game window at its top-right corner; a dragged position
+  is remembered until the player resets it.
+- **Never steals focus.** Expanding, state changes and notifications must not
+  pull focus from the game.
+- Respects display scaling.
 
 ---
 
 ## 9. History window
 
-A normal, resizable, non-overlay window opened by hotkey or tray. It is read-only: the JSONL files remain the source of truth.
+A normal window, opened by hotkey or tray. **Read-only:** the day files are the
+source of truth, and the window never edits them (the repair button aside, §6).
 
-*Status:* the window ships the 1/7/30-day presets, the EXP chart with gap breaks, a range summary and the repair button. The fidelity badge, rate lines, markers, zoom/pan/brush and the All/Custom ranges below are not built yet (see ROADMAP).
-
-Layout, top to bottom:
-
-**1. Range bar** — presets `Today · 7 days · 30 days · All · Custom`, plus a fidelity badge that states the truth: `1s raw` or `1m aggregates`.
-
-**2. Chart, two panes sharing one x-axis**
-- Upper: cumulative EXP gained, stepped.
-- Lower: rate lines. At raw fidelity, the 1-minute line plus the faint 5-minute average. Beyond 7 days the 1-minute line is derived from one-minute buckets, so it is drawn hollow and labelled coarse rather than presented as equivalent.
-- Idle bands shaded (§7.1).
-- Markers: level-up, death, map change. At month scale map markers collapse and appear on hover only.
-- Crosshair tooltip: timestamp, level, EXP, map, rate, and the ETA that would have applied.
-
-**3. Summary strip** — total EXP gained, time recording, idle time, wall-clock average rate, best 1-minute rate, map set for the selected range.
-
-**Navigation**
-- Wheel zooms the x-axis, drag pans, double-click resets, brush selects a span.
-- Preset keys `T / 7 / 30 / A`.
-- Date separators on multi-day axes.
-
-**Resolution rules**
-- ≤ 7 days: raw 1-second samples (fidelity badge `1s raw`).
-- > 7 days: one-minute aggregates (`1m aggregates`), with the fidelity badge visible and the coarse rate line styled accordingly.
-- Gaps in the data are drawn as gaps. History never interpolates across missing samples.
-
-**Not included**: editing, annotations, bookmarks, or period-to-period comparison. History answers "what happened"; it does not modify anything.
+- Gaps in the data are drawn as gaps; history never interpolates across
+  missing samples.
+- Long ranges may be thinned when read, but deaths and character switches are
+  always kept.
+- Rate lines, markers, zoom and custom ranges are open work in the roadmap.
 
 ---
 
-## 10. Storage
+## 10. EXP table
 
-All state lives under `./data/` in the project directory — nothing outside it.
+The requirement per level is one file, `src-tauri/exp-table.json`, read by the
+engine, the UI and the mock-data script. Totals: 103,322,764 EXP to reach 90,
+18,194,778,397 to reach 100.
 
-### 10.1 Samples
-
-Path: `./data/samples/YYYY-MM-DD.jsonl`. One line per second of captured play:
-
-```json
-{"t":1762800000,"lv":17,"exp":10105,"pct":91.53,"map":"Henesys","state":"gaining","conf":0.99}
-```
-
-- `t` — Unix seconds
-- `lv`, `exp`, `pct` — parsed EXP readout
-- `map` — snapped map name
-- `state` — `gaining` | `idle`
-- `conf` — parse confidence, 0–1
-
-`not_recording` is represented by the absence of samples; a gap longer than 5 seconds is interpreted as such. No synthetic rows are written for gaps.
-
-### 10.2 Settings and profiles
-
-Path: `./data/settings.json` — machine-wide state only: the target window match, the chosen UI Size, and the MSCW install folder used for digit seeding.
-
-Path: `./data/profiles/<W>x<H>[@mode].json` — everything that is physical-pixel specific, one file per client size × UI Size: ROI rectangles, the EXP and level glyph atlases, taught map/street fingerprints, and the character name/job fingerprints. The engine activates the profile matching the live client size and UI Size. Digit atlases are seeded from the installed client (`source: game`) or taught; presets carry only boxes.
-
-Recording is gated: a size with no calibrated profile reports **lost** and writes nothing, and samples start only after consecutive good reads, so a wrong profile can never look like "stopped gaining EXP".
-
-### 10.3 Retention
-- Raw 1 Hz samples kept for 7 days.
-- Beyond that, compact to one-minute aggregates (mean exp, min/max, sum of gain, map set) so months of play stay small.
-- No automatic deletion of aggregates.
-- *Status:* not implemented yet. Day files keep every row; long ranges are thinned when read (see DATA.md, Compaction).
+- Lv 1–49: confirmed in play. Lv 90–99: launch data.
+- **Lv 50–89 are planning numbers, not yet confirmed in Classic World.** They
+  are labelled estimated wherever they drive a displayed number (the ETA
+  especially), and the cross-check allows them a wider tolerance.
 
 ---
 
-## 11. EXP table
+## 11. Events
 
-| Range | Status | Source |
-|---|---|---|
-| Lv 1–49 | confirmed in-game | Classic World wiki |
-| Lv 50–89 | **estimated** (not yet confirmed in Classic World) | NiaMeowDB planning rows, labeled as such |
-| Lv 90–100 | exact anchors + 2.1× per level | Nexon/launch data |
-
-- Level 30 = 95,700 EXP; total to 90 = 103,322,764; total to 100 = 18,194,778,397.
-- Death penalty: 10% of the bar toward the next level (not cumulative).
-- Any value marked estimated must be **labeled estimated in the UI** wherever it drives a displayed number (ETA especially).
-- The table is an editable local data file. If the player records a real value in-game, it overrides the estimate and the label clears.
+- `death` — recorded on the first row after a confirmed death (§6).
+- Level-ups are derived from the level field, not recorded.
+- Map changes are part of every row; the curve continues across them.
 
 ---
 
-## 12. Events
+## 12. Non-goals
 
-Recorded inline and/or derived on read:
-- `level_up` — level field increases; cumulative EXP stitches through the table
-- `death` — EXP drops without a level change; marked on the chart, excluded from gain
-- `map_change` — map field changes; marked on the timeline, curve continues (no session split)
-- `calibration` — ROI changes, so segments of the curve can be tied to a configuration
-
----
-
-## 13. Explicit non-goals for v1
-
-- No automation of any kind, at any point
-- No session splitting — the curve is continuous; idle is visible, not hidden
-- No memory reading, even read-only
-- No damage meter, no auto-pot, no input synthesis
-- No cloud sync, accounts, or telemetry
+- No automation of any kind, at any point.
+- No memory reading, even read-only.
+- No session splitting: the curve is continuous; idle is visible, not hidden.
+- No damage meter, no auto-pot, no input synthesis.
+- No cloud sync, accounts or telemetry.
 
 ---
 
-## 14. Decisions and open work
+## 13. Known limitations
 
-Architecture and behavior decisions live in [DECISIONS.md](DECISIONS.md). Forward-looking work, including Default/Filtered UI-size support and multi-resolution portability, is tracked in [ROADMAP.md](ROADMAP.md).
-
----
-
-## 15. Known limitations
-
-What the current version does, not a task list. Work that addresses one is
-an item in [ROADMAP.md](ROADMAP.md).
+What the current version does, not a task list. Work that addresses one is an
+item in [ROADMAP.md](ROADMAP.md).
 
 - **Support matrix:** 1366×768 and 1920×1080, all three UI sizes. 1920×1200 has
-  no preset or fixture and needs manual calibration (roadmap).
+  no preset or fixture and needs manual calibration.
 - **UI Size is selected manually.** A wrong mode selects the wrong profile and
-  boxes, so it reads nothing or misreads. Auto-detection is deferred (roadmap).
-- **Profiles are physical-pixel and UI-scale specific.** A size/UI-size change
-  switches profiles; a transient client size can create an empty profile (e.g.
-  `1920x1081@ideal`). Move it aside if the app selects it.
-- **Glyph coverage is reported by character, not size.** A digit learned from
-  HP/MP at a smaller size does not parse the larger EXP font.
+  boxes, so it reads nothing or misreads.
+- **Profiles are physical-pixel and UI-scale specific.** A transient client size
+  can create an empty profile (e.g. `1920x1081@ideal`); move it aside if the app
+  selects it.
 - **The EXP box is sized for the current digit count.** A much longer EXP number
-  can clip the ROI until it is redrawn.
-- **Filtered atlas gaps.** A live `8` can read as `6`/`9` (20-EXP error; the
-  20-EXP change can pass the rounding check), and a percentage `3` can read as
-  `8` (the percentage is repaired from EXP/level). See the roadmap's filtered glyph variants.
-- **Map matching depends on the client table.** It has 347 names and 11 streets
-  in the current build; the count is version-specific. A name absent from the
-  table is shown from the OCR line; a one-line label has no street; an ambiguous
-  `<N>` suffix stays `unknown`. Exact OCR beats the whole-line DTW, but the DTW
-  fallback can still confuse Roman-numeral siblings; see the roadmap.
-- **Windows dependencies:** Arial is used for name/job and label rendering;
-  `Windows.Media.Ocr` is used for the Default/Filtered name/job and map label.
-  Neither is bundled or installed by the app.
-- **History ranges are presets only** (no brush/zoom); see the roadmap.
-- **`window-error.log`** is still written when history-window creation fails;
-  see the roadmap.
+  can clip it until it is redrawn.
+- **Filtered atlas gaps.** A live `8` can read as `6`/`9` (a 20-EXP error that
+  can pass the rounding check), and a percentage `3` can read as `8` (the
+  percentage is then repaired from EXP and level).
+- **Map matching depends on the client table**, whose size is version-specific.
+  A one-line label has no street; an ambiguous `<N>` suffix stays `unknown`;
+  without exact OCR the whole-line fallback can confuse Roman-numeral siblings.
+- **Windows dependencies:** Arial for name/job and label rendering,
+  `Windows.Media.Ocr` for the Default/Filtered name/job and map label. Neither is
+  bundled.
+- **History ranges are presets only** (1, 7 and 30 days).
+- **`window-error.log`** is still written when history-window creation fails.
 - **Dev build expects Vite.** A direct `cargo run` needs `npm run dev` running.

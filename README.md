@@ -42,7 +42,7 @@ Sample format and invariants are documented in [docs/DATA.md](docs/DATA.md).
 | [docs/SETUP.md](docs/SETUP.md) | Install dependencies, run from source, build a release |
 | [docs/PRESETS.md](docs/PRESETS.md) | Preset and support matrix, reset behavior, limitations |
 | [CHANGELOG.md](CHANGELOG.md) | What each version added, changed and fixed |
-| [docs/SPEC.md](docs/SPEC.md) | Behavioral spec |
+| [docs/SPEC.md](docs/SPEC.md) | Behaviour rules: constraints, data integrity, rate math, states, known limitations |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Open work |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Decision log — why things are the way they are |
 | [docs/DATA.md](docs/DATA.md) | File formats, profiles, schema, invariants |

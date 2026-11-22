@@ -2,7 +2,7 @@
 
 Open work, most important first within each group. What shipped is in
 [../CHANGELOG.md](../CHANGELOG.md); known limitations of the current version
-are in [SPEC.md](SPEC.md#15-known-limitations); the reasoning behind choices is
+are in [SPEC.md](SPEC.md#13-known-limitations); the reasoning behind choices is
 in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
 
 ## Reading correctness
@@ -34,9 +34,20 @@ in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
 
 ## Product
 
-- [ ] Level-up stitching and death-event marking on the chart.
-- [ ] 7-day raw → 1-minute aggregate compaction job.
-- [ ] History window brush/zoom panning (preset ranges only today).
+- [ ] **History window, full design.** Today it has 1/7/30-day presets, the
+  EXP chart with gap breaks, a summary and the repair button. Add: All and
+  custom ranges (keys `T / 7 / 30 / A`); a rate pane under the EXP pane sharing
+  its x-axis (1-minute line, faint 5-minute average, drawn hollow and labelled
+  coarse when built from one-minute buckets); idle bands; markers for
+  level-ups, deaths and map changes (map markers on hover at month scale); a
+  crosshair tooltip with time, level, EXP, map, rate and the ETA then; wheel
+  zoom, drag pan, double-click reset and brush selection; date separators; a
+  fidelity badge (`1s raw` / `1m aggregates`); best 1-minute rate and idle time
+  in the summary.
+- [ ] **Compaction on disk.** Keep raw 1 Hz rows for 7 days, then compact to
+  one-minute aggregates (mean EXP, min/max, gain sum, map set) so months stay
+  small; never delete aggregates automatically. Today day files keep every row
+  and long ranges are only thinned when read (DATA.md, Compaction).
 - [ ] Per-map comparison once enough real data exists.
 - [ ] **Distributable build.** Run `tauri build`, check the NSIS installer keeps
   `data/` across an upgrade and an uninstall, offer a portable folder copy next

@@ -6,7 +6,7 @@
 /// planning numbers, not yet confirmed in Classic World, so the UI labels them
 /// estimated and the engine cross-checks them with a wider tolerance. 90-99 come
 /// from launch data. Totals: 103,322,764 to reach 90 and 18,194,778,397 to reach
-/// 100 (docs/SPEC.md section 11).
+/// 100 (docs/SPEC.md section 10).
 ///
 /// Levels 50-88 used to be a geometric interpolation between 49 and 89, up to
 /// 2.6% below these rows, which pushed the cross-check past its 1-point
