@@ -75,6 +75,15 @@ switch, and the overlay under the CSP in the dev build.
   fallback is unit-tested, but its live label crop is not in `testdata/`. Add
   the crop as a client-tier regression fixture when the map is available.
 
+- [ ] **Percentage-only EXP readout — capture one first.** `ocr::validate_readout`
+  rejects a readout with no number before its bracket (`[58.47%]`), so such a
+  frame records nothing. Other trackers say the HUD drops the number once EXP
+  is large, but no screenshot or fixture here shows it. First capture one and
+  add it to `testdata/` (Save diagnostic, then `corpus::import_diagnostic`). If
+  it is real, record `exp: null` with the percentage — never an EXP derived
+  from it (SPEC §6, "never write a guess") — and let rates and the ETA fall
+  back to %/h for those rows.
+
 ### Product work
 
 - [ ] Level-up stitching and death-event marking on the chart.
