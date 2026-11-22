@@ -64,13 +64,6 @@ switch, and the overlay under the CSP in the dev build.
   whole-line `match_map_name` DTW can still choose the wrong sibling. Give that
   path its own suffix/width decision, or require a cross-check before accepting
   a result from it.
-- [ ] **Calibration window startup freeze.** The window blocks for several
-  seconds before it can be moved or clicked (observed on 1920×1080 Filtered).
-  Open an immediate shell/preview, then move capture, label-index construction,
-  atlas seeding and WZ work off the UI thread. Cache the derived name/label
-  index as part of the fix. Measure the open path rather than extending a
-  timeout. 0.8.0 made the frame-reading commands async; measure the open path
-  again before doing more.
 - [ ] **Live Balrog label fixture.** The `Where the Balrogs Live` literal
   fallback is unit-tested, but its live label crop is not in `testdata/`. Add
   the crop as a client-tier regression fixture when the map is available.

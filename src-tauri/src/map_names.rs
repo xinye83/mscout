@@ -55,10 +55,35 @@ fn string_at(root: &WzNodeArc, path: &str) -> Option<String> {
 }
 
 /// Every `mapName`/`streetName` pair in the client's map string table.
+/// The client's map table, cached per `String_000.wz` (path and modification
+/// time). Parsing the archive takes long enough to matter on every call: the
+/// calibration window asks for the table's size on open and after each freeze,
+/// and the label reader asks for it on every OCR resolution.
 pub fn load(mscw_dir: &Path) -> Result<Vec<MapEntry>, String> {
+    type Cached = (PathBuf, Option<std::time::SystemTime>, Vec<MapEntry>);
+    static CACHE: std::sync::Mutex<Option<Cached>> = std::sync::Mutex::new(None);
+
     let path = string_wz(mscw_dir)
         .ok_or_else(|| format!("no String_000.wz under {}", mscw_dir.display()))?;
-    let root = crate::game_font::open_wz(&path)?;
+    let modified = std::fs::metadata(&path)
+        .and_then(|meta| meta.modified())
+        .ok();
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((cached_path, cached_time, entries)) = cache.as_ref() {
+        if *cached_path == path && *cached_time == modified {
+            return Ok(entries.clone());
+        }
+    }
+    let entries = parse(&path)?;
+    *cache = Some((path, modified, entries.clone()));
+    Ok(entries)
+}
+
+/// Read every map's name and street from `String_000.wz`.
+fn parse(path: &Path) -> Result<Vec<MapEntry>, String> {
+    let root = crate::game_font::open_wz(path)?;
 
     let mut out = Vec::new();
     for region in children(&root, "Map.img") {

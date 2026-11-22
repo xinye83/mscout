@@ -176,6 +176,7 @@ pub struct UiModeOption {
 /// picker and the app cannot drift apart.
 #[tauri::command]
 pub fn ui_modes() -> Vec<UiModeOption> {
+    let _timed = crate::calibration::Timed::new("ui_modes");
     let current = ui_mode();
     UiMode::ALL
         .into_iter()
@@ -189,6 +190,7 @@ pub fn ui_modes() -> Vec<UiModeOption> {
 
 #[tauri::command]
 pub fn set_ui_mode(mode: UiMode) -> Result<(), String> {
+    let _timed = crate::calibration::Timed::new("set_ui_mode");
     save_ui_mode(mode)
 }
 

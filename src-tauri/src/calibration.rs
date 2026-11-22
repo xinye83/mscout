@@ -114,6 +114,7 @@ fn learning_info(stored: &settings::StoredAtlas) -> LearningInfo {
 pub fn capture_preview(
     state: State<'_, window_target::TargetState>,
 ) -> Result<tauri::ipc::Response, String> {
+    let _timed = crate::calibration::Timed::new("capture_preview");
     let selector = state.selector().ok_or("attach a game window first")?;
     let window = window_target::resolve_selector(&selector).ok_or("game window not found")?;
     if window.minimized {
@@ -143,6 +144,7 @@ pub fn capture_preview(
 
 #[tauri::command]
 pub fn get_calibration(state: State<'_, window_target::TargetState>) -> Calibration {
+    let _timed = crate::calibration::Timed::new("get_calibration");
     // Make sure a profile is active before reading it. Right after startup the engine
     // may not have ticked yet, and `active()` then has nothing — which handed the
     // window an all-null set it could save straight back over the real one.
@@ -199,8 +201,9 @@ pub fn set_calibration(
     Ok(calibration)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_learning() -> LearningInfo {
+    let _timed = crate::calibration::Timed::new("get_learning");
     learning_info(&profile::read_atlas(|p| &p.atlas))
 }
 
@@ -210,15 +213,17 @@ fn use_frame_profile(frame: &capture::Frame) -> Result<crate::profile::Profile, 
     profile::activate(frame.width, frame.height)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn learn_atlas(serial: u64, text: String) -> Result<LearningInfo, String> {
+    let _timed = crate::calibration::Timed::new("learn_atlas");
     learn_region(serial, text, "exp")
 }
 
 /// The level readout is drawn at its own size, so its glyph variants usually have
 /// to be learned separately from the EXP text's even though it is the same alphabet.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn learn_level_atlas(serial: u64, text: String) -> Result<LearningInfo, String> {
+    let _timed = crate::calibration::Timed::new("learn_level_atlas");
     learn_region(serial, text, "level")
 }
 
@@ -287,6 +292,7 @@ fn learn_region(serial: u64, text: String, target: &str) -> Result<LearningInfo,
 /// resolution that draws at that size.
 #[tauri::command(async)]
 pub fn seed_atlas(serial: u64) -> Result<LearningInfo, String> {
+    let _timed = crate::calibration::Timed::new("seed_atlas");
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
     let calibration = profile::read(|p| &p.calibration);
@@ -341,6 +347,7 @@ pub fn seed_atlas(serial: u64) -> Result<LearningInfo, String> {
 
 #[tauri::command(async)]
 pub fn teach_map(serial: u64, name: String) -> Result<LearningInfo, String> {
+    let _timed = crate::calibration::Timed::new("teach_map");
     let name = name.trim().to_string();
     log(&format!("teach_map serial={serial} name={name:?}"));
     if name.is_empty() {
@@ -388,6 +395,7 @@ pub fn teach_map(serial: u64, name: String) -> Result<LearningInfo, String> {
 /// fingerprinted and matched on its own line.
 #[tauri::command(async)]
 pub fn teach_street(serial: u64, street: String) -> Result<LearningInfo, String> {
+    let _timed = crate::calibration::Timed::new("teach_street");
     let street = street.trim().to_string();
     log(&format!("teach_street serial={serial} street={street:?}"));
     if street.is_empty() {
@@ -495,6 +503,7 @@ pub fn teach_identity(
     kind: IdentityBox,
     label: String,
 ) -> Result<LearningInfo, String> {
+    let _timed = crate::calibration::Timed::new("teach_identity");
     let label = label.trim().to_string();
     log(&format!(
         "teach_identity serial={serial} kind={kind} label={label:?}"
@@ -550,6 +559,7 @@ pub struct Probe {
 
 #[tauri::command(async)]
 pub fn parse_probe(serial: u64) -> Result<Probe, String> {
+    let _timed = crate::calibration::Timed::new("parse_probe");
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
     let calibration = profile::read(|p| &p.calibration);
@@ -601,6 +611,7 @@ pub fn parse_probe(serial: u64) -> Result<Probe, String> {
 /// `data/diagnostics/`.
 #[tauri::command(async)]
 pub fn save_diagnostic(serial: u64) -> Result<String, String> {
+    let _timed = crate::calibration::Timed::new("save_diagnostic");
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
     let calibration = profile::read(|p| &p.calibration);
@@ -801,8 +812,9 @@ fn crop_rgba(frame: &Frame, region: Region) -> Option<Vec<u8>> {
 /// Split a single name/job box into the two stacked lines it encloses, top
 /// line first (the game draws job above name). The player draws one generous box
 /// around both and each line becomes its own fingerprint region.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn split_identity(serial: u64, x: i32, y: i32, w: i32, h: i32) -> Result<Vec<Region>, String> {
+    let _timed = crate::calibration::Timed::new("split_identity");
     log(&format!(
         "split_identity serial={serial} box {x},{y} {w}x{h}"
     ));
@@ -914,8 +926,9 @@ pub struct ExpGlyph {
 /// labelled by eye. `kind` selects both the box and the atlas — each readout owns
 /// its own glyph set, so a shape from the level box must be judged by the level
 /// glyphs, not the EXP ones.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn box_glyphs(serial: u64, kind: DigitBox) -> Result<Vec<ExpGlyph>, String> {
+    let _timed = crate::calibration::Timed::new("box_glyphs");
     let frame = cached_frame(serial)?;
     let calibration = profile::read(|p| &p.calibration);
     let level = kind == DigitBox::Level;
@@ -959,7 +972,7 @@ pub fn box_glyphs(serial: u64, kind: DigitBox) -> Result<Vec<ExpGlyph>, String> 
 /// Label one shape as a character. The native bitmap comes straight from
 /// `box_glyphs`, so the exact pixels the player looked at are what gets stored —
 /// no re-cropping, which would reject one-pixel shapes like `.`.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn label_glyph(
     client_w: u32,
     client_h: u32,
@@ -969,6 +982,7 @@ pub fn label_glyph(
     w: u32,
     h: u32,
 ) -> Result<LearningInfo, String> {
+    let _timed = crate::calibration::Timed::new("label_glyph");
     let trimmed = ch.trim();
     let character = trimmed
         .chars()
@@ -1012,8 +1026,9 @@ pub fn label_glyph(
 /// Restore a size to its shipped preset: the boxes are replaced and both digit
 /// atlases are cleared, so the next frame reseeds them from the installed client
 /// (or they can be taught again). The per-player teaches (map, name, job) are kept.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn apply_preset(client_w: u32, client_h: u32) -> Result<(), String> {
+    let _timed = crate::calibration::Timed::new("apply_preset");
     let ui_mode = crate::settings::ui_mode();
     let preset = crate::preset::for_size(client_w, client_h, ui_mode)
         .ok_or_else(|| format!("no preset for {client_w}x{client_h}{}", ui_mode.suffix()))?;
@@ -1104,6 +1119,41 @@ pub(crate) fn open_calibration_window_on_main<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Logs how long a calibration-window command took, when it took long enough to
+/// matter, and whether it ran on the main thread (where it freezes every
+/// window). The window's startup freeze is measured with this.
+pub(crate) struct Timed {
+    name: &'static str,
+    started: std::time::Instant,
+}
+
+/// Shorter than this is not worth a log line.
+const SLOW_COMMAND: std::time::Duration = std::time::Duration::from_millis(100);
+
+impl Timed {
+    pub(crate) fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            started: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Drop for Timed {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        if elapsed >= SLOW_COMMAND {
+            let thread = std::thread::current();
+            log(&format!(
+                "slow command {} took {} ms on {}",
+                self.name,
+                elapsed.as_millis(),
+                thread.name().unwrap_or("an unnamed thread")
+            ));
+        }
+    }
+}
+
 /// Largest `debug.log` before it is rotated to `debug.log.1` (the previous
 /// `.1` is dropped). Two files at most, so the log can never fill the disk.
 const LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
@@ -1158,8 +1208,9 @@ pub struct LabelCrop {
 /// The crop of any box, so every card in the calibration window can show what its
 /// box actually covers. `map` and `street` use the line detector, matching the
 /// overlay; a saved box is only the fallback when detection fails.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn box_crop(serial: u64, kind: BoxKind) -> Result<LabelCrop, String> {
+    let _timed = crate::calibration::Timed::new("box_crop");
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
     let calibration = profile::read(|p| &p.calibration);
@@ -1245,16 +1296,18 @@ fn crop_box(frame: &Frame, calibration: &Calibration, kind: BoxKind) -> Result<L
 /// The shipped preset's boxes for this client size, if one exists. The calibration
 /// window uses it to tell the player's own boxes apart from geometry that merely
 /// came from the preset.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn preset_calibration(client_w: u32, client_h: u32) -> Option<Calibration> {
+    let _timed = crate::calibration::Timed::new("preset_calibration");
     let ui_mode = settings::ui_mode();
     crate::preset::for_size(client_w, client_h, ui_mode).map(|profile| profile.calibration)
 }
 
 /// The exact line regions the map reader detects, so the calibration window can
 /// show and store the boxes the overlay is actually using.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn map_line_regions(serial: u64) -> Result<Vec<Region>, String> {
+    let _timed = crate::calibration::Timed::new("map_line_regions");
     let frame = cached_frame(serial)?;
     use_frame_profile(&frame)?;
     Ok(ocr::map_label_line_regions(&frame)
@@ -1265,8 +1318,9 @@ pub fn map_line_regions(serial: u64) -> Result<Vec<Region>, String> {
 /// The map box the detector would use for this frame, so the calibration window can
 /// show one where the profile has none. Nothing is stored: the player can adjust the
 /// box and save it, and a saved box then wins over detection.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn map_region(serial: u64) -> Result<Option<Region>, String> {
+    let _timed = crate::calibration::Timed::new("map_region");
     let frame = cached_frame(serial)?;
     if let Some(lines) = ocr::map_label_line_regions(&frame) {
         let left = lines.iter().map(|(region, _)| region.x).min();

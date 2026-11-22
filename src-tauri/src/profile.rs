@@ -456,18 +456,21 @@ pub fn migrate_legacy() -> Option<String> {
     Some(profile.key())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_profiles() -> Vec<ProfileSummary> {
+    let _timed = crate::calibration::Timed::new("list_profiles");
     list()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn active_profile() -> Option<ProfileSummary> {
+    let _timed = crate::calibration::Timed::new("active_profile");
     active().map(|profile| profile.summary())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_profile(client_w: u32, client_h: u32, ui_mode: Option<String>) -> Result<(), String> {
+    let _timed = crate::calibration::Timed::new("delete_profile");
     let ui_mode = match ui_mode.as_deref() {
         Some(value) => {
             UiMode::parse(value).ok_or_else(|| format!("unknown UI size mode {value}"))?

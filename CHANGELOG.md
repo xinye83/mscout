@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- The calibration window no longer freezes while it opens. Every command it
+  calls runs off the main thread, and the client's map table is parsed once per
+  `String_000.wz` instead of on every status check and label lookup. Commands
+  that take longer than 100 ms are logged to `debug.log` with their thread, so
+  a slow open can be measured.
+
 ### Removed
 - The "MScout — not reading" desktop notification. A lost capture (including
   closing or minimising the game) is shown by the overlay's red banner only;

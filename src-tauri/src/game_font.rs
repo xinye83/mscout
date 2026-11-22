@@ -632,13 +632,15 @@ fn status_for(dir: Option<&str>) -> MscwStatus {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_mscw_status() -> MscwStatus {
+    let _timed = crate::calibration::Timed::new("get_mscw_status");
     status()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_mscw_dir(path: String) -> Result<MscwStatus, String> {
+    let _timed = crate::calibration::Timed::new("set_mscw_dir");
     let dir = PathBuf::from(path.trim());
     if dir.as_os_str().is_empty() {
         return Err("choose your MapleStory MSCW folder".into());
