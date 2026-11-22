@@ -83,6 +83,11 @@ const TEXT_SEED_RETRY: Duration = Duration::from_secs(30);
 /// keep recording `idle` rows of a picture that is no longer on screen.
 const STALE_FRAME: Duration = Duration::from_secs(30);
 
+/// How long a client size has to hold before a profile is chosen for it. A
+/// window caught mid-resize (`1920x1081`) would otherwise get its own profile,
+/// saved with derived boxes, and be picked again later.
+const SIZE_SETTLE: Duration = Duration::from_secs(2);
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Sample {
@@ -383,11 +388,15 @@ struct EngineState {
     /// The EXP, level and name/job atlases decoded from the profile, each with
     /// the fingerprint of the stored set it came from.
     decoded: [Option<(u64, Atlas)>; 3],
+    /// The client size the capture is delivering, and since when: a profile is
+    /// only chosen once the size has held for [`SIZE_SETTLE`].
+    size_since: Option<((u32, u32), std::time::Instant)>,
 }
 
 impl EngineState {
     fn new() -> Self {
         Self {
+            size_since: None,
             capturer: None,
             last_frame: None,
             outcomes: VecDeque::new(),
@@ -546,6 +555,18 @@ fn anchor_overlay<R: Runtime>(
             .is_ok()
         {
             engine.anchored = Some(anchor);
+        }
+    }
+}
+
+/// Whether `size` has been the capture's size for [`SIZE_SETTLE`]; a new size
+/// starts the wait again.
+fn size_settled(since: &mut Option<((u32, u32), std::time::Instant)>, size: (u32, u32)) -> bool {
+    match since {
+        Some((seen, at)) if *seen == size => at.elapsed() >= SIZE_SETTLE,
+        _ => {
+            *since = Some((size, std::time::Instant::now()));
+            false
         }
     }
 }
@@ -893,6 +914,13 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
         },
         Err(error) => return Err(TickError::Lost(format!("capture failed: {error}"))),
     };
+
+    if !size_settled(&mut engine.size_since, (frame.width, frame.height)) {
+        return Err(TickError::Transient(format!(
+            "waiting for the {}x{} window to settle",
+            frame.width, frame.height
+        )));
+    }
 
     // Every reader works on the game's 1x picture, whatever the resolution and
     // UI Size: one HUD geometry and one glyph size.
@@ -1654,6 +1682,19 @@ mod tests {
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> window_target::Rect {
         window_target::Rect { x, y, w, h }
+    }
+
+    #[test]
+    fn a_new_client_size_waits_before_it_is_used() {
+        let mut since = None;
+        assert!(!size_settled(&mut since, (1920, 1081)));
+        assert!(
+            !size_settled(&mut since, (1920, 1080)),
+            "a change restarts the wait"
+        );
+        let started = since.expect("recorded").1;
+        since = Some(((1920, 1080), started - SIZE_SETTLE));
+        assert!(size_settled(&mut since, (1920, 1080)));
     }
 
     #[test]

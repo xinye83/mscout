@@ -100,9 +100,6 @@ Unscheduled, deferred or out of scope for now.
 - [ ] **Fewer teach flows.** With exact 1x reading the name/job and map teach
   steps in Calibration should rarely be needed; keep them as overrides, and
   drop the ones the corpus shows are never used.
-- [ ] **No profile for a transient size.** A window caught mid-resize creates an
-  empty profile (e.g. `1920x1081@ideal`). Only create a profile once a size has
-  been seen for a few seconds, or derive it and keep it unsaved until it reads.
 - [ ] **Screenshot import tool.** Turn a full client screenshot + ground truth
   into a `testdata/frames/<WxH@mode>/<scene>/` with its `scene.json`. (A saved
   diagnostic already imports as focused crops: `corpus::import_diagnostic`.)

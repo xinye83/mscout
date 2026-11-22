@@ -263,8 +263,9 @@ item in [ROADMAP.md](ROADMAP.md).
 - **Filter Applied is approximate above 768 lines.** Its sharpen is not fully
   linear and its alignment drifts with the size, so the recovered picture is
   close, not exact; at 1920×1200 the name/job are not read.
-- **Profiles are per picture size.** A transient client size can create an
-  empty profile (e.g. `1920x1081@ideal`); move it aside if the app selects it.
+- **Profiles are per picture size.** A client size is used once it has held for
+  two seconds; a profile made earlier for a transient size (e.g.
+  `1920x1081@ideal`) can still be selected and should be moved aside.
 - **The EXP box is sized for the current digit count.** A much longer EXP number
   can clip it until it is redrawn.
 - **Filtered atlas gaps.** A live `8` can read as `6`/`9` (a 20-EXP error that

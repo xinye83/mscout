@@ -20,6 +20,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **The overlay stays on the game's monitor.** It sits just outside the game's
   top-right corner; when the game fills its monitor that spot is on the next
   display, so the overlay now moves inside the corner instead.
+- **A window caught mid-resize no longer gets a profile.** A client size is
+  only used once it has held for two seconds, so a passing `1920x1081` is not
+  saved as a profile and picked again later.
 - **A name at Default Ratio 1920×1080 reads right.** "Eurovein" read as
   "Eurovejn" with no job; reading the 1x picture fixes it.
 
