@@ -177,7 +177,9 @@ pub struct UiModeOption {
 #[tauri::command]
 pub fn ui_modes() -> Vec<UiModeOption> {
     let _timed = crate::calibration::Timed::new("ui_modes");
-    let current = ui_mode();
+    // Above 768 lines the UI Size is read from the frame; the active option is
+    // the one the last frame was read with.
+    let current = crate::native::last_mode().unwrap_or_else(ui_mode);
     UiMode::ALL
         .into_iter()
         .map(|mode| UiModeOption {

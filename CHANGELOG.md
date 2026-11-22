@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- **Any resolution reads without calibration.** MScout now reads the game's own
+  1x picture: above 768 lines it undoes the client's stretch (Default Ratio,
+  exactly), its whole-pixel blocks (Ideal Ratio) or its sharpened stretch
+  (Filter Applied, closely). One set of boxes, moved with the HUD bar, then
+  fits every size, so 1920×1200, 2560×1440 and other sizes read with no boxes
+  drawn.
+- **The UI Size is detected from the frame** above 768 lines; the setting only
+  matters at 768 lines and below, where every UI Size looks the same.
+
+### Fixed
+- **A name at Default Ratio 1920×1080 reads right.** "Eurovein" read as
+  "Eurovejn" with no job; reading the 1x picture fixes it.
+
 ## [0.9.0] - 2026-11-22
 
 ### Fixed

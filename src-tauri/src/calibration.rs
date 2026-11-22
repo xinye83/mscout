@@ -122,6 +122,8 @@ pub fn capture_preview(
     }
 
     let frame = capture::client_frame(window.hwnd)?;
+    // The calibration window shows and boxes the 1x picture the readers see.
+    let frame = crate::native::prepare_whole(frame, settings::ui_mode()).frame;
     let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
     log(&format!(
         "capture_preview serial={serial} frame {}x{}",
@@ -718,7 +720,9 @@ pub fn save_diagnostic(serial: u64) -> Result<String, String> {
         "stages": "hud-atlas+map-table+dtw",
         "frame": { "w": frame.width, "h": frame.height },
         "profile": crate::profile::active_key(),
-        "uiMode": settings::ui_mode().id(),
+        "uiMode": crate::native::mode_for(frame.width, frame.height)
+            .unwrap_or_else(settings::ui_mode)
+            .id(),
         "calibration": calibration,
         "readings": readings,
         // Where each field came from, and why an empty one is empty. Repeated
@@ -1029,7 +1033,7 @@ pub fn label_glyph(
 #[tauri::command(async)]
 pub fn apply_preset(client_w: u32, client_h: u32) -> Result<(), String> {
     let _timed = crate::calibration::Timed::new("apply_preset");
-    let ui_mode = crate::settings::ui_mode();
+    let ui_mode = crate::native::mode_for(client_w, client_h).unwrap_or_else(settings::ui_mode);
     let preset = crate::preset::for_size(client_w, client_h, ui_mode)
         .ok_or_else(|| format!("no preset for {client_w}x{client_h}{}", ui_mode.suffix()))?;
     crate::profile::activate(client_w, client_h)?;
@@ -1299,7 +1303,7 @@ fn crop_box(frame: &Frame, calibration: &Calibration, kind: BoxKind) -> Result<L
 #[tauri::command(async)]
 pub fn preset_calibration(client_w: u32, client_h: u32) -> Option<Calibration> {
     let _timed = crate::calibration::Timed::new("preset_calibration");
-    let ui_mode = settings::ui_mode();
+    let ui_mode = crate::native::mode_for(client_w, client_h).unwrap_or_else(settings::ui_mode);
     crate::preset::for_size(client_w, client_h, ui_mode).map(|profile| profile.calibration)
 }
 

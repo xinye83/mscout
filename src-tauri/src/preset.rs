@@ -122,6 +122,19 @@ fn dirs() -> Vec<PathBuf> {
 /// client (or taught), and the map/name/job fingerprints stay per-player. A pair
 /// with no preset falls back to drawing its own boxes.
 pub fn for_size(client_w: u32, client_h: u32, ui_mode: UiMode) -> Option<Profile> {
+    if let Some(profile) = shipped(client_w, client_h, ui_mode) {
+        return Some(profile);
+    }
+    derived(client_w, client_h, ui_mode)
+}
+
+/// Whether a measured preset ships for exactly this size and UI Size.
+pub fn ships(client_w: u32, client_h: u32, ui_mode: UiMode) -> bool {
+    shipped(client_w, client_h, ui_mode).is_some()
+}
+
+/// A preset file for exactly this size and UI Size.
+fn shipped(client_w: u32, client_h: u32, ui_mode: UiMode) -> Option<Profile> {
     let name = format!("{client_w}x{client_h}{}.json", ui_mode.suffix());
 
     for dir in dirs() {
@@ -142,6 +155,43 @@ pub fn for_size(client_w: u32, client_h: u32, ui_mode: UiMode) -> Option<Profile
 
     None
 }
+
+/// The 1x picture the readers see ([`crate::native::prepare`]) puts the HUD
+/// bar centred on its bottom edge at every size, so the 1366x768 boxes, moved
+/// with the bar, fit any picture: a 1228x768 Default picture at 1920x1200, a
+/// 1280x720 Ideal one at 2560x1440, or a 1920x1200 Ideal client. The
+/// derivation reproduces the measured 1920x1080 Ideal preset to within its
+/// padding.
+fn derived(width: u32, height: u32, ui_mode: UiMode) -> Option<Profile> {
+    if width < BAR_WIDTH || height < BAR_ROWS {
+        return None;
+    }
+    let mut profile = shipped(1366, 768, ui_mode)?;
+    let dx = (width as i32 - 1366) / 2;
+    let dy = height as i32 - 768;
+    let calibration = &mut profile.calibration;
+    for region in [
+        &mut calibration.exp,
+        &mut calibration.level,
+        &mut calibration.name,
+        &mut calibration.job,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        region.x += dx;
+        region.y += dy;
+    }
+    calibration.client_w = Some(width);
+    calibration.client_h = Some(height);
+    profile.client_w = width;
+    profile.client_h = height;
+    Some(profile)
+}
+
+/// The HUD bar's size in the 1x picture; a smaller picture cannot hold it.
+const BAR_WIDTH: u32 = 800;
+const BAR_ROWS: u32 = 64;
 
 #[cfg(test)]
 mod tests {
@@ -281,13 +331,33 @@ mod tests {
                 "{w}x{h} Ideal preset has no name/job boxes"
             );
         }
-        // The 1920x1200 preset was removed; it falls back to calibration.
-        assert!(for_size(1920, 1200, UiMode::Ideal).is_none());
+        // 1920x1200 ships no file; its boxes are derived from 1366x768.
+        assert!(shipped(1920, 1200, UiMode::Ideal).is_none());
     }
 
     #[test]
-    fn unknown_size_has_none() {
-        assert!(for_size(1280, 720, UiMode::Default).is_none());
+    fn a_picture_too_small_for_the_hud_has_none() {
+        assert!(for_size(640, 480, UiMode::Default).is_none());
+    }
+
+    #[test]
+    fn other_sizes_move_the_1366x768_boxes_with_the_bar() {
+        let base = for_size(1366, 768, UiMode::Default).expect("1366x768");
+        for (w, h) in [(1228, 768), (1280, 720), (1920, 1200)] {
+            let profile = for_size(w, h, UiMode::Default).expect("derived");
+            let (dx, dy) = ((w as i32 - 1366) / 2, h as i32 - 768);
+            let moved = |r: Option<Region>| r.map(|r| (r.x - dx, r.y - dy, r.w, r.h));
+            let base_box = |r: Option<Region>| r.map(|r| (r.x, r.y, r.w, r.h));
+            assert_eq!(
+                moved(profile.calibration.exp),
+                base_box(base.calibration.exp)
+            );
+            assert_eq!(
+                moved(profile.calibration.name),
+                base_box(base.calibration.name)
+            );
+            assert_eq!((profile.client_w, profile.client_h), (w, h));
+        }
     }
 
     #[test]
@@ -325,14 +395,10 @@ mod tests {
             );
         }
 
-        // 1920x1200 has no shipped preset; every mode falls back to a local
-        // calibration pass instead of borrowing geometry from another size.
-        assert!(for_size(1920, 1200, UiMode::Ideal).is_none());
-        assert!(for_size(1920, 1200, UiMode::Default).is_none());
-        assert!(for_size(1920, 1200, UiMode::Filtered).is_none());
-
-        // A size with no measured set must not borrow another size's.
-        assert!(for_size(1280, 720, UiMode::Ideal).is_none());
-        assert!(for_size(1280, 720, UiMode::Filtered).is_none());
+        // Other sizes ship no file; their boxes are derived from 1366x768.
+        for mode in UiMode::ALL {
+            assert!(shipped(1920, 1200, mode).is_none());
+            assert!(for_size(1920, 1200, mode).is_some_and(|p| p.is_calibrated()));
+        }
     }
 }

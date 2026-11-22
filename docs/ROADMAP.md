@@ -7,6 +7,11 @@ in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
 
 ## Reading correctness
 
+- [ ] **Filter Applied above 1080 lines.** The 1x picture recovered from Filter
+  Applied is close, not exact (`native.rs`); at 1920×1200 the name/job are not
+  read (`READ_KNOWN_GAPS`). Fit the filter per size (strength,
+  alignment) against static HUD art at run time, or read the recovered picture
+  with a tolerance the exact 1x readers do not have.
 - [ ] **Filtered glyph variants (atlas coverage).** The digit sweep found a live
   `8` that the seeded atlas does not represent: at 8×11 the correct `8` scores
   ~29 while `6`/`9` score ~10–12. A 20-EXP error can pass the percentage
@@ -57,17 +62,9 @@ in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
 
 Unscheduled, deferred or out of scope for now.
 
-- [ ] **UI Size auto-detection.** Choose the box set from the status bar instead
-  of the manual setting; fall back to manual when the match is not unique. The
-  manual setting remains authoritative until this ships.
 - [ ] **Screenshot import tool.** Turn a full client screenshot + ground truth
   into a `testdata/frames/<WxH@mode>/<scene>/` with its `scene.json`. (A saved
   diagnostic already imports as focused crops: `corpus::import_diagnostic`.)
-- [ ] **Multi-resolution portability.** Anchor-relative boxes + scale-aware
-  matching so one calibration serves several resolutions; blocked on a
-  two-resolution capture diff.
-- [ ] **1920×1200 support.** No preset or fixture today; manual calibration
-  works. Add presets and corpus only if the size is requested.
 - [ ] **Auto-discover the MSCW folder** from the Steam library; keep the
   `mscwDir` override.
 - [ ] **Optional offline map-name cache** after profiles are seeded (derived

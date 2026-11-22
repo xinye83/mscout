@@ -854,8 +854,13 @@ fn tick(engine: &mut EngineState, status: &TargetStatus) -> Result<TickOutcome, 
         Err(error) => return Err(TickError::Lost(format!("capture failed: {error}"))),
     };
 
-    // The profile is chosen by the live client size, so a resolution change
-    // switches calibration sets instead of invalidating everything.
+    // Every reader works on the game's 1x picture, whatever the resolution and
+    // UI Size: one HUD geometry and one glyph size.
+    let frame = crate::native::prepare(frame, settings::ui_mode()).frame;
+
+    // The profile is chosen by the 1x picture's size and UI Size, so a
+    // resolution change switches calibration sets instead of invalidating
+    // everything.
     let mut profile = profile::activate(frame.width, frame.height)
         .map_err(|error| TickError::Lost(format!("profile failed: {error}")))?;
 

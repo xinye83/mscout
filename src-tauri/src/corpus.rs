@@ -1017,14 +1017,9 @@ fn fixture_corpus_is_complete() {
 }
 
 /// Cases the minimap detector is known to misname, as `<pair>/<scene>/<state>`.
-/// Its size thresholds were tuned at 1x and 1.4x; these are larger stretches.
-/// Each entry is removed when reading moves to the game's 1x picture
-/// (`native`); a case that starts passing fails the test until it is removed.
-const MINIMAP_STATE_KNOWN_GAPS: &[&str] = &[
-    "2560x1440/eurovein-lv10-ellinia-weapon-store/folded",
-    "2560x1440@filtered/eurovein-lv10-ellinia-weapon-store/folded",
-    "2560x1440@ideal/eurovein-lv10-ellinia-weapon-store/folded",
-];
+/// Detection runs on the 1x picture (`native::prepare`), so none are known
+/// today; a listed case that starts passing fails the test until it is removed.
+const MINIMAP_STATE_KNOWN_GAPS: &[&str] = &[];
 
 /// The minimap state detector must name the state each frame was captured in.
 #[test]
@@ -1032,7 +1027,8 @@ fn minimap_state_matches_ground_truth() {
     let mut wrong = Vec::new();
     let mut fixed = Vec::new();
     for case in load_cases() {
-        let frame = compose_frame(&case);
+        // The app detects the minimap on the 1x picture.
+        let frame = crate::native::prepare(compose_frame(&case), case.mode()).frame;
         let detected = ocr::detect_minimap(&frame).map(|minimap| minimap.state);
         let id = case.key.clone();
         let known = MINIMAP_STATE_KNOWN_GAPS.contains(&id.as_str());

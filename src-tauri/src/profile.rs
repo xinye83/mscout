@@ -257,7 +257,9 @@ fn save_or_log(profile: &Profile) {
 }
 
 pub fn activate(client_w: u32, client_h: u32) -> Result<Profile, String> {
-    let ui_mode = settings::ui_mode();
+    // A prepared frame carries the UI Size it was drawn with; the setting only
+    // decides where every UI Size draws the same pixels.
+    let ui_mode = crate::native::mode_for(client_w, client_h).unwrap_or_else(settings::ui_mode);
     let key = format!("{client_w}x{client_h}{}", ui_mode.suffix());
     let mut active = lock(&ACTIVE);
     if let Some(current) = active.as_ref() {

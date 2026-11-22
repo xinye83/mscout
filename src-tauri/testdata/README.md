@@ -132,8 +132,9 @@ state you want, captured on one map.
    frame out of this directory and out of git.
 
 **A new pair** is a new `frames/<WxH@mode>/` with `pair.json`, its settings
-panel and at least one scene. A pair is only read on the client tier when a
-preset ships for it.
+panel and at least one scene. Every pair is read on the client tier: a size
+with no shipped preset reads with the 1366×768 boxes moved with the HUD bar
+(`preset.rs`), on the 1x picture (`native.rs`).
 
 ## The frozen hold-out
 

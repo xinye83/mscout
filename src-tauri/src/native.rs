@@ -19,8 +19,7 @@
 //! Only the regions a reader asks for are recovered ([`to_native`]), so the
 //! cost follows the HUD strip and the minimap, not the client size.
 
-// Not wired into the readers yet; the corpus tests exercise it.
-#![cfg_attr(not(test), allow(dead_code))]
+use std::sync::Mutex;
 
 use crate::capture::Frame;
 use crate::settings::UiMode;
@@ -181,35 +180,43 @@ fn client_span(n0: i64, n1: i64, scale: f64, limit: u32) -> (u32, u32) {
 
 /// Least-squares recovery of 1x pixels `n0..n1` along one axis from client
 /// samples `c0..c1` of one line. Every sample mixes two neighbouring 1x
-/// pixels, so the normal equations are tridiagonal.
+/// pixels, so the normal equations are tridiagonal. At the picture's edge
+/// (`0` and `limit`) the stretch repeats the edge pixel, as the client does.
 struct Axis {
     n0: i64,
     n: usize,
-    samples: Vec<(usize, f64, f64)>,
+    /// Per client sample: the two 1x pixels it mixes (relative) and their
+    /// weights, or `None` when it reaches outside `n0..n1`.
+    samples: Vec<Option<(usize, f64, usize, f64)>>,
     lower: Vec<f64>,
     diag: Vec<f64>,
     upper: Vec<f64>,
 }
 
 impl Axis {
-    fn new(n0: i64, n1: i64, c0: u32, c1: u32, scale: f64) -> Axis {
+    fn new(n0: i64, n1: i64, c0: u32, c1: u32, scale: f64, limit: i64) -> Axis {
         let n = (n1 - n0) as usize;
         let mut samples = Vec::new();
         let (mut lower, mut diag, mut upper) = (vec![0.0; n], vec![1e-6; n], vec![0.0; n]);
         for c in c0..c1 {
             let (f, fr) = source(c, scale);
-            let i = f - n0;
-            if i < 0 || i + 1 >= n as i64 {
-                samples.push((usize::MAX, 0.0, 0.0));
+            let left = f.clamp(0, limit - 1);
+            let right = (f + 1).clamp(0, limit - 1);
+            if left < n0 || right >= n1 {
+                samples.push(None);
                 continue;
             }
-            let i = i as usize;
+            let (i, j) = ((left - n0) as usize, (right - n0) as usize);
             let (a, b) = (1.0 - fr, fr);
             diag[i] += a * a;
-            diag[i + 1] += b * b;
-            upper[i] += a * b;
-            lower[i + 1] += a * b;
-            samples.push((i, a, b));
+            diag[j] += b * b;
+            if i == j {
+                diag[i] += 2.0 * a * b;
+            } else {
+                upper[i] += a * b;
+                lower[j] += a * b;
+            }
+            samples.push(Some((i, a, j, b)));
         }
         Axis {
             n0,
@@ -224,12 +231,12 @@ impl Axis {
     /// Solve for the 1x line behind `values` (one per client sample).
     fn solve(&self, values: &[f64]) -> Vec<f64> {
         let mut rhs = vec![0.0; self.n];
-        for (&(i, a, b), &v) in self.samples.iter().zip(values) {
-            if i == usize::MAX {
+        for (sample, &v) in self.samples.iter().zip(values) {
+            let Some((i, a, j, b)) = *sample else {
                 continue;
-            }
+            };
             rhs[i] += a * v;
-            rhs[i + 1] += b * v;
+            rhs[j] += b * v;
         }
         // Thomas algorithm.
         let mut c = vec![0.0; self.n];
@@ -247,22 +254,36 @@ impl Axis {
 }
 
 fn unstretch(frame: &Frame, out: &mut Frame, region: Rect, sx: f64, sy: f64, sharpen: Option<f32>) {
+    let (limit_x, limit_y) = (i64::from(out.width), i64::from(out.height));
     let (nx0, ny0) = (
-        i64::from(region.x) - i64::from(MARGIN),
-        i64::from(region.y) - i64::from(MARGIN),
+        (i64::from(region.x) - i64::from(MARGIN)).max(0),
+        (i64::from(region.y) - i64::from(MARGIN)).max(0),
     );
     let (nx1, ny1) = (
-        i64::from(region.x + region.w + MARGIN),
-        i64::from(region.y + region.h + MARGIN),
+        i64::from(region.x + region.w + MARGIN).min(limit_x),
+        i64::from(region.y + region.h + MARGIN).min(limit_y),
     );
-    let (cx0, cx1) = client_span(nx0, nx1, sx, frame.width);
-    let (cy0, cy1) = client_span(ny0, ny1, sy, frame.height);
+    let (mut cx0, mut cx1) = client_span(nx0, nx1, sx, frame.width);
+    let (mut cy0, mut cy1) = client_span(ny0, ny1, sy, frame.height);
+    // Client pixels past the last 1x pixel's centre sample only the edge pixel.
+    if nx0 == 0 {
+        cx0 = 0;
+    }
+    if nx1 == limit_x {
+        cx1 = frame.width;
+    }
+    if ny0 == 0 {
+        cy0 = 0;
+    }
+    if ny1 == limit_y {
+        cy1 = frame.height;
+    }
     if cx0 >= cx1 || cy0 >= cy1 {
         return;
     }
     let (cw, ch) = ((cx1 - cx0) as usize, (cy1 - cy0) as usize);
-    let xs = Axis::new(nx0, nx1, cx0, cx1, sx);
-    let ys = Axis::new(ny0, ny1, cy0, cy1, sy);
+    let xs = Axis::new(nx0, nx1, cx0, cx1, sx, limit_x);
+    let ys = Axis::new(ny0, ny1, cy0, cy1, sy, limit_y);
     for channel in 0..3 {
         let mut plane = vec![0.0f64; cw * ch];
         for y in 0..ch {
@@ -331,6 +352,171 @@ fn unsharpen(plane: &[f64], w: usize, h: usize, weight: f64) -> Vec<f64> {
     x
 }
 
+/// How far, on average, a client frame's HUD band is from the Default stretch
+/// of its own least-squares 1x picture. A frame the client did stretch comes
+/// back almost exactly (about 0.1); Filter Applied's sharpen leaves 1.3 to 4;
+/// Ideal Ratio's crisp 1x pixels are not a stretch of anything and leave 12 or
+/// more (measured on every `testdata/frames` scene above 768 lines).
+fn stretch_residual(frame: &Frame) -> Option<f64> {
+    let width = picture_width(frame.width, frame.height);
+    let scaling = Scaling::Stretched {
+        width,
+        sharpen: None,
+    };
+    // The middle of the HUD bar: level, name, gauges and the EXP readout.
+    let band = Rect {
+        x: (width / 2).checked_sub(300)?,
+        y: NATIVE_HEIGHT - 40,
+        w: 500,
+        h: 32,
+    };
+    let native = to_native(frame, scaling, &[band]);
+    let (sx, sy) = scaling.scale(frame.width, frame.height);
+    let inner = Rect {
+        x: band.x + 2,
+        y: band.y + 2,
+        w: band.w - 4,
+        h: band.h - 4,
+    };
+    let client = to_client(inner, scaling, frame.width, frame.height);
+    let px = |x: i64, y: i64, c: usize| -> f64 {
+        f64::from(native.rgba[((y as u32 * native.width + x as u32) * 4) as usize + c])
+    };
+    let (mut sum, mut n) = (0.0, 0usize);
+    for cy in client.y + 2..client.y + client.h.saturating_sub(2) {
+        for cx in client.x + 2..client.x + client.w.saturating_sub(2) {
+            let (fx, ax) = source(cx, sx);
+            let (fy, ay) = source(cy, sy);
+            let inside =
+                |v: i64, lo: u32, len: u32| v >= i64::from(lo) && v + 1 < i64::from(lo + len);
+            if !inside(fx, inner.x, inner.w) || !inside(fy, inner.y, inner.h) {
+                continue;
+            }
+            for c in 0..3 {
+                let value = (px(fx, fy, c) * (1.0 - ax) + px(fx + 1, fy, c) * ax) * (1.0 - ay)
+                    + (px(fx, fy + 1, c) * (1.0 - ax) + px(fx + 1, fy + 1, c) * ax) * ay;
+                let i = ((cy * frame.width + cx) * 4) as usize + c;
+                sum += (value - f64::from(frame.rgba[i])).abs();
+                n += 1;
+            }
+        }
+    }
+    (n > 0).then(|| sum / n as f64)
+}
+
+/// Default stretches below this residual; Filter Applied below
+/// [`FILTERED_BELOW`]; Ideal Ratio above. The measured classes sit at <= 0.15,
+/// 1.3 to 3.9 and >= 11.9.
+const DEFAULT_BELOW: f64 = 0.6;
+const FILTERED_BELOW: f64 = 7.0;
+
+/// The UI Size a client frame was drawn with. `None` up to 768 lines, where
+/// every UI Size draws the same pixels and the choice does not matter.
+pub fn detect_mode(frame: &Frame) -> Option<UiMode> {
+    if frame.height <= NATIVE_HEIGHT {
+        return None;
+    }
+    let residual = stretch_residual(frame)?;
+    Some(if residual < DEFAULT_BELOW {
+        UiMode::Default
+    } else if residual < FILTERED_BELOW {
+        UiMode::Filtered
+    } else {
+        UiMode::Ideal
+    })
+}
+
+/// A captured frame as the readers see it.
+pub struct Prepared {
+    /// The 1x picture: the HUD band and the minimap corner recovered, the rest
+    /// black. The client frame itself when the client draws at 1x, and for
+    /// Filter Applied at a size with a measured preset.
+    pub frame: Frame,
+    /// The UI Size the frame was drawn with: detected above 768 lines, else
+    /// the setting. The app takes it through [`mode_for`]; the regression
+    /// reads it directly.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub mode: UiMode,
+}
+
+/// The last prepared picture's size and UI Size, so the profile chosen for a
+/// prepared frame follows the detected UI Size rather than the setting.
+static LAST: Mutex<Option<(u32, u32, UiMode)>> = Mutex::new(None);
+
+/// The UI Size the last prepared frame was read with, whatever its size.
+pub fn last_mode() -> Option<UiMode> {
+    let last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    last.map(|(_, _, mode)| mode)
+}
+
+/// The UI Size detected for the last prepared picture of this size.
+pub fn mode_for(width: u32, height: u32) -> Option<UiMode> {
+    let last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    last.and_then(|(w, h, mode)| (w == width && h == height).then_some(mode))
+}
+
+/// The 1x picture behind a captured client frame, the one every reader and
+/// profile works in: one HUD geometry and one glyph size for every resolution
+/// and UI Size.
+pub fn prepare(frame: Frame, setting: UiMode) -> Prepared {
+    prepare_with(frame, setting, false)
+}
+
+/// [`prepare`], recovering the whole picture rather than the HUD band and the
+/// minimap corner: what the calibration window shows.
+pub fn prepare_whole(frame: Frame, setting: UiMode) -> Prepared {
+    prepare_with(frame, setting, true)
+}
+
+fn prepare_with(frame: Frame, setting: UiMode, whole: bool) -> Prepared {
+    let mode = detect_mode(&frame).unwrap_or(setting);
+    let scaling = Scaling::for_client(frame.width, frame.height, mode);
+    let frame = match scaling {
+        Scaling::Native => frame,
+        // Filter Applied comes back close, not exact. Where a measured preset
+        // ships for the client size (1920x1080), the client-size reader
+        // (scaled glyph variants, OCR fusion) reads the corpus better than the
+        // 1x readers read the recovered picture, so that size stays on the
+        // client frame. Elsewhere the client-size reader has no glyph variants
+        // for the stretch and the recovered picture reads better.
+        Scaling::Stretched {
+            sharpen: Some(_), ..
+        } if crate::preset::ships(frame.width, frame.height, mode) => frame,
+        Scaling::Blocks(_) => {
+            let (w, h) = scaling.native_size(frame.width, frame.height);
+            to_native(&frame, scaling, &[Rect { x: 0, y: 0, w, h }])
+        }
+        Scaling::Stretched { .. } if whole => {
+            let (w, h) = scaling.native_size(frame.width, frame.height);
+            to_native(&frame, scaling, &[Rect { x: 0, y: 0, w, h }])
+        }
+        Scaling::Stretched { .. } => {
+            let (w, h) = scaling.native_size(frame.width, frame.height);
+            let hud = Rect {
+                x: 0,
+                y: h.saturating_sub(HUD_ROWS),
+                w,
+                h: HUD_ROWS.min(h),
+            };
+            let minimap = Rect {
+                x: 0,
+                y: 0,
+                w: MINIMAP_CORNER.0.min(w),
+                h: MINIMAP_CORNER.1.min(h),
+            };
+            to_native(&frame, scaling, &[hud, minimap])
+        }
+    };
+    let mut last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *last = Some((frame.width, frame.height, mode));
+    Prepared { frame, mode }
+}
+
+/// The 1x rows at the bottom that hold the HUD bar, with room above it.
+const HUD_ROWS: u32 = 64;
+/// The 1x corner the minimap is drawn in, at its largest.
+const MINIMAP_CORNER: (u32, u32) = (460, 360);
+
 /// Map a 1x rectangle to the client pixels it covers.
 pub fn to_client(rect: Rect, scaling: Scaling, width: u32, height: u32) -> Rect {
     let (sx, sy) = scaling.scale(width, height);
@@ -347,6 +533,7 @@ pub fn to_client(rect: Rect, scaling: Scaling, width: u32, height: u32) -> Rect 
 }
 
 /// Map a client rectangle to the 1x pixels it covers.
+#[cfg(test)]
 pub fn from_client(rect: Rect, scaling: Scaling, width: u32, height: u32) -> Rect {
     let (sx, sy) = scaling.scale(width, height);
     let x0 = (f64::from(rect.x) / sx).floor() as u32;
@@ -554,6 +741,20 @@ mod tests {
             }
         }
         best
+    }
+
+    #[test]
+    fn the_ui_size_is_detected_from_the_frame() {
+        let mut checked = 0;
+        for case in corpus::load_cases() {
+            if case.client_h <= NATIVE_HEIGHT {
+                continue;
+            }
+            let frame = corpus::compose_frame(&case);
+            assert_eq!(detect_mode(&frame), Some(case.mode()), "{}", case.key);
+            checked += 1;
+        }
+        assert!(checked >= 20, "only {checked} cases above 768 lines");
     }
 
     #[test]

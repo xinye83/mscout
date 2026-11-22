@@ -84,10 +84,19 @@ game are out of scope (§12).
 - One frame per second. Capture continues while the game is unfocused or
   covered. Minimised, closed or capture-denied windows are reported states
   (§5), not silent gaps.
-- Read boxes are physical pixels relative to the game's client area, kept per
-  **client size × UI Size** in a profile. The profile matching the live window
-  is used; a resolution change switches profiles. A pair with no usable
-  profile reports that instead of reading.
+- **Every frame is read as the game's 1x picture** (`native.rs`). Up to 768
+  lines the client draws at 1x in every UI Size. Above that, Default Ratio
+  stretches a 768-line picture bilinearly (undone by least squares, exactly),
+  Ideal Ratio draws whole-pixel blocks (1x to 1200 lines, 2x at 1440), and
+  Filter Applied sharpens the stretch (undone closely, not exactly; at sizes
+  with a measured preset it is read on the client frame instead).
+- **The UI Size is detected from the frame** above 768 lines: how well the
+  Default stretch explains the HUD band separates the three. The setting only
+  applies up to 768 lines, where every UI Size draws the same pixels.
+- Read boxes are pixels of that picture, kept per **picture size × UI Size** in
+  a profile; a resolution change switches profiles. A size with no shipped
+  preset gets the 1366×768 boxes moved with the HUD bar, which sits centred on
+  the bottom edge at every size.
 - The EXP box is required; level, name/job and the map label are optional.
   Without a level box the level is reported unrecognised, never derived.
 - Digit atlases are read from the player's installed client; nothing from the
@@ -247,13 +256,15 @@ engine, the UI and the mock-data script. Totals: 103,322,764 EXP to reach 90,
 What the current version does, not a task list. Work that addresses one is an
 item in [ROADMAP.md](ROADMAP.md).
 
-- **Support matrix:** 1366×768 and 1920×1080, all three UI sizes. 1920×1200 has
-  no preset or fixture and needs manual calibration.
-- **UI Size is selected manually.** A wrong mode selects the wrong profile and
-  boxes, so it reads nothing or misreads.
-- **Profiles are physical-pixel and UI-scale specific.** A transient client size
-  can create an empty profile (e.g. `1920x1081@ideal`); move it aside if the app
-  selects it.
+- **Support matrix:** every corpus size reads: 1366×768, 1920×1080, 1920×1200
+  and 2560×1440 in all three UI Sizes. Other sizes use derived boxes and the
+  Ideal block size `height / 720`, which is measured only at 1080, 1200 and
+  1440 lines.
+- **Filter Applied is approximate above 768 lines.** Its sharpen is not fully
+  linear and its alignment drifts with the size, so the recovered picture is
+  close, not exact; at 1920×1200 the name/job are not read.
+- **Profiles are per picture size.** A transient client size can create an
+  empty profile (e.g. `1920x1081@ideal`); move it aside if the app selects it.
 - **The EXP box is sized for the current digit count.** A much longer EXP number
   can clip it until it is redrawn.
 - **Filtered atlas gaps.** A live `8` can read as `6`/`9` (a 20-EXP error that

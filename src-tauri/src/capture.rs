@@ -648,7 +648,7 @@ mod tests {
         let meta = serde_json::json!({
             "capturedAt": chrono::Local::now().to_rfc3339(),
             "client": {"w": frame.width, "h": frame.height},
-            "uiMode": crate::settings::ui_mode().id(),
+            "uiMode": profile.ui_mode.id(),
             "profile": profile.key(),
             "panel": panel.and_then(|region| serde_json::to_value(region).ok()),
             "label": label.and_then(|region| serde_json::to_value(region).ok()),
