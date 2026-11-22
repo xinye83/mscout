@@ -20,9 +20,10 @@ traps of this machine setup, the commands and the tests.
 
 ## Calibrating
 
-Calibration is a one-time pass per client size and UI Size. Presets ship for
-1366×768 and 1920×1080 in all three UI sizes; the full flow, preset support and
-troubleshooting are in
+Most setups need no calibration. MScout reads the game's own 1x picture, so the
+1366×768 boxes fit any resolution, and above 768 lines it detects the UI Size
+from the game. Calibration remains for correcting a box; the full flow, preset
+support and troubleshooting are in
 [docs/SETUP.md §3](docs/SETUP.md#calibrate) and
 [docs/PRESETS.md](docs/PRESETS.md). The overlay reports when a pair needs
 calibration; it never opens the calibration window by itself.

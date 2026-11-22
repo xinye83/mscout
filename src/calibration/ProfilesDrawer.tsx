@@ -65,13 +65,15 @@ export default function ProfilesDrawer({
       <div className="drawer-head">
         <strong>Profiles</strong>
         <span className="muted small">
-          Boxes, digits and labels are kept per game client size and UI size. The
-          engine activates the pair matching the live window.
+          Boxes, digits and labels are kept per picture size and UI size, and
+          the engine uses the pair matching the live window. Above 768 lines the
+          UI size is detected from the game, so the choice below only applies at
+          768 lines and below, where every UI size looks the same.
         </span>
       </div>
 
       <div className="cal-row ui-mode-choices">
-        <span className="muted small">UI size</span>
+        <span className="muted small">UI size (768 lines and below)</span>
         {uiModes.map((option) => (
           <button
             key={option.id}

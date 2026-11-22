@@ -86,9 +86,9 @@ Attach the game window, then:
 1. Open calibration: tray → *Calibrate boxes…*, the **Calibrate** button in the
    picker, or the overlay's **calibrate** button when the current pair has no
    profile. The overlay reports the reason; it never opens the window by itself.
-2. **Freeze frame**, then draw boxes only when needed. Shipped presets fill the
-   EXP, level, name and job boxes for their supported client sizes/UI Size; other
-   pairs need one pass. Draw the EXP box with a few pixels of slack on the right
+2. **Freeze frame**, then draw boxes only when needed. The preview is the
+   game's 1x picture (the stretch undone), and the EXP, level, name and job
+   boxes are filled for every size from the 1366×768 preset. Draw the EXP box with a few pixels of slack on the right
    so a longer number cannot clip `]`.
 3. **Locate your MSCW folder** in the *Game assets* row. MScout reads the
    client's digit atlas and seeds EXP/level, and matches map/street against the
@@ -101,8 +101,9 @@ Attach the game window, then:
    crops, no full screenshot) under `data/diagnostics/` for bug reports.
 
 Moving the game window is harmless: boxes are relative to the client area, and
-minimap detection follows the panel. Calibration is stored per client size and
-UI Size in `data/profiles/<W>x<H>[@mode].json`. Digits are per rendered font
+minimap detection follows the panel. Calibration is stored per 1x picture size
+and UI Size in `data/profiles/<W>x<H>[@mode].json` (1920×1080 Default reads a
+1366×768 picture, so it uses `1366x768.json`). Digits are per rendered font
 size, so EXP, level tiles and HP/MP numbers can have separate variants. Current
 preset support and the Default/Filtered status are in [PRESETS.md](PRESETS.md).
 
@@ -143,7 +144,7 @@ Equivalent for **portable** use: copy the release exe plus its `data/` folder an
 | `npm` not recognised | Node not on `PATH` — see the `fnm env` line above |
 | `link.exe not found` | Visual Studio Build Tools / C++ workload missing |
 | Blank window | WebView2 runtime missing |
-| Overlay shows `not calibrated for WxH` | that client size/UI Size has no profile yet — run calibration |
+| Overlay shows `not calibrated for WxH` | the picture is too small for the HUD, or its profile's EXP box was cleared — run calibration |
 | Overlay shows a wrong map | a name missing from the client table is shown from OCR; teach a correction if the literal line is misread |
 | Overlay shows `unknown` map | the label line could not be read, or an ambiguous table match was rejected — teach a correction |
 | Build fails with `EBUSY` on a DLL | a previous instance is still running; quit it from the tray first |
@@ -156,6 +157,6 @@ Equivalent for **portable** use: copy the release exe plus its `data/` folder an
 The helper never touches the game process: no memory reading, no injection, no input. It reads pixels via the OS compositor. That imposes two rules on the game:
 
 - Run **windowed or borderless**. Exclusive fullscreen cannot be captured or overlaid.
-- Run at a **client size and UI Size you have calibrated**. Changing either switches profiles; a pair never calibrated needs one calibration pass. Presets ship for 1366×768 and 1920×1080 in all three UI sizes; 1920×1200 falls back to calibration.
+- **Any client size and UI Size reads.** Changing either switches profiles; a new pair starts from boxes derived from the 1366×768 preset. Above 768 lines the UI Size is detected; the setting only applies at 768 lines and below. Filter Applied above 1080 lines is approximate (SPEC §13).
 
 See [SPEC.md §1](SPEC.md) for the full constraint list and the reasoning behind it.

@@ -15,6 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   drawn.
 - **The UI Size is detected from the frame** above 768 lines; the setting only
   matters at 768 lines and below, where every UI Size looks the same.
+  Calibration's UI size choice and the docs now say so.
 
 ### Fixed
 - **The overlay stays on the game's monitor.** It sits just outside the game's
