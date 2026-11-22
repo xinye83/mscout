@@ -4,9 +4,6 @@ import * as api from "./api";
 import { listen } from "@tauri-apps/api/event";
 import type {
   Calibration,
-  FieldProvenance,
-  GlyphGuess,
-  LabelCrop,
   LearningInfo,
   MscwStatus,
   Probe,
@@ -17,398 +14,25 @@ import type {
   TargetStatus,
   UiModeOption,
 } from "./types";
-
-/// The four things MScout reads. EXP is the only one it cannot work without —
-/// everything the engine needs is an EXP box plus EXP glyphs (`engine.rs` gates on
-/// `is_calibrated()` then `has_glyphs()`); the rest are refinements.
-type Readout = "exp" | "level" | "map" | "identity";
-
-const READOUTS: { key: Readout; title: string }[] = [
-  { key: "exp", title: "EXP" },
-  { key: "level", title: "Level" },
-  { key: "map", title: "Street / Map" },
-  { key: "identity", title: "Name / Job" },
-];
-
-const READOUT_TITLE: Record<Readout, string> = {
-  exp: "EXP",
-  level: "Level",
-  map: "Street / Map",
-  identity: "Name / Job",
-};
-
-/// The label on the box while it is being drawn.
-const DRAW_LABEL: Record<Readout, string> = {
-  exp: "EXP",
-  level: "LV",
-  map: "MAP",
-  identity: "NAME / JOB",
-};
-
-/// A box the reader can actually use (matches `Region::is_usable` on the backend).
-function usable(region: Region | null): region is Region {
-  return region !== null && region.w > 1 && region.h > 1;
-}
-
-/// Plain-English names for the reader stages the backend reports. An id this build
-/// does not know is shown as it arrived, so a newer backend still displays.
-const SOURCE_LABEL: Record<string, string> = {
-  atlas: "digit atlas",
-  font: "Arial text",
-  fingerprint: "taught fingerprint",
-  ocr: "OCR text",
-  table: "stored table",
-  dtw: "DTW match",
-  literal: "OCR text, no table match",
-  glyphs: "minimap letter atlas",
-  hidden: "minimap collapsed",
-  none: "not read",
-  unknown: "not recognised",
-};
-
-/// "digit atlas · game": the stage that read the field, then where its data came
-/// from (`game`, `taught`, a font seed).
-function sourceText(entry: FieldProvenance): string {
-  const stage = SOURCE_LABEL[entry.source] ?? entry.source;
-  return entry.engine ? `${stage} · ${entry.engine}` : stage;
-}
-
-function hexBytes(hex: string): Uint8Array {
-  const out = new Uint8Array(Math.floor(hex.length / 2));
-  for (let index = 0; index < out.length; index += 1) {
-    out[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
-  }
-  return out;
-}
-
-// Paint a grey crop at 1:1; the browser magnifies it with pixelated CSS.
-function paintReview(
-  canvas: HTMLCanvasElement | null,
-  frame: { w: number; h: number; px: string },
-) {
-  if (!canvas) return;
-  const context = canvas.getContext("2d");
-  if (!context) return;
-
-  const bytes = hexBytes(frame.px);
-  canvas.width = frame.w;
-  canvas.height = frame.h;
-
-  const image = context.createImageData(frame.w, frame.h);
-  for (let index = 0; index < bytes.length; index += 1) {
-    image.data[index * 4] = bytes[index];
-    image.data[index * 4 + 1] = bytes[index];
-    image.data[index * 4 + 2] = bytes[index];
-    image.data[index * 4 + 3] = 255;
-  }
-  context.putImageData(image, 0, 0);
-}
-
-type Preview = {
-  width: number;
-  height: number;
-  serial: number;
-};
-
-function normalize(a: { x: number; y: number }, b: { x: number; y: number }): Region {
-  return {
-    x: Math.min(a.x, b.x),
-    y: Math.min(a.y, b.y),
-    w: Math.abs(a.x - b.x),
-    h: Math.abs(a.y - b.y),
-  };
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function withRegion(
-  current: Calibration,
-  key: "exp" | "level",
-  region: Region | null,
-): Calibration {
-  if (key === "exp") return { ...current, exp: region };
-  return { ...current, level: region };
-}
-
-function Box({
-  region,
-  preview,
-  className,
-  label,
-  labelTop,
-}: {
-  region: Region;
-  preview: Preview;
-  className: string;
-  label: string;
-  labelTop?: number;
-}) {
-  return (
-    <div
-      className={`roi ${className}`}
-      style={{
-        left: `${(region.x / preview.width) * 100}%`,
-        top: `${(region.y / preview.height) * 100}%`,
-        width: `${(region.w / preview.width) * 100}%`,
-        height: `${(region.h / preview.height) * 100}%`,
-      }}
-    >
-      <span style={labelTop === undefined ? undefined : { top: `${labelTop}px` }}>
-        {label}
-      </span>
-    </div>
-  );
-}
-
-const GLYPH_LABELS = "0123456789,.[]%".split("");
-
-/// Punctuation that is hard to tell apart at button size, so the picker can name it.
-/// A comma and a full stop differ by two pixels; a wrong choice here is a glyph
-/// learned under the wrong character, which then misreads every frame.
-const GLYPH_NAME: Record<string, string> = {
-  ",": "comma",
-  ".": "dot",
-  "[": "open",
-  "]": "close",
-  "%": "percent",
-};
-
-/// A drawn box's label is 12px/600 text with 4px of horizontal padding (see
-/// `.roi span`), and its height is the fixed CSS line-height. Those two numbers are
-/// enough to keep labels clear of the boxes and of each other.
-const LABEL_HEIGHT = 16;
-
-type LabelBox = { key: string; region: Region; text: string };
-
-let labelMeasurer: CanvasRenderingContext2D | null | undefined;
-
-function labelWidth(text: string): number {
-  if (labelMeasurer === undefined) {
-    labelMeasurer = document.createElement("canvas").getContext("2d");
-  }
-  if (!labelMeasurer) {
-    return text.length * 7 + 8;
-  }
-  labelMeasurer.font = "600 12px 'Segoe UI', system-ui, sans-serif";
-  return labelMeasurer.measureText(text).width + 8;
-}
-
-/// Each label's offset from its box's top edge. A label starts in the row above its
-/// box; one that would land on a box or on another label is pushed up a row until it
-/// is clear, so no label covers a box and no two labels overlap.
-function labelOffsets(boxes: LabelBox[], scale: number): Record<string, number> {
-  const placed = boxes.map((box) => ({
-    x: box.region.x * scale,
-    y: box.region.y * scale,
-    w: box.region.w * scale,
-    h: box.region.h * scale,
-  }));
-  const offsets: Record<string, number> = {};
-  for (const box of [...boxes].sort((a, b) => a.region.x - b.region.x)) {
-    const x = box.region.x * scale;
-    const boxTop = box.region.y * scale;
-    const w = labelWidth(box.text);
-    let top = boxTop - LABEL_HEIGHT - 1;
-    for (let guard = 0; guard < 8; guard += 1) {
-      const hit = placed.some(
-        (p) =>
-          x < p.x + p.w - 1 &&
-          x + w - 1 > p.x &&
-          top < p.y + p.h - 1 &&
-          top + LABEL_HEIGHT - 1 > p.y,
-      );
-      if (!hit) break;
-      top -= LABEL_HEIGHT;
-    }
-    placed.push({ x, y: top, w, h: LABEL_HEIGHT });
-    offsets[box.key] = top - boxTop;
-  }
-  return offsets;
-}
-
-/// The box's own pixels, magnified, so a readout can show what its box covers.
-function CropPreview({
-  kind,
-  serial,
-  caption,
-}: {
-  kind: "exp" | "level" | "name" | "job" | "street" | "map";
-  serial: number;
-  caption?: (crop: LabelCrop) => string;
-}) {
-  const [crop, setCrop] = useState<LabelCrop | null>(null);
-
-  useEffect(() => {
-    if (!serial) {
-      setCrop(null);
-      return;
-    }
-    api.boxCrop({ serial, kind })
-      .then(setCrop)
-      .catch(() => setCrop(null));
-  }, [kind, serial]);
-
-  if (!crop) return null;
-  return (
-    <div className="label-preview">
-      <canvas className="label-crop" ref={(element) => paintReview(element, crop)} />
-      {caption && <span className="muted small">{caption(crop)}</span>}
-    </div>
-  );
-}
-
-/** A magnified crop of one segmented shape, so it can be identified by eye. */
-function GlyphCrop({
-  source,
-  serial,
-  guess,
-}: {
-  source: HTMLCanvasElement | null;
-  serial: number;
-  guess: GlyphGuess;
-}) {
-  const ref = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = ref.current;
-    if (!canvas || !source) return;
-    const scale = Math.max(2, Math.ceil(44 / Math.max(guess.w, guess.h)));
-    canvas.width = guess.w * scale;
-    canvas.height = guess.h * scale;
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.imageSmoothingEnabled = false;
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(
-      source,
-      guess.x,
-      guess.y,
-      guess.w,
-      guess.h,
-      0,
-      0,
-      canvas.width,
-      canvas.height,
-    );
-  }, [source, serial, guess]);
-
-  return <canvas ref={ref} className="glyph-crop" />;
-}
-
-/// The shapes in one readout's box that the reader could not identify, plus the
-/// character picker. Each readout owns its glyph set, so the list reads from and
-/// labels back into the set selected by `kind` — a shape from the level box must
-/// be judged by the level glyphs, not the EXP ones.
-function ShapeList({
-  kind,
-  serial,
-  source,
-  clientW,
-  clientH,
-  reload,
-  onLabeled,
-  onError,
-}: {
-  kind: "exp" | "level";
-  serial: number;
-  source: HTMLCanvasElement | null;
-  clientW: number;
-  clientH: number;
-  reload: number;
-  onLabeled: (info: LearningInfo, note: string) => void;
-  onError: (cause: unknown) => void;
-}) {
-  const [glyphs, setGlyphs] = useState<GlyphGuess[]>([]);
-  const [selected, setSelected] = useState<number | null>(null);
-
-  const refresh = useCallback(() => {
-    if (!serial) {
-      setGlyphs([]);
-      return;
-    }
-    api.boxGlyphs({ serial, kind })
-      .then(setGlyphs)
-      .catch(() => setGlyphs([]));
-  }, [kind, serial]);
-
-  useEffect(() => {
-    setSelected(null);
-    refresh();
-  }, [refresh, reload]);
-
-  const labelShape = async (guess: GlyphGuess, character: string) => {
-    try {
-      const info = await api.labelGlyph({
-        clientW,
-        clientH,
-        kind,
-        ch: character,
-        bitmap: guess.bitmap,
-        w: guess.w,
-        h: guess.h,
-      });
-      setSelected(null);
-      refresh();
-      onLabeled(info, `Labeled a ${guess.w}×${guess.h} shape as ${character}`);
-    } catch (cause) {
-      onError(cause);
-    }
-  };
-
-  const where = kind === "level" ? "level box" : "EXP box";
-  const unknowns = glyphs.filter((guess) => !guess.known);
-  const chosen = selected !== null ? unknowns[selected] : undefined;
-
-  if (unknowns.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="readout-body-shapes">
-      <p className="muted small">
-        These shapes in the {where} aren't recognised yet. Click one, then pick the
-        character it shows.
-      </p>
-      <div className="glyph-list">
-        {unknowns.map((guess, index) => (
-          <button
-            key={`${guess.x}-${guess.y}-${guess.w}x${guess.h}-${index}`}
-            className={`glyph-item ${selected === index ? "on" : ""}`}
-            onClick={() => setSelected(index)}
-          >
-            <GlyphCrop source={source} serial={serial} guess={guess} />
-            <span>{guess.ch === "?" ? "?" : guess.ch}</span>
-          </button>
-        ))}
-      </div>
-      {chosen && (
-        <div className="cal-row">
-          {GLYPH_LABELS.map((character) => (
-            <button
-              key={character}
-              className="ghost"
-              title={GLYPH_NAME[character] ?? character}
-              style={{ display: "grid", justifyItems: "center", lineHeight: 1.1 }}
-              onClick={() => void labelShape(chosen, character)}
-            >
-              <span style={{ fontSize: "1.5em", fontFamily: "monospace" }}>
-                {character}
-              </span>
-              {/* `,` and `.` differ by a couple of pixels, so name them. */}
-              {GLYPH_NAME[character] && (
-                <span style={{ fontSize: "0.7em", opacity: 0.7 }}>
-                  {GLYPH_NAME[character]}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+import {
+  DRAW_LABEL,
+  READOUTS,
+  READOUT_TITLE,
+  clamp,
+  labelOffsets,
+  normalize,
+  sourceText,
+  usable,
+  withRegion,
+} from "./calibration/model";
+import type { LabelBox, Preview, Readout } from "./calibration/model";
+import { readoutStatus } from "./calibration/status";
+import ProfilesDrawer from "./calibration/ProfilesDrawer";
+import {
+  Box,
+  CropPreview,
+  ShapeList,
+} from "./calibration/widgets";
 
 export default function Calibration() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -461,10 +85,7 @@ export default function Calibration() {
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [activeProfile, setActiveProfile] = useState<ProfileSummary | null>(null);
   const [uiModes, setUiModes] = useState<UiModeOption[]>([]);
-  const [sizeChoice, setSizeChoice] = useState<string | null>(null);
   const [client, setClient] = useState<{ w: number; h: number } | null>(null);
-  const [confirmKey, setConfirmKey] = useState<string | null>(null);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
   // Bumping this makes both shape lists re-read their glyphs after the atlas
   // changes underneath them (a preset reset, or learning digits by text).
   const [shapeReload, setShapeReload] = useState(0);
@@ -1066,244 +687,56 @@ export default function Calibration() {
   const clearProfile = async (profile: ProfileSummary) => {
     setError(null);
     setMessage(null);
-    setBusyKey(profile.key);
     try {
       await api.deleteProfile({
         clientW: profile.clientW,
         clientH: profile.clientH,
         uiMode: profile.uiMode,
       });
-      setConfirmKey(null);
       setMessage(`Removed profile ${profile.key}`);
       refreshProfiles();
+      return true;
     } catch (cause) {
       setError(String(cause));
-    } finally {
-      setBusyKey(null);
+      return false;
     }
   };
 
-  const coverage = learning?.coverage ?? "";
-  const levelCoverage = learning?.levelCoverage ?? "";
-  const missing = "0123456789"
-    .split("")
-    .filter((digit) => !coverage.includes(digit));
 
-  const expUsable = usable(regions.exp);
-  const levelUsable = usable(regions.level);
-  const streetUsable = usable(regions.street);
-  const nameUsable = usable(regions.name);
-  const jobUsable = usable(regions.job);
-  const identityUsable = nameUsable || jobUsable;
-
-  // A preset only supplies starting geometry; it is not something the player
-  // calibrated. Draw a box only when the box differs from the shipped preset.
-  const sameRegion = (a: Region | null, b: Region | null) =>
-    !!a &&
-    !!b &&
-    a.x === b.x &&
-    a.y === b.y &&
-    a.w === b.w &&
-    a.h === b.h;
-  const isPresetBox = (key: "exp" | "level" | "name" | "job") =>
-    sameRegion(regions[key], presetCal?.[key] ?? null);
-  const showBox = (key: "exp" | "level" | "name" | "job") =>
-    usable(regions[key]) && !isPresetBox(key);
-  const showIdentityBox = showBox("name") || showBox("job");
-  const canClear = (key: Readout) => {
-    if (key === "map") return false;
-    if (key === "identity") {
-      return identityUsable && (!isPresetBox("name") || !isPresetBox("job"));
-    }
-    return showBox(key);
-  };
-
-  const mapNames = mscw?.mapNames ?? 0;
-  const taughtMaps = learning?.maps.length ?? 0;
-  const mapAuto = mapNames > 0;
-  const identityAuto =
-    learning?.identitySource === "font" && !!learning.identityLetters;
-  const identityTaught = !!learning?.name && !!learning?.job;
-
-  const sourceLabel =
-    learning?.source === "game"
-      ? "auto"
-      : learning?.source === "taught"
-        ? "taught"
-        : learning?.learned
-          ? "learned"
-          : "";
-  const levelSourceLabel =
-    learning?.levelSource === "game"
-      ? "auto"
-      : learning?.levelSource === "taught"
-        ? "taught"
-        : learning?.levelLearned
-          ? "learned"
-          : "";
-  const identitySourceLabel = identityAuto
-    ? "auto · Arial"
-    : learning?.identitySource === "taught"
-      ? "taught"
-      : learning?.identityLetters
-        ? "learned"
-        : "";
-  const mapStatus = mapAuto
-    ? `auto · ${mapNames} names${taughtMaps ? ` · ${taughtMaps} taught` : ""}`
-    : taughtMaps
-      ? `taught · ${taughtMaps} maps`
-      : "no map table";
-  const mapNote = mapAuto
-    ? `Street and map are detected and matched from the client's map table (${mapNames} names). Use Correct manually only to fix a missing or misread map.`
-    : taughtMaps
-      ? "Using the taught map fingerprints; no client map table is loaded. Use Correct manually to add maps."
-      : "No client map table found — locate the MSCW folder, or use Correct manually to teach street/map here.";
-  const identityNote =
-    !nameUsable || !jobUsable
-      ? identityAuto || identityTaught
-        ? "Name/job data is ready; draw one box around both lines (job over name) to read them."
-        : "Draw one box around both lines (job over name), then freeze; or use Correct manually to teach them here."
-      : identityAuto
-        ? `Name and job are read automatically from Arial (${learning?.identitySize}). Use Correct manually only to fix a misread.`
-        : identityTaught
-          ? "Name and job are using the taught fingerprints. Use Correct manually only to fix a misread."
-          : "No automatic name/job set yet — use Correct manually to teach them here.";
-
-  const identityBoxes = (nameUsable ? 1 : 0) + (jobUsable ? 1 : 0);
-  const digitStatus = (hasBox: boolean, covered: number, source: string) =>
-    !hasBox
-      ? "no box"
-      : `${source ? `${source} · ` : ""}${covered}/10 digits`;
-  const statusFor: Record<Readout, string> = {
-    exp: digitStatus(expUsable, coverage.length, sourceLabel),
-    level: digitStatus(levelUsable, levelCoverage.length, levelSourceLabel),
-    map: mapStatus,
-    identity:
-      identityBoxes === 0
-        ? "no box"
-        : identityBoxes === 1
-          ? "1 of 2 boxes"
-          : identitySourceLabel || "no glyphs",
-  };
-
-  // The automatic source is the default; manual teaching is a correction.
-  const autoReady: Record<Readout, boolean> = {
-    exp: coverage.length === 10,
-    level: levelCoverage.length === 10,
-    map: mapAuto || taughtMaps > 0,
-    identity: identityAuto || identityTaught,
-  };
-  const showManual = (key: Readout) => manual[key] ?? !autoReady[key];
+  const {
+    expUsable,
+    streetUsable,
+    nameUsable,
+    jobUsable,
+    showBox,
+    showIdentityBox,
+    canClear,
+    mapNote,
+    identityNote,
+    statusFor,
+    showManual,
+    done,
+    showBody,
+    expNote,
+    levelNote,
+    statusText,
+    statusTone,
+    readValue,
+    provenanceFor,
+  } = readoutStatus({
+    learning,
+    mscw,
+    regions,
+    presetCal,
+    manual,
+    expanded,
+    probe,
+    probeProvenance,
+  });
   const toggleManual = (key: Readout) =>
     setManual((current) => ({ ...current, [key]: !showManual(key) }));
 
-  // A readout folds once it is ready from either the automatic source or taught
-  // data. The map no longer needs a drawn box: detection + the client table is
-  // enough; identity folds once Arial is seeded and both boxes exist.
-  const done: Record<Readout, boolean> = {
-    exp: expUsable && missing.length === 0,
-    level: levelUsable && levelCoverage.length === 10,
-    map: mapAuto || taughtMaps > 0,
-    identity: nameUsable && jobUsable && (identityAuto || identityTaught),
-  };
-  const showBody = (key: Readout) => expanded[key] ?? !done[key];
-
-  const ready = expUsable && missing.length === 0;
-  const seeded = learning?.source === "game";
-  const allAuto =
-    seeded &&
-    ready &&
-    levelUsable &&
-    levelSourceLabel === "auto" &&
-    identityAuto &&
-    nameUsable &&
-    jobUsable &&
-    mapAuto;
-  const expNote =
-    coverage.length === 10
-      ? sourceLabel === "auto"
-        ? "EXP digits are loaded from the client atlas. Correct manually only if the value is wrong."
-        : "EXP digits are learned for this box. Correct manually only if the value is wrong."
-      : "No complete automatic set yet. Type exactly what the box shows, punctuation included.";
-  const levelNote =
-    levelCoverage.length === 10
-      ? levelSourceLabel === "auto"
-        ? "Level digits are loaded from the client atlas. Correct manually only if the value is wrong."
-        : "Level digits are learned for this box. Correct manually only if the value is wrong."
-      : "No complete automatic level set yet. Draw the level box, then type just the digits — no \"LV.\"";
-  const statusText = !expUsable
-    ? "EXP box needed — MScout cannot read without it"
-    : !ready && !seeded && mscw?.atlasFound
-      ? "Asset found — freeze a frame or press Load digits to seed the atlas"
-      : !ready && !seeded
-        ? "No digits yet — locate the MSCW folder or learn the digits"
-        : missing.length > 0
-          ? `Reading · EXP digits missing ${missing.join(" ")}`
-          : ready
-            ? allAuto
-              ? "Ready to read · digits, name/job and map/street auto"
-              : "Ready to read"
-            : "Reading";
-  const statusTone = ready ? "ok" : "warn";
-
-  const readValue = (key: Readout): string | null => {
-    switch (key) {
-      case "exp":
-        return probe?.expText || null;
-      case "level":
-        return probe && probe.lv > 0 ? `Lv ${probe.lv}` : null;
-      case "map":
-        if (probe?.mapHidden) return "minimap collapsed";
-        return probe?.map && probe.map !== "unknown"
-          ? probe.map.replace(/\n/g, " / ")
-          : null;
-      case "identity":
-        return probe?.name || probe?.job
-          ? `${probe?.name ?? "—"} / ${probe?.job ?? "—"}`
-          : null;
-      default:
-        return null;
-    }
-  };
-
-  /// Where this field's value came from. The probe carries the provenance beside
-  /// the readings so a rejected frame has one too; absent from an older backend,
-  /// which is why the readout falls back to the bare value.
-  const provenanceFor = (key: Readout): FieldProvenance | null => {
-    const provenance = probe?.provenance ?? probeProvenance;
-    if (!provenance) return null;
-    switch (key) {
-      case "exp":
-        return provenance.exp;
-      case "level":
-        return provenance.level;
-      case "map":
-        return provenance.map;
-      case "identity":
-        return provenance.identity;
-      default:
-        return null;
-    }
-  };
-
-  const liveMode = uiModes.find((option) => option.active)?.id ?? "default";
   const liveModeLabel = uiModes.find((option) => option.active)?.label ?? "—";
-  const liveSize = client ? `${client.w}x${client.h}` : null;
-  const sizeOptions = Array.from(
-    new Set([
-      ...(liveSize ? [liveSize] : []),
-      ...profiles.map((profile) => `${profile.clientW}x${profile.clientH}`),
-    ]),
-  ).sort();
-  const chosenSize = sizeChoice ?? liveSize ?? sizeOptions[0] ?? null;
-  const shownProfiles = profiles.filter(
-    (profile) => `${profile.clientW}x${profile.clientH}` === chosenSize,
-  );
-  const sameSet = (profile: ProfileSummary) =>
-    client !== null &&
-    profile.clientW === client.w &&
-    profile.clientH === client.h &&
-    profile.uiMode === liveMode;
 
   // The drawn identity box is stored as its two lines; show it back as one box.
   const identityBox =
@@ -1743,113 +1176,16 @@ export default function Calibration() {
       </div>
 
       {drawer === "profiles" && (
-        <section className="cal-drawer">
-          <div className="drawer-head">
-            <strong>Profiles</strong>
-            <span className="muted small">
-              Boxes, digits and labels are kept per game client size and UI size. The
-              engine activates the pair matching the live window.
-            </span>
-          </div>
-
-          <div className="cal-row ui-mode-choices">
-            <span className="muted small">UI size</span>
-            {uiModes.map((option) => (
-              <button
-                key={option.id}
-                className={`ghost ${option.active ? "on" : ""}`}
-                onClick={() => void chooseUiMode(option)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="cal-row ui-mode-choices">
-            <span className="muted small">Show size</span>
-            {sizeOptions.map((size) => (
-              <button
-                key={size}
-                className={`ghost ${size === chosenSize ? "on" : ""}`}
-                onClick={() => setSizeChoice(size)}
-              >
-                {size.replace("x", "×")}
-                {size === liveSize ? " (live)" : ""}
-              </button>
-            ))}
-          </div>
-
-          <div className="profile-list">
-            {shownProfiles.length === 0 && (
-              <span className="muted small">
-                No profile for{" "}
-                {chosenSize ? chosenSize.replace("x", "×") : "this client size"} yet —
-                freeze a frame to create one.
-              </span>
-            )}
-            {shownProfiles.map((profile) => (
-              <div
-                key={profile.key}
-                className={`profile-row ${
-                  activeProfile?.key === profile.key ? "on" : ""
-                }`}
-              >
-                <div className="profile-meta">
-                  <strong>{profile.key}</strong>
-                  <span className="muted small">
-                    {uiModes.find((option) => option.id === profile.uiMode)?.label ??
-                      profile.uiMode}
-                    {" · "}
-                    {profile.calibrated ? "can read" : "needs EXP box"}
-                    {` · ${profile.glyphs} digits · ${profile.maps} maps`}
-                    {profile.source
-                      ? ` · ${profile.source} ${profile.glyphSize}`
-                      : ""}
-                    {profile.name ? ` · ${profile.name}` : ""}
-                    {profile.job ? ` · ${profile.job}` : ""}
-                  </span>
-                </div>
-                <div className="profile-tags">
-                  {sameSet(profile) && <span className="tag current">live</span>}
-                  {activeProfile?.key === profile.key && (
-                    <span className="tag active">active</span>
-                  )}
-                </div>
-                {confirmKey === profile.key ? (
-                  <span className="profile-actions">
-                    <button
-                      className="ghost danger"
-                      disabled={busyKey === profile.key}
-                      onClick={() => void clearProfile(profile)}
-                    >
-                      {busyKey === profile.key ? "removing…" : "delete"}
-                    </button>
-                    <button className="ghost" onClick={() => setConfirmKey(null)}>
-                      cancel
-                    </button>
-                  </span>
-                ) : (
-                  <button
-                    className="ghost"
-                    onClick={() => setConfirmKey(profile.key)}
-                  >
-                    clear
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-
-          <div className="cal-row">
-            <button
-              className="ghost"
-              onClick={() => void resetPreset()}
-              disabled={!preview}
-            >
-              Reset to preset
-            </button>
-          </div>
-        </section>
+        <ProfilesDrawer
+          profiles={profiles}
+          activeProfile={activeProfile}
+          uiModes={uiModes}
+          client={client}
+          canReset={!!preview}
+          onChooseUiMode={(option) => void chooseUiMode(option)}
+          onClear={clearProfile}
+          onResetPreset={() => void resetPreset()}
+        />
       )}
 
       <footer className="cal-foot">
