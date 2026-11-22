@@ -6,12 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-22
+
 ### Fixed
-- The calibration window no longer freezes while it opens. Every command it
+- **Filter Applied EXP no longer stalls on a near tie.** At 1920×1080 Default
+  (Filter Applied) a live `3` scored 0.2 from an `8` once the matcher allowed a
+  one-pixel shift, so every frame was refused and nothing was recorded. When
+  two digits are that close, the one at least two pixels closer *without* a
+  shift now wins; otherwise the read is still refused. Only refused shapes can
+  change, so reads that already worked are unaffected.
+- **A name/job box drawn in Calibration keeps its full width.** Splitting the
+  box into the two lines cut each line to the text on screen at the time, so a
+  box drawn while "Eurovein" was shown read "Euroblood" as "Eurobloc".
+- **The calibration window no longer freezes while it opens.** Every command it
   calls runs off the main thread, and the client's map table is parsed once per
-  `String_000.wz` instead of on every status check and label lookup. Commands
-  that take longer than 100 ms are logged to `debug.log` with their thread, so
-  a slow open can be measured.
+  `String_000.wz` instead of on every status check and label lookup (the in-game
+  label reader used to re-parse it too). Commands that take 100 ms or more are
+  logged to `debug.log` with their thread.
+- Profile saves that fail (a newly seeded or widened profile, the legacy
+  migration's cleanup) and map/street letter learning that fails are logged
+  instead of ignored.
 
 ### Removed
 - The "MScout — not reading" desktop notification. A lost capture (including
@@ -25,7 +39,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   (focused crops with JSON sidecars) and `profiles/upgrade/`. Unverified truth
   fails the gate; the hold-out is recorded once, by its flag.
 - `corpus::import_diagnostic` turns a saved diagnostic into focused crops,
-  marked unverified until checked.
+  marked unverified until checked. Eurovein's 1920×1080 Ideal name, job, EXP
+  and level crops are the first; the dotted-`i` name test reads them.
+- `Calibration.tsx` is split into `src/calibration/` (helpers, widgets, the
+  Profiles drawer and `readoutStatus()`, a pure status model with front-end
+  tests). The calibration crop and digit-teaching paths are tested on the
+  corpus frames.
+- Docs: the roadmap lists only open work; SPEC.md keeps only the behaviour
+  rules (constraints, integrity, rate math, states, known limitations);
+  environment setup lives in SETUP.md only.
 
 ## [0.8.0] - 2026-11-21
 
@@ -480,7 +502,8 @@ First release. Read-only: it observes the screen and never interacts with the ga
 - **Docs.** Setup guide, behavioral spec, roadmap, decision log, data formats, dev notes.
 - **Tests.** Rust unit tests for the EXP table, glyph segmentation and matching, thresholding, settings/profile round-trips and window enumeration, plus `#[ignore]`d diagnostics for live capture.
 
-[Unreleased]: https://github.com/xinye83/mscout/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/xinye83/mscout/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/xinye83/mscout/releases/tag/v0.9.0
 [0.8.0]: https://github.com/xinye83/mscout/releases/tag/v0.8.0
 [0.7.0]: https://github.com/xinye83/mscout/releases/tag/v0.7.0
 [0.6.0]: https://github.com/xinye83/mscout/releases/tag/v0.6.0
