@@ -344,7 +344,7 @@ pub(crate) struct Case {
     ui_mode: String,
     pub(crate) minimap_state: String,
     minimap_file: String,
-    minimap_crop: Rect,
+    pub(crate) minimap_crop: Rect,
     hud_file: String,
     hud_crop: Rect,
     pub(crate) settings_crop: Rect,

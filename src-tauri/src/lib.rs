@@ -22,6 +22,7 @@ mod jobs;
 mod map_match;
 mod map_names;
 mod model;
+mod native;
 mod notify;
 mod ocr;
 mod preset;
