@@ -357,7 +357,11 @@ pub fn teach_map(serial: u64, name: String) -> Result<LearningInfo, String> {
     // Learn the map-name line (the bottom one) into the label letter atlas.
     if let Some(line) = ocr::map_label_lines(&frame).and_then(|lines| lines.last().cloned()) {
         let mut map_atlas = Atlas::from_settings(&profile::read_atlas(|p| &p.map_atlas));
-        let _ = map_atlas.learn_text(&name, &line);
+        // Best effort: the fingerprint above is what the reader uses; the letters
+        // only help a later label nobody has taught.
+        if let Err(error) = map_atlas.learn_text(&name, &line) {
+            log(&format!("teach: letters of {name:?} not learned: {error}"));
+        }
         profile::write(|p| p.map_atlas = map_atlas.to_settings())?;
         log(&format!(
             "teach_map: learned letters {:?}",
@@ -401,7 +405,13 @@ pub fn teach_street(serial: u64, street: String) -> Result<LearningInfo, String>
     // Learn the street line (the top one) into the label letter atlas.
     if let Some(line) = ocr::map_label_lines(&frame).and_then(|lines| lines.first().cloned()) {
         let mut map_atlas = Atlas::from_settings(&profile::read_atlas(|p| &p.map_atlas));
-        let _ = map_atlas.learn_text(&street, &line);
+        // Best effort: the fingerprint above is what the reader uses; the letters
+        // only help a later label nobody has taught.
+        if let Err(error) = map_atlas.learn_text(&street, &line) {
+            log(&format!(
+                "teach: letters of {street:?} not learned: {error}"
+            ));
+        }
         profile::write(|p| p.map_atlas = map_atlas.to_settings())?;
     }
 

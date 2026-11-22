@@ -247,6 +247,15 @@ pub fn active_key() -> Option<String> {
 
 /// Make the profile for this client size and UI Size active, creating an empty
 /// one when the pair has never been seen. Returns the profile now active.
+/// Save a profile the app is about to use anyway. The profile stays active in
+/// memory, so a failed save does not stop reading, but it must not be silent:
+/// the next start would come back without it.
+fn save_or_log(profile: &Profile) {
+    if let Err(error) = save(profile) {
+        crate::calibration::log(&format!("profile {} not saved: {error}", profile.key()));
+    }
+}
+
 pub fn activate(client_w: u32, client_h: u32) -> Result<Profile, String> {
     let ui_mode = settings::ui_mode();
     let key = format!("{client_w}x{client_h}{}", ui_mode.suffix());
@@ -264,7 +273,7 @@ pub fn activate(client_w: u32, client_h: u32) -> Result<Profile, String> {
                     "widened the name/job boxes of profile {} to fit longer text",
                     profile.key()
                 ));
-                let _ = save(&profile);
+                save_or_log(&profile);
             }
             profile
         }
@@ -273,7 +282,7 @@ pub fn activate(client_w: u32, client_h: u32) -> Result<Profile, String> {
         // editable profile. Deleting it just restores this starting point.
         None => match crate::preset::for_size(client_w, client_h, ui_mode) {
             Some(profile) => {
-                let _ = save(&profile);
+                save_or_log(&profile);
                 profile
             }
             None => Profile::new_for_mode(client_w, client_h, ui_mode),
@@ -431,11 +440,18 @@ pub fn migrate_legacy() -> Option<String> {
         return None;
     }
 
-    let _ = settings::update(|object| {
+    let cleared = settings::update(|object| {
         for key in ["calibration", "atlas", "maps", "identities"] {
             object.remove(key);
         }
     });
+    if let Err(error) = cleared {
+        // The profile is saved; the legacy copy left in settings.json is only
+        // read again by this migration, which finds the profile and stops.
+        crate::calibration::log(&format!(
+            "migrated profile saved, settings not cleaned: {error}"
+        ));
+    }
 
     Some(profile.key())
 }
