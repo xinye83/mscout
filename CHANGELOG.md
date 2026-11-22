@@ -17,6 +17,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   matters at 768 lines and below, where every UI Size looks the same.
 
 ### Fixed
+- **The overlay stays on the game's monitor.** It sits just outside the game's
+  top-right corner; when the game fills its monitor that spot is on the next
+  display, so the overlay now moves inside the corner instead.
 - **A name at Default Ratio 1920×1080 reads right.** "Eurovein" read as
   "Eurovejn" with no job; reading the 1x picture fixes it.
 

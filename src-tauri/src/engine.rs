@@ -514,13 +514,33 @@ fn anchor_overlay<R: Runtime>(
         return;
     }
 
-    // Overlay top-left sits at the game client's top-right corner.
-    let anchor = (screen.x + screen.w, screen.y);
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let overlay = window
+        .outer_size()
+        .map(|size| (size.width as i32, size.height as i32))
+        .unwrap_or((0, 0));
+    // The monitor the game is on, found from the client's centre.
+    let monitor = window
+        .monitor_from_point(
+            f64::from(screen.x + screen.w / 2),
+            f64::from(screen.y + screen.h / 2),
+        )
+        .ok()
+        .flatten()
+        .map(|monitor| window_target::Rect {
+            x: monitor.position().x,
+            y: monitor.position().y,
+            w: monitor.size().width as i32,
+            h: monitor.size().height as i32,
+        });
+    let anchor = overlay_anchor(screen, overlay, monitor);
     if engine.anchored == Some(anchor) {
         return;
     }
 
-    if let Some(window) = app.get_webview_window("main") {
+    {
         if window
             .set_position(tauri::PhysicalPosition::new(anchor.0, anchor.1))
             .is_ok()
@@ -528,6 +548,26 @@ fn anchor_overlay<R: Runtime>(
             engine.anchored = Some(anchor);
         }
     }
+}
+
+/// Where the overlay's top-left goes: just outside the game client's top-right
+/// corner, or inside that corner when the outside spot would put the overlay
+/// past the edge of the game's monitor (a game filling its monitor would
+/// otherwise push the overlay onto the next display).
+fn overlay_anchor(
+    client: window_target::Rect,
+    overlay: (i32, i32),
+    monitor: Option<window_target::Rect>,
+) -> (i32, i32) {
+    let outside = (client.x + client.w, client.y);
+    let Some(monitor) = monitor else {
+        return outside;
+    };
+    if outside.0 + overlay.0 <= monitor.x + monitor.w {
+        return outside;
+    }
+    let x = (client.x + client.w - overlay.0).max(monitor.x);
+    (x, client.y.max(monitor.y))
 }
 
 pub fn start<R: Runtime>(app: AppHandle<R>) {
@@ -1611,6 +1651,38 @@ pub fn get_profile() -> Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> window_target::Rect {
+        window_target::Rect { x, y, w, h }
+    }
+
+    #[test]
+    fn the_overlay_sits_outside_the_game_when_the_monitor_has_room() {
+        let monitor = Some(rect(0, 0, 2560, 1440));
+        let client = rect(171, 111, 1920, 1080);
+        assert_eq!(overlay_anchor(client, (300, 400), monitor), (2091, 111));
+    }
+
+    #[test]
+    fn the_overlay_moves_inside_a_game_that_fills_its_monitor() {
+        let monitor = Some(rect(0, 0, 2560, 1440));
+        let client = rect(0, 0, 2560, 1440);
+        assert_eq!(overlay_anchor(client, (300, 400), monitor), (2260, 0));
+        // On a second monitor to the left of the primary one.
+        let left = Some(rect(-1920, 0, 1920, 1080));
+        assert_eq!(
+            overlay_anchor(rect(-1920, 0, 1920, 1080), (300, 400), left),
+            (-300, 0)
+        );
+    }
+
+    #[test]
+    fn without_a_monitor_the_overlay_stays_outside() {
+        assert_eq!(
+            overlay_anchor(rect(0, 0, 800, 600), (300, 400), None),
+            (800, 0)
+        );
+    }
 
     fn blank_frame() -> Frame {
         Frame {
