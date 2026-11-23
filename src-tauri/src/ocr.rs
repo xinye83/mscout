@@ -209,8 +209,12 @@ const TEXT_FLOOR: u8 = 170;
 pub const TEXT_FLOOR_PUB: u8 = TEXT_FLOOR;
 
 /// Grey levels between a shape's most common value and its brightest that still
-/// make it solid ink rather than ink on a pale tile.
-const SOLID_SPREAD: usize = 4;
+/// make it solid ink rather than ink on a pale tile. A picture recovered from
+/// the client's stretch is within a level or two of the drawn one, and one
+/// recovered from Filter Applied's sharpened stretch within about 20 (a name's
+/// 239 ink comes back as 220 to 255); a real pale tile, such as the orange
+/// level tile under its white digit, sits far further below its ink.
+const SOLID_SPREAD: usize = 32;
 
 /// Reduce a shape to its own native ink and a CELL_W x CELL_H cell.
 ///
@@ -286,10 +290,8 @@ fn normalize(
         // pale tile under it, the shape is solid ink. A thin stroke such as the
         // `i` in a name (a 1 px bar with a one-pixel gap under its dot) is 8 of 9
         // pixels ink; the own-floor threshold would call none of it ink and
-        // leave an empty shape, which then matches any 1 px glyph exactly. A few
-        // levels of spread still count as solid: a picture recovered from a
-        // stretch (`native`) is within a grey level or two of the drawn one,
-        // while a real pale tile sits far below its ink.
+        // leave an empty shape, which then matches any 1 px glyph exactly. Some
+        // spread still counts as solid ([`SOLID_SPREAD`]).
         if peak <= floor + SOLID_SPREAD {
             saturated = false;
         }
