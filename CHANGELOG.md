@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-22
+
 ### Added
 - **Any resolution reads without calibration.** MScout now reads the game's own
   1x picture: above 768 lines it undoes the client's stretch (Default Ratio,
@@ -533,7 +535,8 @@ First release. Read-only: it observes the screen and never interacts with the ga
 - **Docs.** Setup guide, behavioral spec, roadmap, decision log, data formats, dev notes.
 - **Tests.** Rust unit tests for the EXP table, glyph segmentation and matching, thresholding, settings/profile round-trips and window enumeration, plus `#[ignore]`d diagnostics for live capture.
 
-[Unreleased]: https://github.com/xinye83/mscout/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/xinye83/mscout/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/xinye83/mscout/releases/tag/v0.10.0
 [0.9.0]: https://github.com/xinye83/mscout/releases/tag/v0.9.0
 [0.8.0]: https://github.com/xinye83/mscout/releases/tag/v0.8.0
 [0.7.0]: https://github.com/xinye83/mscout/releases/tag/v0.7.0
