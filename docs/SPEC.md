@@ -88,8 +88,10 @@ game are out of scope (§12).
   lines the client draws at 1x in every UI Size. Above that, Default Ratio
   stretches a 768-line picture bilinearly (undone by least squares, exactly),
   Ideal Ratio draws whole-pixel blocks (1x to 1200 lines, 2x at 1440), and
-  Filter Applied sharpens the stretch (undone closely, not exactly; at sizes
-  with a measured preset it is read on the client frame instead).
+  Filter Applied sharpens a stretch whose geometry differs from Default's
+  (1230 wide at 1920×1200, not 1228). Its width and sub-pixel shift are fitted
+  once per client size against the HUD text, and the sharpen undone; the text
+  comes back close enough to read exactly.
 - **The UI Size is detected from the frame** above 768 lines: how well the
   Default stretch explains the HUD band separates the three. The setting only
   applies up to 768 lines, where every UI Size draws the same pixels.
@@ -260,9 +262,6 @@ item in [ROADMAP.md](ROADMAP.md).
   and 2560×1440 in all three UI Sizes. Other sizes use derived boxes and the
   Ideal block size `height / 720`, which is measured only at 1080, 1200 and
   1440 lines.
-- **Filter Applied is approximate above 768 lines.** Its sharpen is not fully
-  linear and its alignment drifts with the size, so the recovered picture is
-  close, not exact; at 1920×1200 the name/job are not read.
 - **Profiles are per picture size.** A client size is used once it has held for
   two seconds; a profile made earlier for a transient size (e.g.
   `1920x1081@ideal`) can still be selected and should be moved aside.

@@ -35,8 +35,14 @@ pub enum Scaling {
     /// Every 1x pixel is a `k`x`k` block (Ideal Ratio on tall clients).
     Blocks(u32),
     /// A `width`x768 picture stretched bilinearly to the client; `sharpen` is
-    /// the cross-sharpen weight Filter Applied adds after the stretch.
-    Stretched { width: u32, sharpen: Option<f32> },
+    /// the cross-sharpen weight Filter Applied adds after the stretch, and
+    /// `shift` how far (in 1x pixels) its horizontal sampling sits from the
+    /// Default stretch's.
+    Stretched {
+        width: u32,
+        sharpen: Option<f32>,
+        shift: f64,
+    },
 }
 
 /// The width of the 768-line picture Default Ratio stretches to fill
@@ -68,11 +74,14 @@ impl Scaling {
             UiMode::Default => Scaling::Stretched {
                 width: picture_width(width, height),
                 sharpen: None,
+                shift: 0.0,
             },
-            // Fitted weights: 0.13 at 1080 and 1200 lines, 0.16 at 1440.
+            // The geometry a Filter Applied frame is fitted from
+            // ([`fit_filtered`]); this is its starting point.
             UiMode::Filtered => Scaling::Stretched {
                 width: picture_width(width, height),
-                sharpen: Some(if height >= 1400 { 0.16 } else { 0.13 }),
+                sharpen: Some(FILTER_SHARPEN),
+                shift: 0.0,
             },
         }
     }
@@ -136,9 +145,9 @@ pub fn to_native(frame: &Frame, scaling: Scaling, regions: &[Rect]) -> Frame {
         match scaling {
             Scaling::Native => unreachable!(),
             Scaling::Blocks(k) => copy_blocks(frame, &mut out, region, k),
-            Scaling::Stretched { sharpen, .. } => {
+            Scaling::Stretched { sharpen, shift, .. } => {
                 let (sx, sy) = scaling.scale(frame.width, frame.height);
-                unstretch(frame, &mut out, region, sx, sy, sharpen);
+                unstretch(frame, &mut out, region, (sx, shift), sy, sharpen);
             }
         }
     }
@@ -165,8 +174,8 @@ const MARGIN: u32 = 3;
 
 /// Where client pixel `c` samples the 1x picture: the 1x index left of it and
 /// the weight of the one right of it.
-fn source(c: u32, scale: f64) -> (i64, f64) {
-    let u = (f64::from(c) + 0.5) / scale - 0.5;
+fn source(c: u32, scale: f64, shift: f64) -> (i64, f64) {
+    let u = (f64::from(c) + 0.5) / scale - 0.5 + shift;
     let f = u.floor();
     (f as i64, u - f)
 }
@@ -194,12 +203,12 @@ struct Axis {
 }
 
 impl Axis {
-    fn new(n0: i64, n1: i64, c0: u32, c1: u32, scale: f64, limit: i64) -> Axis {
+    fn new(n0: i64, n1: i64, c0: u32, c1: u32, (scale, shift): (f64, f64), limit: i64) -> Axis {
         let n = (n1 - n0) as usize;
         let mut samples = Vec::new();
         let (mut lower, mut diag, mut upper) = (vec![0.0; n], vec![1e-6; n], vec![0.0; n]);
         for c in c0..c1 {
-            let (f, fr) = source(c, scale);
+            let (f, fr) = source(c, scale, shift);
             let left = f.clamp(0, limit - 1);
             let right = (f + 1).clamp(0, limit - 1);
             if left < n0 || right >= n1 {
@@ -253,7 +262,14 @@ impl Axis {
     }
 }
 
-fn unstretch(frame: &Frame, out: &mut Frame, region: Rect, sx: f64, sy: f64, sharpen: Option<f32>) {
+fn unstretch(
+    frame: &Frame,
+    out: &mut Frame,
+    region: Rect,
+    (sx, shift): (f64, f64),
+    sy: f64,
+    sharpen: Option<f32>,
+) {
     let (limit_x, limit_y) = (i64::from(out.width), i64::from(out.height));
     let (nx0, ny0) = (
         (i64::from(region.x) - i64::from(MARGIN)).max(0),
@@ -282,8 +298,8 @@ fn unstretch(frame: &Frame, out: &mut Frame, region: Rect, sx: f64, sy: f64, sha
         return;
     }
     let (cw, ch) = ((cx1 - cx0) as usize, (cy1 - cy0) as usize);
-    let xs = Axis::new(nx0, nx1, cx0, cx1, sx, limit_x);
-    let ys = Axis::new(ny0, ny1, cy0, cy1, sy, limit_y);
+    let xs = Axis::new(nx0, nx1, cx0, cx1, (sx, shift), limit_x);
+    let ys = Axis::new(ny0, ny1, cy0, cy1, (sy, 0.0), limit_y);
     for channel in 0..3 {
         let mut plane = vec![0.0f64; cw * ch];
         for y in 0..ch {
@@ -352,24 +368,20 @@ fn unsharpen(plane: &[f64], w: usize, h: usize, weight: f64) -> Vec<f64> {
     x
 }
 
-/// How far, on average, a client frame's HUD band is from the Default stretch
-/// of its own least-squares 1x picture. A frame the client did stretch comes
-/// back almost exactly (about 0.1); Filter Applied's sharpen leaves 1.3 to 4;
-/// Ideal Ratio's crisp 1x pixels are not a stretch of anything and leave 12 or
-/// more (measured on every `testdata/frames` scene above 768 lines).
-fn stretch_residual(frame: &Frame) -> Option<f64> {
-    let width = picture_width(frame.width, frame.height);
-    let scaling = Scaling::Stretched {
+/// How far, on average, a client frame's HUD band is from `scaling` applied to
+/// the frame's own least-squares 1x picture under that scaling. When the
+/// scaling is the one the client drew with, the frame comes back almost
+/// exactly; a wrong width, shift or UI Size leaves a clear residual.
+fn model_residual(frame: &Frame, scaling: Scaling, band: Band) -> Option<f64> {
+    let Scaling::Stretched {
         width,
-        sharpen: None,
+        sharpen,
+        shift,
+    } = scaling
+    else {
+        return None;
     };
-    // The middle of the HUD bar: level, name, gauges and the EXP readout.
-    let band = Rect {
-        x: (width / 2).checked_sub(300)?,
-        y: NATIVE_HEIGHT - 40,
-        w: 500,
-        h: 32,
-    };
+    let band = band.rect(width)?;
     let native = to_native(frame, scaling, &[band]);
     let (sx, sy) = scaling.scale(frame.width, frame.height);
     let inner = Rect {
@@ -379,29 +391,165 @@ fn stretch_residual(frame: &Frame) -> Option<f64> {
         h: band.h - 4,
     };
     let client = to_client(inner, scaling, frame.width, frame.height);
+    let (x0, y0) = (client.x + 2, client.y + 2);
+    let (w, h) = (
+        client.w.saturating_sub(4) as usize,
+        client.h.saturating_sub(4) as usize,
+    );
     let px = |x: i64, y: i64, c: usize| -> f64 {
         f64::from(native.rgba[((y as u32 * native.width + x as u32) * 4) as usize + c])
     };
+    let inside = |v: i64, lo: u32, len: u32| v >= i64::from(lo) && v + 1 < i64::from(lo + len);
     let (mut sum, mut n) = (0.0, 0usize);
-    for cy in client.y + 2..client.y + client.h.saturating_sub(2) {
-        for cx in client.x + 2..client.x + client.w.saturating_sub(2) {
-            let (fx, ax) = source(cx, sx);
-            let (fy, ay) = source(cy, sy);
-            let inside =
-                |v: i64, lo: u32, len: u32| v >= i64::from(lo) && v + 1 < i64::from(lo + len);
-            if !inside(fx, inner.x, inner.w) || !inside(fy, inner.y, inner.h) {
-                continue;
+    for c in 0..3 {
+        // The stretch of the recovered picture over the patch; `None` where it
+        // samples outside the solved band.
+        let mut patch: Vec<Option<f64>> = vec![None; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let (fx, ax) = source(x0 + x as u32, sx, shift);
+                let (fy, ay) = source(y0 + y as u32, sy, 0.0);
+                if !inside(fx, inner.x, inner.w) || !inside(fy, inner.y, inner.h) {
+                    continue;
+                }
+                patch[y * w + x] = Some(
+                    (px(fx, fy, c) * (1.0 - ax) + px(fx + 1, fy, c) * ax) * (1.0 - ay)
+                        + (px(fx, fy + 1, c) * (1.0 - ax) + px(fx + 1, fy + 1, c) * ax) * ay,
+                );
             }
-            for c in 0..3 {
-                let value = (px(fx, fy, c) * (1.0 - ax) + px(fx + 1, fy, c) * ax) * (1.0 - ay)
-                    + (px(fx, fy + 1, c) * (1.0 - ax) + px(fx + 1, fy + 1, c) * ax) * ay;
-                let i = ((cy * frame.width + cx) * 4) as usize + c;
+        }
+        for y in 1..h.saturating_sub(1) {
+            for x in 1..w.saturating_sub(1) {
+                let Some(centre) = patch[y * w + x] else {
+                    continue;
+                };
+                let value = match sharpen {
+                    None => centre,
+                    Some(weight) => {
+                        let weight = f64::from(weight);
+                        let around = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)];
+                        let Some(cross) = around
+                            .iter()
+                            .map(|&(i, j)| patch[j * w + i])
+                            .sum::<Option<f64>>()
+                        else {
+                            continue;
+                        };
+                        (centre - weight * cross) / (1.0 - 4.0 * weight)
+                    }
+                };
+                let i = (((y0 + y as u32) * frame.width + x0 + x as u32) * 4) as usize + c;
                 sum += (value - f64::from(frame.rgba[i])).abs();
                 n += 1;
             }
         }
     }
     (n > 0).then(|| sum / n as f64)
+}
+
+/// The part of the HUD bar a residual is measured over, in 1x pixels from the
+/// bar's centre.
+#[derive(Clone, Copy)]
+enum Band {
+    /// Level, name, gauges and the EXP readout: what the UI Size thresholds
+    /// were measured on.
+    Detect,
+    /// The level tile and the name and job lines: thin 1-bit strokes, which
+    /// a half-pixel error in the fitted shift smears across two pixels. The
+    /// gauges' gradients barely notice that error.
+    Text,
+}
+
+impl Band {
+    fn rect(self, width: u32) -> Option<Rect> {
+        Some(match self {
+            Band::Detect => Rect {
+                x: (width / 2).checked_sub(300)?,
+                y: NATIVE_HEIGHT - 40,
+                w: 500,
+                h: 32,
+            },
+            Band::Text => Rect {
+                x: (width / 2).checked_sub(380)?,
+                y: NATIVE_HEIGHT - 40,
+                w: 250,
+                h: 38,
+            },
+        })
+    }
+}
+
+/// [`model_residual`] for the Default stretch: about 0.1 for a frame the
+/// client stretched, 1.3 to 4 for Filter Applied's sharpened stretch, 12 or
+/// more for Ideal Ratio's crisp 1x pixels, which are not a stretch of anything
+/// (measured on every `testdata/frames` scene above 768 lines).
+fn stretch_residual(frame: &Frame) -> Option<f64> {
+    model_residual(
+        frame,
+        Scaling::Stretched {
+            width: picture_width(frame.width, frame.height),
+            sharpen: None,
+            shift: 0.0,
+        },
+        Band::Detect,
+    )
+}
+
+/// The cross-sharpen weight used to undo Filter Applied. The filter is not
+/// fully linear; across 0.03 to 0.1 the recovered text differs by a pixel or
+/// two, while the geometry decides whether it is readable at all.
+const FILTER_SHARPEN: f32 = 0.1;
+
+/// The geometry a Filter Applied frame was drawn with. The client does not
+/// stretch its sharpened picture quite like the Default one: at 1920x1200 the
+/// picture is 1230 wide, not 1228 (the level, name and EXP readout each fit
+/// 1230 on their own). Try the widths and shifts near the Default stretch's
+/// and keep the one whose recovered picture explains the HUD text best; with
+/// it the text comes back within a few pixels of the 1x picture.
+pub fn fit_filtered(frame: &Frame) -> Scaling {
+    let base = picture_width(frame.width, frame.height);
+    let mut best = (
+        f64::MAX,
+        Scaling::Stretched {
+            width: base,
+            sharpen: Some(FILTER_SHARPEN),
+            shift: 0.0,
+        },
+    );
+    for width in base - 2..=base + 2 {
+        for step in -4..=4 {
+            let shift = f64::from(step) * 0.125;
+            let scaling = Scaling::Stretched {
+                width,
+                sharpen: Some(FILTER_SHARPEN),
+                shift,
+            };
+            if let Some(residual) = model_residual(frame, scaling, Band::Text) {
+                if residual < best.0 {
+                    best = (residual, scaling);
+                }
+            }
+        }
+    }
+    best.1
+}
+
+/// The fitted Filter Applied geometry per client size: it belongs to the
+/// client's scaler, not to a frame, so one fit serves until the size changes.
+static FITTED: Mutex<Option<(u32, u32, Scaling)>> = Mutex::new(None);
+
+fn filtered_scaling(frame: &Frame) -> Scaling {
+    let mut fitted = FITTED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((w, h, scaling)) = *fitted {
+        if (w, h) == (frame.width, frame.height) {
+            return scaling;
+        }
+    }
+    let scaling = fit_filtered(frame);
+    *fitted = Some((frame.width, frame.height, scaling));
+    scaling
 }
 
 /// Default stretches below this residual; Filter Applied below
@@ -429,8 +577,7 @@ pub fn detect_mode(frame: &Frame) -> Option<UiMode> {
 /// A captured frame as the readers see it.
 pub struct Prepared {
     /// The 1x picture: the HUD band and the minimap corner recovered, the rest
-    /// black. The client frame itself when the client draws at 1x, and for
-    /// Filter Applied at a size with a measured preset.
+    /// black. The client frame itself when the client draws at 1x.
     pub frame: Frame,
     /// The UI Size the frame was drawn with: detected above 768 lines, else
     /// the setting. The app takes it through [`mode_for`]; the regression
@@ -470,18 +617,14 @@ pub fn prepare_whole(frame: Frame, setting: UiMode) -> Prepared {
 
 fn prepare_with(frame: Frame, setting: UiMode, whole: bool) -> Prepared {
     let mode = detect_mode(&frame).unwrap_or(setting);
-    let scaling = Scaling::for_client(frame.width, frame.height, mode);
-    let frame = match scaling {
-        Scaling::Native => frame,
-        // Filter Applied comes back close, not exact. Where a measured preset
-        // ships for the client size (1920x1080), the client-size reader
-        // (scaled glyph variants, OCR fusion) reads the corpus better than the
-        // 1x readers read the recovered picture, so that size stays on the
-        // client frame. Elsewhere the client-size reader has no glyph variants
-        // for the stretch and the recovered picture reads better.
+    let scaling = match Scaling::for_client(frame.width, frame.height, mode) {
         Scaling::Stretched {
             sharpen: Some(_), ..
-        } if crate::preset::ships(frame.width, frame.height, mode) => frame,
+        } => filtered_scaling(&frame),
+        scaling => scaling,
+    };
+    let frame = match scaling {
+        Scaling::Native => frame,
         Scaling::Blocks(_) => {
             let (w, h) = scaling.native_size(frame.width, frame.height);
             to_native(&frame, scaling, &[Rect { x: 0, y: 0, w, h }])
@@ -504,12 +647,37 @@ fn prepare_with(frame: Frame, setting: UiMode, whole: bool) -> Prepared {
                 w: MINIMAP_CORNER.0.min(w),
                 h: MINIMAP_CORNER.1.min(h),
             };
-            to_native(&frame, scaling, &[hud, minimap])
+            let mut out = to_native(&frame, scaling, &[hud]);
+            let corner = to_native(&frame, corner_scaling(scaling), &[minimap]);
+            copy_rect(&corner, &mut out, minimap);
+            out
         }
     };
     let mut last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     *last = Some((frame.width, frame.height, mode));
     Prepared { frame, mode }
+}
+
+/// The scaling the minimap corner is recovered with: a fitted Filter Applied
+/// shift explains the HUD band, not the bright minimap bar, which reads better
+/// sampled like the Default stretch (no shift) at the fitted width.
+fn corner_scaling(scaling: Scaling) -> Scaling {
+    match scaling {
+        Scaling::Stretched { width, sharpen, .. } => Scaling::Stretched {
+            width,
+            sharpen,
+            shift: 0.0,
+        },
+        other => other,
+    }
+}
+
+fn copy_rect(from: &Frame, to: &mut Frame, rect: Rect) {
+    for y in rect.y..(rect.y + rect.h).min(to.height) {
+        let start = ((y * to.width + rect.x) * 4) as usize;
+        let end = ((y * to.width + (rect.x + rect.w).min(to.width)) * 4) as usize;
+        to.rgba[start..end].copy_from_slice(&from.rgba[start..end]);
+    }
 }
 
 /// The 1x rows at the bottom that hold the HUD bar, with room above it.
@@ -618,8 +786,8 @@ mod tests {
             .collect();
         let (sx, sy) = (f64::from(cw) / f64::from(nw), f64::from(ch) / f64::from(nh));
         let sample = |x: u32, y: u32| -> f64 {
-            let (fx, ax) = source(x, sx);
-            let (fy, ay) = source(y, sy);
+            let (fx, ax) = source(x, sx, 0.0);
+            let (fy, ay) = source(y, sy, 0.0);
             let p = |i: i64, j: i64| {
                 native[(j.clamp(0, nh as i64 - 1) * nw as i64 + i.clamp(0, nw as i64 - 1)) as usize]
             };
@@ -647,6 +815,7 @@ mod tests {
         let scaling = Scaling::Stretched {
             width: nw,
             sharpen: None,
+            shift: 0.0,
         };
         // `native_size` reports 768 lines for a stretch; this test picture is
         // shorter, so solve through `unstretch` directly.
@@ -655,7 +824,7 @@ mod tests {
             height: nh,
             rgba: vec![0; (nw * nh * 4) as usize],
         };
-        unstretch(&frame, &mut out, region, sx, sy, None);
+        unstretch(&frame, &mut out, region, (sx, 0.0), sy, None);
         let _ = scaling;
         for y in region.y..region.y + region.h {
             for x in region.x..region.x + region.w {
@@ -686,7 +855,10 @@ mod tests {
         let frame = corpus::compose_frame(&case);
         let (w, h) = (frame.width, frame.height);
         let mode = case.mode();
-        let scaling = Scaling::for_client(w, h, mode);
+        let scaling = match mode {
+            UiMode::Filtered => corner_scaling(fit_filtered(&frame)),
+            _ => Scaling::for_client(w, h, mode),
+        };
         let crop = case.minimap_crop;
         let client = Rect {
             x: crop.x as u32,
@@ -772,6 +944,25 @@ mod tests {
                 mean < 0.5 && flips == 0,
                 "{pair}: mean {mean:.2}, {flips} flips"
             );
+        }
+    }
+
+    #[test]
+    fn the_filter_applied_geometry_is_fitted_per_size() {
+        for (pair, width) in [
+            ("1920x1080@filtered", 1366),
+            ("1920x1200@filtered", 1230),
+            ("2560x1440@filtered", 1366),
+        ] {
+            let case = corpus::load_cases()
+                .into_iter()
+                .find(|case| case.pair_key == pair)
+                .expect("a scene");
+            let fitted = fit_filtered(&corpus::compose_frame(&case));
+            let Scaling::Stretched { width: got, .. } = fitted else {
+                panic!("{pair}: {fitted:?}");
+            };
+            assert_eq!(got, width, "{pair}: {fitted:?}");
         }
     }
 

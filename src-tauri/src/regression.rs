@@ -138,18 +138,8 @@ fn attempt_read(case: &Case, mscw: &Path) -> Result<Option<crate::engine::Readin
 /// Cases `reads_every_fixture_from_empty_atlases` is known to misread, by case
 /// key, with what goes wrong. Each one is removed when the reader is fixed; a
 /// listed case that reads its name and job right fails the test until it is.
-const READ_KNOWN_GAPS: &[(&str, &str)] = &[
-    (
-        "1920x1200@filtered/euroblood-lv37-line-1-area-1/expanded",
-        "Filter Applied is recovered closely, not exactly, at 1200 lines: \
-         the name and job are not read",
-    ),
-    (
-        "1920x1200@filtered/eurovein-lv10-ellinia-weapon-store/folded",
-        "Filter Applied is recovered closely, not exactly, at 1200 lines: \
-         no name/job glyphs can be seeded",
-    ),
-];
+/// None are known today.
+const READ_KNOWN_GAPS: &[(&str, &str)] = &[];
 
 /// The full regression: every fixture, read from empty atlases, asserted against
 /// its manifest.

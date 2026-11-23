@@ -33,10 +33,9 @@ label. All six 1920×1080 pair/state combinations pass the client-tier corpus.
 **Every other size derives its boxes.** Frames are read as the game's 1x
 picture (`native.rs`), where the HUD bar sits centred on the bottom edge at
 every size, so the 1366×768 boxes are moved with the bar (`preset::derived`).
-1920×1080 Default reads a 1366×768 picture and uses the 1366×768 boxes, so the
-Default/Filtered row above is used only for Filter Applied, which is read on
-the client frame at that size. 1920×1200 and 2560×1440 read this way in all three UI sizes, except
-the 1920×1200 Filter Applied name/job.
+1920×1080 Default and Filter Applied read a 1366×768 picture and use the
+1366×768 boxes, so the Default/Filtered row above is no longer used.
+1920×1200 and 2560×1440 read this way in all three UI sizes.
 
 The shipped presets are covered by
 `preset::tests::verified_modes_ship_presets_and_the_rest_fall_back` and the
@@ -51,7 +50,8 @@ every pair in the saved-frame corpus is read on the client tier.
 - Presets are looked up in `data/presets/`, then `src-tauri/presets/`, then
   `<exe>/presets/`. See [DATA.md](DATA.md#presets).
 
-## 1920×1200
+## 1920×1200 and 2560×1440
 
-The 1920×1200 pairs have no preset and no fixture; they fall back to manual
-calibration instead of borrowing geometry from another rendering.
+These sizes ship no preset file. Their boxes are derived from 1366×768 on the
+1x picture, and `src-tauri/testdata/frames/` holds two scenes per UI Size for
+each, read exactly on the client tier.

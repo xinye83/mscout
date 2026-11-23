@@ -128,11 +128,6 @@ pub fn for_size(client_w: u32, client_h: u32, ui_mode: UiMode) -> Option<Profile
     derived(client_w, client_h, ui_mode)
 }
 
-/// Whether a measured preset ships for exactly this size and UI Size.
-pub fn ships(client_w: u32, client_h: u32, ui_mode: UiMode) -> bool {
-    shipped(client_w, client_h, ui_mode).is_some()
-}
-
 /// A preset file for exactly this size and UI Size.
 fn shipped(client_w: u32, client_h: u32, ui_mode: UiMode) -> Option<Profile> {
     let name = format!("{client_w}x{client_h}{}.json", ui_mode.suffix());

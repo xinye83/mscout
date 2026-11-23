@@ -10,7 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Any resolution reads without calibration.** MScout now reads the game's own
   1x picture: above 768 lines it undoes the client's stretch (Default Ratio,
   exactly), its whole-pixel blocks (Ideal Ratio) or its sharpened stretch
-  (Filter Applied, closely). One set of boxes, moved with the HUD bar, then
+  (Filter Applied, with its geometry fitted per client size). One set of boxes, moved with the HUD bar, then
   fits every size, so 1920×1200, 2560×1440 and other sizes read with no boxes
   drawn.
 - **The UI Size is detected from the frame** above 768 lines; the setting only

@@ -7,11 +7,6 @@ in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
 
 ## Reading correctness
 
-- [ ] **Filter Applied above 1080 lines.** The 1x picture recovered from Filter
-  Applied is close, not exact (`native.rs`); at 1920×1200 the name/job are not
-  read (`READ_KNOWN_GAPS`). Fit the filter per size (strength,
-  alignment) against static HUD art at run time, or read the recovered picture
-  with a tolerance the exact 1x readers do not have.
 - [ ] **Full Screen at a small size.** MesoVibe reports that Full Screen at
   1280×720 or 800×600 on a larger display stretches a 720- or 600-line
   picture (with black side bars for 4:3 on a wide display). `native.rs`
@@ -90,13 +85,12 @@ in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
 
 Unscheduled, deferred or out of scope for now.
 
-- [ ] **Retire the client-size reader machinery.** Default and Ideal read the
-  exact 1x picture, so the scaled glyph variants (`scale_variants`), live
-  rendering learning (`learn_rendering`), the near-tie settle
-  (`settle_in_place`), the Default/Filtered seeded atlases and the Windows OCR
-  name/job fusion only serve Filter Applied at 1920×1080. Remove them once
-  Filter Applied reads the 1x picture as well ("Filter Applied above 1080
-  lines").
+- [ ] **Retire the client-size reader machinery.** Every UI Size now reads the
+  1x picture, so the scaled glyph variants (`scale_variants`), live rendering
+  learning (`learn_rendering`), the near-tie settle (`settle_in_place`), the
+  Default/Filtered seeded atlases, the 1920×1080 Default/Filtered presets and
+  the Windows OCR name/job fusion no longer serve a live read. Remove them,
+  checking the corpus and the digit sweep still pass.
 - [ ] **Fewer teach flows.** With exact 1x reading the name/job and map teach
   steps in Calibration should rarely be needed; keep them as overrides, and
   drop the ones the corpus shows are never used.

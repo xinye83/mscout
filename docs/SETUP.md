@@ -157,6 +157,6 @@ Equivalent for **portable** use: copy the release exe plus its `data/` folder an
 The helper never touches the game process: no memory reading, no injection, no input. It reads pixels via the OS compositor. That imposes two rules on the game:
 
 - Run **windowed or borderless**. Exclusive fullscreen cannot be captured or overlaid.
-- **Any client size and UI Size reads.** Changing either switches profiles; a new pair starts from boxes derived from the 1366×768 preset. Above 768 lines the UI Size is detected; the setting only applies at 768 lines and below. Filter Applied above 1080 lines is approximate (SPEC §13).
+- **Any client size and UI Size reads.** Changing either switches profiles; a new pair starts from boxes derived from the 1366×768 preset. Above 768 lines the UI Size is detected; the setting only applies at 768 lines and below.
 
 See [SPEC.md §1](SPEC.md) for the full constraint list and the reasoning behind it.
