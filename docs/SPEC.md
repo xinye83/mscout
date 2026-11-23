@@ -166,28 +166,36 @@ hotkey another app holds).
 
 ## 7. Rate math
 
-All rates use **wall-clock time** and **trailing differences** over recorded
-rows; windows are view parameters, so changing one needs no re-recording.
+Rates are EXP per hour from recorded rows; windows are view parameters, so
+changing one needs no re-recording (`src/stats.ts`, `history_index.rs`).
 
-```
-rate_per_hour(t, W) = (exp_cumulative(t) − exp_cumulative(t − W)) / W_hours
-```
-
-- `exp_cumulative` is stitched through level boundaries with the EXP table, so
-  a level-up never looks like a reset to zero.
-- EXP lost at a recorded death is added back: the rate is EXP earned per hour,
-  and the time spent re-earning it stays in the window.
-- Windows: **1 minute** (responsive, jumpy by design), **5 minutes** (the
-  prominent rate and the ETA), **30 minutes** (context).
-- A window's rate is shown only once the session has lived through the whole
-  window; before that it is `—`.
-- **Idle** is samples flowing with EXP unchanged. Because rates are wall-clock,
-  idle visibly drags them down. This is intended; idle is shown, never hidden
-  by splitting the session.
-- **ETA** = `(exp_required(level) − exp_in_level) / rate_5m`, shown as `—` when
-  the 5-minute rate is missing or zero and after 2 minutes without a gain.
-- The overlay computes rates only from rows the history recorded, so overlay
-  and history agree.
+- **Active time** is the time between two gains at most **30 s** apart. A longer
+  wait is a break: it is not active time, and the gain that ends it restarts
+  the clock rather than counting. Gaps of more than 5 s between rows are not
+  recording and never count.
+- **Active rates** (the headline): EXP gained during active time ÷ active time,
+  over the last **1, 5 and 30 minutes** of wall-clock time. A window shows once
+  the run covers it and holds at least a minute of active time; before that it
+  is `—`.
+- **With breaks**: the session's EXP ÷ its whole recorded time. Idle drags this
+  one down, by design; it answers "how much per hour of my evening".
+- Cumulative EXP is stitched through level boundaries with the EXP table, so a
+  level-up never looks like a reset. EXP lost at a recorded death is counted as
+  lost, not as a negative gain.
+- **ETA** = `(exp_required(level) − exp_in_level) / active_rate_5m`, with a
+  range from the session's 20th and 80th percentile minute rates once ten
+  minutes of the session had gains, and a with-breaks ETA from the session's
+  wall-clock rate. No ETA after 2 minutes without a gain.
+- **%/h** is the 5-minute active rate as a share of the current level.
+- **Kills** are estimated from the typical gain (the median of the last
+  5 minutes' gains, when at least 8 gains mostly agree): kills/h and kills to
+  level. Mixed gains (party, quests, several monsters) give no estimate.
+- **Sessions** start at the first gain and end after **10 minutes** without one,
+  or at a character switch. A session carries its wall and active time, EXP
+  gained and lost, levels, deaths, per-map and level shares, and its best
+  active 5- and 60-minute rates.
+- The overlay computes everything from rows the history recorded, and the
+  History window from the index built from the same rows, so both agree.
 
 ---
 
@@ -198,8 +206,13 @@ default**, so every click reaches the game; it becomes clickable while the
 cursor is over it, or by hotkey.
 
 - Collapsed: state dot, map (wrapped, never cut), name and job, level and
-  percentage, an EXP bar, the 5-minute rate and the ETA.
-- Expanded: the 1/5/30-minute rates and a chart of recent EXP.
+  percentage, an EXP bar, the 5-minute active rate and the ETA, plus any of
+  %/h, session, with breaks and kills the player picked.
+- Expanded: the 1/5/30-minute rates, %/h, the ETA with its range, the
+  with-breaks rate and ETA, the running session (length, active time, EXP,
+  levels, deaths and EXP lost), kills, the best 5 minutes, and a graph of the
+  5-minute active rate over the last hour with the session average and markers
+  for deaths, level-ups and map changes.
 - Tabular figures, so changing digits do not shift the layout.
 - Placed outside the game window at its top-right corner; a dragged position
   is remembered until the player resets it.
@@ -216,9 +229,13 @@ source of truth, and the window never edits them (the repair button aside, §6).
 
 - Gaps in the data are drawn as gaps; history never interpolates across
   missing samples.
-- Long ranges may be thinned when read, but deaths and character switches are
-  always kept.
-- Rate lines, markers, zoom and custom ranges are open work in the roadmap.
+- Ranges of 1, 7 and 30 days and all time, read from the history index
+  (DATA.md). One character at a time, picked when the range holds several.
+- A summary (EXP, active rate, with breaks, active and recorded time, sessions,
+  levels, deaths), the cumulative EXP chart, a sessions table, a per-map table
+  by level band ranked by active rate with the best session there, and CSV
+  export of sessions and minutes.
+- Zoom, custom ranges and a rate pane are open work in the roadmap.
 
 ---
 

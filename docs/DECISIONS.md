@@ -28,6 +28,7 @@ Consequence: maps must be taught; templates are resolution/scale specific; unkno
 ## D6 — Wall-clock rate, no session splitting
 Rates use trailing differences over wall-clock time. Idle time counts against the rate; the curve is continuous and never split into sessions.
 Consequence: a long break visibly drags the rate down and it takes one window length to recover. This is intended.
+*Superseded by D35:* the headline rates use active time; the wall-clock rate stays as "with breaks", and sessions exist.
 
 ## D7 — Windows: 1 min (solid), 5 min (faint), 30 min (ETA)
 1-minute is the responsive line; 5-minute is the stable trend; 30-minute drives the ETA so the number does not flicker.
@@ -381,3 +382,28 @@ machinery (scaled variants, rendering learning, near-tie settle, OCR fusion)
 no longer serves a live read and is on the roadmap for removal; Full Screen at
 720 or 600 lines, which MesoVibe reports stretches a shorter picture, is not
 handled yet. Accuracy on the 42-case corpus: all exact (ACCURACY.md).
+
+## D35 — Active-time rates, sessions, and a derived history index
+
+Every other MSCW tracker (Leafline, the beanguri overlay, MesoVibe,
+maple-exp-overlay) and most WoW XP trackers separate time spent gaining from
+breaks, keep sessions, and break rates down per map; MScout's wall-clock rate
+(D6) sank whenever the player stood still, and the History window re-parsed
+every 1 Hz row of a range.
+
+Decision: the headline rates use **active time** (gains at most 30 s apart; the
+gain after a longer wait restarts the clock, as beanguri's does); the wall-clock
+rate stays as "with breaks". **Sessions** are derived, not recorded: they start
+at the first gain and end after 10 minutes without one. The overlay graphs the
+5-minute active rate instead of cumulative EXP. The day files stay the source
+of truth; a **SQLite index of one-minute summaries** (`data/index.sqlite3`,
+rusqlite bundled) is derived from them, updated by the recorder and rebuilt
+whenever it disagrees, so a damaged index costs nothing. Old day files are
+gzipped (28× on real data) instead of being thinned into aggregates.
+
+Consequences: one implementation of the rules per language (`src/stats.ts` for
+slices, `history_index.rs` for minutes), kept equal by tests on the same
+numbers; sessions, bests and per-map figures are computed when read, so a rule
+change needs no migration of recorded data, only an index rebuild (bump
+`SCHEMA_VERSION`).
+

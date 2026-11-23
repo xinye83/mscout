@@ -62,21 +62,11 @@ in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
   display, so the overlay jumps there. Keep it on the game's monitor: place it
   inside the client's top-right corner when the outside one is off that
   monitor.
-- [ ] **History window, full design.** Today it has 1/7/30-day presets, the
-  EXP chart with gap breaks, a summary and the repair button. Add: All and
-  custom ranges (keys `T / 7 / 30 / A`); a rate pane under the EXP pane sharing
-  its x-axis (1-minute line, faint 5-minute average, drawn hollow and labelled
-  coarse when built from one-minute buckets); idle bands; markers for
-  level-ups, deaths and map changes (map markers on hover at month scale); a
-  crosshair tooltip with time, level, EXP, map, rate and the ETA then; wheel
-  zoom, drag pan, double-click reset and brush selection; date separators; a
-  fidelity badge (`1s raw` / `1m aggregates`); best 1-minute rate and idle time
-  in the summary.
-- [ ] **Compaction on disk.** Keep raw 1 Hz rows for 7 days, then compact to
-  one-minute aggregates (mean EXP, min/max, gain sum, map set) so months stay
-  small; never delete aggregates automatically. Today day files keep every row
-  and long ranges are only thinned when read (DATA.md, Compaction).
-- [ ] Per-map comparison once enough real data exists.
+- [ ] **History window, the rest of the design.** It now has 1/7/30-day and
+  all-time ranges from the index, a summary, sessions and per-map tables and
+  CSV export. Still to add: custom ranges, a rate pane under the EXP chart
+  sharing its x-axis, idle bands, level-up/death/map markers, a crosshair
+  tooltip, wheel zoom and drag pan.
 - [ ] **Distributable build.** Run `tauri build`, check the NSIS installer keeps
   `data/` across an upgrade and an uninstall, offer a portable folder copy next
   to the exe, and attach both to the GitHub release (not done for 0.8.0).

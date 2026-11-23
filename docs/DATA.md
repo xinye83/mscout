@@ -1,6 +1,8 @@
 # Data format
 
-Everything is local, plain text, and append-only. No database, no telemetry, no cloud.
+Everything is local. The recorded history is plain-text, append-only day files;
+a SQLite index derived from them speeds up long ranges and can always be
+rebuilt. No telemetry, no cloud.
 
 ## Location
 
@@ -209,13 +211,39 @@ Lookup order at runtime:
 
 When the engine first sees a client size with no `data/profiles/<W>x<H>[@mode].json`, it seeds one from the preset and saves it. After that the file belongs to the player: later preset updates do not change it — **reset to preset** in Calibration re-applies the preset's boxes and clears both digit atlases so the next frame reseeds them, while keeping the taught map/name/job. A pair with no preset reports **lost** and falls back to calibration. Boxes are physical pixels, so an entry applies only to the exact pair it was built for — a preset for one UI Size must never be used with another.
 
-## Compaction
+## History index — `data/index.sqlite3`
 
-Not implemented on disk: day files keep every 1 Hz row. Long ranges are thinned
-when read instead. The History page asks for 7- and 30-day ranges with a
-60-second bucket, and `read_samples` returns the last row of each bucket, plus
-every row with an `event` and the first row of a different character. Writing
-aggregates to disk remains on the roadmap.
+Derived, never the source of truth: deleting it loses nothing. One row per
+character-minute in the `minutes` table (`history_index.rs`):
+
+| Column | Meaning |
+|---|---|
+| `name`, `t` | character (empty when not read) and minute start; the key |
+| `wall` | seconds of recording in the minute (gaps over 5 s are not recording) |
+| `active` | active seconds: time between gains at most 30 s apart (SPEC §7) |
+| `gained`, `active_gained` | EXP gained, and gained during active time |
+| `lost`, `deaths` | EXP lost at recorded deaths, and how many |
+| `level_ups` | levels gained |
+| `last_gain`, `last_t` | time of the minute's last gain and last row |
+| `lv`, `exp`, `map` | the minute's last level, level EXP and map |
+
+`meta` holds the schema version and the last row's time. The recorder adds each
+row as it appends it; the repair rebuilds the index; at startup it is rebuilt
+when missing, from another schema, or behind the day files. The History window
+reads it (`read_minutes`) for every range and derives sessions, per-map rates and
+bests from it with the same code the overlay uses (`src/stats.ts`).
+
+## Compression
+
+Day files older than 30 days are gzipped at startup to `YYYY-MM-DD.jsonl.gz`
+(about 28× smaller on real history). Nothing is dropped. Every reader and the
+repair open both forms; the compressed copy is checked against the plain file
+before the plain file is removed, and if both exist the plain one is read.
+
+## Exports
+
+The History window writes CSV to `data/exports/`: `sessions-*.csv` (one row
+per session) and `minutes-*.csv` (the index's minutes in range).
 
 ## Mock data
 
