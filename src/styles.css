@@ -868,3 +868,22 @@ button:disabled {
   margin: 0;
   color: #facc15;
 }
+
+/* The extra figures picked for the collapsed overlay. */
+.row.extras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+.foot.fields {
+  justify-content: flex-start;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.foot.fields .ghost.on {
+  color: #4ade80;
+}

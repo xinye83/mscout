@@ -2,19 +2,55 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "./api";
 import { listen } from "@tauri-apps/api/event";
 import type { CaptureStatus, Profile, Sample, TargetStatus } from "./types";
+import { currentCharacterRun, formatDuration, formatRate, total } from "./rates";
 import {
-  currentCharacterRun,
-  etaSeconds,
-  formatDuration,
-  formatRate,
-  rateOver,
-  total,
-} from "./rates";
+  activeRate,
+  percentRate,
+  rateSeries,
+  rateSpread,
+  secondsToLevel,
+  sessions,
+  SESSION_BREAK,
+  slicesFromSamples,
+  typicalGain,
+} from "./stats";
 import { expRequired } from "./expTable";
-import ExpChart from "./ExpChart";
+import RateChart, { type Marker } from "./RateChart";
 import { dotState } from "./overlayState";
 
-const MAX_SAMPLES = 5400;
+/** Six hours of 1 Hz rows: enough for a long session's summary and bests. */
+const MAX_SAMPLES = 21_600;
+/** The extra figures the collapsed overlay can show, picked in the expanded view. */
+const FIELDS = {
+  pct: "%/h",
+  session: "session",
+  breaks: "with breaks",
+  kills: "kills",
+} as const;
+type Field = keyof typeof FIELDS;
+const FIELDS_KEY = "mscout.overlayFields";
+
+function loadFields(): Field[] {
+  try {
+    const stored = JSON.parse(localStorage.getItem(FIELDS_KEY) ?? "[]");
+    return Array.isArray(stored) ? stored.filter((f): f is Field => f in FIELDS) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveFields(fields: Field[]) {
+  try {
+    localStorage.setItem(FIELDS_KEY, JSON.stringify(fields));
+  } catch {
+    // Storage can be unavailable; the choice then lasts until the window closes.
+  }
+}
+
+function lastLine(map: string): string {
+  const lines = map.split("\n");
+  return lines[lines.length - 1];
+}
 /** Solid dash placeholders, sized to the element they stand in for. */
 const PLACEHOLDER = {
   map: "———",
@@ -139,37 +175,73 @@ export default function App() {
     [samples],
   );
 
+  const slices = useMemo(() => slicesFromSamples(charted), [charted]);
   const derived = useMemo(() => {
     if (!current) return null;
-
-    // A window is only shown once this session has lived through it, so a
-    // restart does not display a rate or ETA computed from pre-restart history.
-    const sessionSeconds = current.t - sessionStart;
-    const windowRate = (seconds: number) =>
-      sessionSeconds >= seconds ? rateOver(charted, seconds) : null;
-
-    const rate1 = windowRate(60);
-    const rate5 = windowRate(300);
-    const rate30 = windowRate(1800);
-
+    // Rates use active time (SPEC §7): time between gains at most 30 s apart.
+    // A window shows once the run covers it.
+    const rate1 = activeRate(slices, 60);
+    const rate5 = activeRate(slices, 300);
+    const rate30 = activeRate(slices, 1800);
     const gainAt = lastGainAt(charted);
     const idle = gainAt === null || current.t - gainAt > 120;
-
+    // The session still going: its last gain is within the session break.
+    const last = sessions(slices).at(-1);
+    const session = last && current.t - last.end <= SESSION_BREAK ? last : null;
+    const sessionSlices = session ? slices.filter((slice) => slice.t >= session.start) : [];
+    const spread = session ? rateSpread(sessionSlices) : null;
+    const withBreaks = session && session.wall > 0 ? (session.gained / session.wall) * 3600 : null;
+    const typical = typicalGain(slices);
+    const req = expRequired(current.lv);
+    const eta = idle ? null : secondsToLevel(current.lv, current.exp, rate5);
     return {
       rate1,
       rate5,
       rate30,
-      // Both prominent numbers use the 5-minute average. No ETA while idle:
-      // the average decays and the estimate would only climb.
-      eta: idle ? null : etaSeconds(current, rate5),
+      // No ETA while idle: the estimate would only climb.
+      eta,
+      // A fast pace is a short time: the high rate gives the low end.
+      etaRange:
+        eta !== null && spread
+          ? {
+              low: secondsToLevel(current.lv, current.exp, spread.high),
+              high: secondsToLevel(current.lv, current.exp, spread.low),
+            }
+          : null,
+      etaWithBreaks: idle ? null : secondsToLevel(current.lv, current.exp, withBreaks),
+      withBreaks,
+      pctRate: percentRate(current.lv, rate5),
+      session,
+      killsPerHour: typical && rate5 ? rate5 / typical : null,
+      killsToLevel: typical && req ? Math.ceil(Math.max(0, req.value - current.exp) / typical) : null,
     };
-  }, [charted, current, sessionStart]);
-
-  const chartData = useMemo(
-    () => charted.map((sample) => ({ t: sample.t, total: total(sample) })),
-    [charted],
-  );
-
+  }, [charted, current, slices]);
+  const rateData = useMemo(() => {
+    const hourAgo = (charted.at(-1)?.t ?? 0) - 3600;
+    return rateSeries(slices).filter((point) => point.t >= hourAgo);
+  }, [charted, slices]);
+  const markers = useMemo(() => {
+    const out: Marker[] = [];
+    for (let i = 1; i < charted.length; i += 1) {
+      const [a, b] = [charted[i - 1], charted[i]];
+      if (b.event === "death") out.push({ t: b.t, kind: "death" });
+      if (b.lv > a.lv) out.push({ t: b.t, kind: "level" });
+      const known = (sample: Sample) => !sample.mapHidden && sample.map !== "unknown";
+      if (known(a) && known(b) && lastLine(a.map) !== lastLine(b.map)) {
+        out.push({ t: b.t, kind: "map" });
+      }
+    }
+    return out;
+  }, [charted]);
+  const [fields, setFields] = useState<Field[]>(loadFields);
+  const toggleField = (field: Field) =>
+    setFields((current) => {
+      const next = current.includes(field)
+        ? current.filter((f) => f !== field)
+        : [...current, field];
+      saveFields(next);
+      return next;
+    });
   const targetLabel = !target
     ? "…"
     : !target.configured
@@ -245,6 +317,21 @@ export default function App() {
     value === null || value === undefined ? PLACEHOLDER.rate : formatRate(value);
   const etaText = (value: number | null | undefined) =>
     value === null || value === undefined ? PLACEHOLDER.eta : formatDuration(value);
+  const pctRateText = (value: number | null | undefined) =>
+    value === null || value === undefined ? "—%/h" : `${value.toFixed(value >= 10 ? 1 : 2)}%/h`;
+  const killsText = derived?.killsPerHour
+    ? `≈${Math.round(derived.killsPerHour).toLocaleString()} kills/h · ${derived.killsToLevel?.toLocaleString() ?? "—"} to level`
+    : "kills —";
+  const session = derived?.session ?? null;
+  const sessionText = session
+    ? `session ${formatDuration(session.wall)} · active ${formatDuration(session.active)}`
+    : "session —";
+  const extras: Record<Field, string> = {
+    pct: pctRateText(derived?.pctRate),
+    session: sessionText,
+    breaks: `with breaks ${rateText(derived?.withBreaks)} · ${etaText(derived?.etaWithBreaks)}`,
+    kills: killsText,
+  };
 
   // The label is stored as "street\nmap name". The map name (last line) is what
   // actually identifies the map, so it is the headline; the street is context.
@@ -313,6 +400,14 @@ export default function App() {
         <span className="eta">{etaText(derived?.eta)}</span>
       </div>
 
+      {fields.length > 0 && (
+        <div className="row extras">
+          {fields.map((field) => (
+            <span key={field}>{extras[field]}</span>
+          ))}
+        </div>
+      )}
+
       {expanded && (
         <>
           <div className="sub">
@@ -320,7 +415,48 @@ export default function App() {
             <span>5m {rateText(derived?.rate5)}</span>
             <span>30m {rateText(derived?.rate30)}</span>
           </div>
-          <ExpChart samples={chartData} height={140} />
+          <div className="sub">
+            <span>{pctRateText(derived?.pctRate)}</span>
+            <span>
+              eta {etaText(derived?.eta)}
+              {derived?.etaRange &&
+                ` (${etaText(derived.etaRange.low)}–${etaText(derived.etaRange.high)})`}
+            </span>
+          </div>
+          <div className="sub">
+            <span>with breaks {rateText(derived?.withBreaks)}</span>
+            <span>eta {etaText(derived?.etaWithBreaks)}</span>
+          </div>
+          <div className="sub session">
+            <span>{sessionText}</span>
+            <span>
+              {session
+                ? `+${session.gained.toLocaleString()} exp${session.levelUps ? ` · +${session.levelUps} lv` : ""}${session.deaths ? ` · ${session.deaths} death${session.deaths > 1 ? "s" : ""} (−${session.lost.toLocaleString()})` : ""}`
+                : ""}
+            </span>
+          </div>
+          <div className="sub">
+            <span>{killsText}</span>
+            <span>best 5m {rateText(session?.best5m)}</span>
+          </div>
+          <RateChart
+            points={rateData}
+            average={session && session.active > 0 ? (session.gained / session.active) * 3600 : null}
+            markers={markers}
+            height={110}
+          />
+          <div className="foot fields">
+            <span>show:</span>
+            {(Object.keys(FIELDS) as Field[]).map((field) => (
+              <button
+                key={field}
+                className={`ghost ${fields.includes(field) ? "on" : ""}`}
+                onClick={() => toggleField(field)}
+              >
+                {FIELDS[field]}
+              </button>
+            ))}
+          </div>
           <div className="foot">
             <span>
               next:{" "}
