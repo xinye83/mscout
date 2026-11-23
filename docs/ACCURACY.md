@@ -4,12 +4,39 @@ What the capture readers actually score on the committed corpus, published with
 the command that produced the numbers and the limits of the measurement stated
 next to them.
 
-Re-run **2026-11-21** on `0.7.0` plus the post-release storage, guard and reader fixes, with the local build runner's temp data folder: unchanged, 18/18 exact and the hold-out exact.
+Measured **2026-11-22**, MScout `0.9.0` plus the unreleased 1x-picture reader
+(no version bump), corpus at [`../src-tauri/testdata`](../src-tauri/testdata):
+12 `WxH@mode` pairs (1366×768, 1920×1080, 1920×1200 and 2560×1440, each in
+Default, Filter Applied and Ideal), 42 frame cases. This is one dated run of one
+small corpus — not a release claim, and not a general accuracy estimate for the
+reader. The 2026-11-16 run of the earlier 18-case corpus is kept below.
 
-Last measured in full below: **2026-11-16**, MScout `0.6.0` (no version bump), corpus at
-[`../src-tauri/testdata`](../src-tauri/testdata): 6 `WxH@mode` pairs, 18 frame
-cases. This is one dated run of one small corpus — not a release claim, and not a
-general accuracy estimate for the reader.
+| pair | exact | rejected | wrong | no preset | cases |
+|---|---:|---:|---:|---:|---:|
+| `1366x768` | 5 | 0 | 0 | 0 | 5 |
+| `1366x768@filtered` | 5 | 0 | 0 | 0 | 5 |
+| `1366x768@ideal` | 5 | 0 | 0 | 0 | 5 |
+| `1920x1080` | 5 | 0 | 0 | 0 | 5 |
+| `1920x1080@filtered` | 5 | 0 | 0 | 0 | 5 |
+| `1920x1080@ideal` | 5 | 0 | 0 | 0 | 5 |
+| `1920x1200` | 2 | 0 | 0 | 0 | 2 |
+| `1920x1200@filtered` | 2 | 0 | 0 | 0 | 2 |
+| `1920x1200@ideal` | 2 | 0 | 0 | 0 | 2 |
+| `2560x1440` | 2 | 0 | 0 | 0 | 2 |
+| `2560x1440@filtered` | 2 | 0 | 0 | 0 | 2 |
+| `2560x1440@ideal` | 2 | 0 | 0 | 0 | 2 |
+| **total** | **42** | **0** | **0** | **0** | **42** |
+
+Hold-out: `1920x1080@ideal/euroblood-lv35-east-rocky-mountain-3/expanded — exact`.
+
+Every case is now read the way the app reads it: the composed frame is turned
+into the game's 1x picture (`native::prepare`, with the UI Size detected from
+the frame) and read with the 1366×768 boxes moved with the HUD bar. Sizes that
+ship no preset file (1920×1200, 2560×1440) therefore count as read, not "no
+preset". The 24 scenes added on 2026-11-22 were captured after the reader's
+design was settled but were used to fit and verify it (the Filter Applied
+geometry, the solid-stroke allowance), so like the hold-out they are not an
+unbiased estimate.
 
 ## What is measured
 
@@ -39,7 +66,7 @@ Not covered by the counts: the focused crops in `crops/1920x1080@filtered/`
 `map-deep-valley`). They are validated hermetically and read by
 their own targeted tests, not by this report.
 
-## Measured counts — 2026-11-16
+## Measured counts — 2026-11-16 (earlier 18-case corpus)
 
 ### Run 1 — app's MSCW setting available
 

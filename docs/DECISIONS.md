@@ -347,3 +347,37 @@ confusions, slash/space variants, rejection of short fragments, rejection of
 distant words, rejection of classes this game does not have (Pirate, Brawler,
 Buccaneer, Corsair, Noblesse, Legend, Evan, Citizen, Archer), vocabulary
 uniqueness, and self-consistency of every entry.
+
+## D34 — Every frame is read as the game's 1x picture
+
+Up to 0.9.0 each client size and UI Size was its own reading problem: boxes in
+client pixels per `WxH@mode` preset, glyph variants scaled to the rendered size,
+live rendering learning, a near-tie settle and Windows OCR for the smoothed
+name/job. Sizes without a hand-measured preset (1920×1200, 2560×1440) needed a
+calibration pass, the UI Size had to be set by hand, and Default/Filter Applied
+misread thin letters.
+
+Measured on 12 full-client captures (four sizes × three UI Sizes, one spot,
+only the setting changed; now `testdata/frames`): up to 768 lines every UI Size
+draws the same 1x pixels. Above that, Default Ratio stretches a 768-line picture
+of the nearest even width bilinearly (1366 at 1080 and 1440 lines, 1228 at
+1200), as MesoVibe documents; Ideal Ratio draws whole-pixel blocks (1x at 1080
+and 1200 lines, 2x at 1440); Filter Applied sharpens a stretch whose picture
+width differs from Default's (1230 at 1200 lines).
+
+Decision: `native::prepare` turns every captured frame into that 1x picture
+before anything reads it — least squares per axis for the stretch (exact for
+Default), one pixel per block for Ideal, and for Filter Applied a width and
+sub-pixel shift fitted once per client size plus an un-sharpen. Readers,
+profiles and boxes work in that picture: one HUD geometry and one glyph size
+for every resolution. The UI Size is detected from how well the Default
+stretch explains the HUD band (no game art involved); the setting only
+applies at 768 lines and below. Sizes with no preset file get the 1366×768
+boxes moved with the bar, which sits centred on the picture's bottom edge.
+
+Consequences: profiles are keyed by the picture's size (1920×1080 Default uses
+`1366x768.json`) and record the window sizes they read; the client-size
+machinery (scaled variants, rendering learning, near-tie settle, OCR fusion)
+no longer serves a live read and is on the roadmap for removal; Full Screen at
+720 or 600 lines, which MesoVibe reports stretches a shorter picture, is not
+handled yet. Accuracy on the 42-case corpus: all exact (ACCURACY.md).

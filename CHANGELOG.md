@@ -30,6 +30,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   read, and the drawer lists those.
 - **A name at Default Ratio 1920×1080 reads right.** "Eurovein" read as
   "Eurovejn" with no job; reading the 1x picture fixes it.
+- **Name and job read with Filter Applied at every size.** At 1920×1200 the
+  client stretches its Filter Applied picture from 1230 pixels, not Default's
+  1228, so undoing it with the Default geometry smeared every thin stroke and
+  the name and job were not read. The geometry is now fitted per client size,
+  and a thin letter whose ink varies by a few grey levels (the `i` in
+  "Eurovein") is no longer cut in half.
 
 ## [0.9.0] - 2026-11-22
 
