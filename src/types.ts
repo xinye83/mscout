@@ -231,3 +231,24 @@ export type Settings = {
   expRegion?: { x: number; y: number; w: number; h: number } | null;
   mapRegion?: { x: number; y: number; w: number; h: number } | null;
 };
+
+/** One character-minute of the history index (Rust `history_index::Minute`). */
+export type HistoryMinute = {
+  /** End of the minute's last slice, Unix seconds. */
+  t: number;
+  /** Start of the minute, Unix seconds. */
+  minute: number;
+  name: string;
+  wall: number;
+  active: number;
+  gained: number;
+  activeGained: number;
+  lost: number;
+  deaths: number;
+  levelUps: number;
+  gain: boolean;
+  lastGain: number | null;
+  lv: number;
+  exp: number;
+  map: string;
+};

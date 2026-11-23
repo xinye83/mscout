@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Calibration,
   GlyphGuess,
+  HistoryMinute,
   LabelCrop,
   LearningInfo,
   MscwStatus,
@@ -40,6 +41,10 @@ export type UiModeId = "default" | "filtered" | "ideal";
 export const readSamples = (args: { from: number; to: number; bucket?: number }) =>
   invoke<Sample[]>("read_samples", args);
 export const repairHistory = () => invoke<RepairSummary>("repair_history");
+export const readMinutes = (args: { from: number; to: number }) =>
+  invoke<HistoryMinute[]>("read_minutes", args);
+export const saveExport = (args: { name: string; text: string }) =>
+  invoke<string>("save_export", args);
 export const getProfile = () => invoke<Profile>("get_profile");
 export const setMode = (args: { expanded: boolean }) => invoke<void>("set_mode", args);
 export const resizeOverlay = (args: { height: number }) => invoke<void>("resize_overlay", args);
