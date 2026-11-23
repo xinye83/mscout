@@ -18,6 +18,7 @@ mod font_seed;
 mod fsutil;
 mod game_font;
 mod guard;
+mod history_index;
 mod jobs;
 mod map_match;
 mod map_names;
@@ -111,6 +112,34 @@ fn test_data_dir() -> PathBuf {
 #[tauri::command(async)]
 fn read_samples(from: i64, to: i64, bucket: Option<i64>) -> Result<Vec<Value>, String> {
     samples::read(from, to, bucket)
+}
+
+/// One-minute summaries of the history (`history_index`), for ranges longer
+/// than a day.
+#[tauri::command(async)]
+fn read_minutes(from: i64, to: i64) -> Result<Vec<history_index::Minute>, String> {
+    history_index::read(from, to)
+}
+
+/// Write an export (CSV text from the History window) to `data/exports/` and
+/// return where it went.
+#[tauri::command(async)]
+fn save_export(name: String, text: String) -> Result<String, String> {
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let dir = data_dir()?.join("exports");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{safe}.csv"));
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
 }
 
 #[tauri::command(async)]
@@ -400,6 +429,8 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             read_samples,
+            read_minutes,
+            save_export,
             set_mode,
             resize_overlay,
             window_target::list_windows,
@@ -459,6 +490,21 @@ pub fn run() {
                 notify::notify(notify::Notice::Degraded(&notice));
             }
             build_tray(&handle)?;
+            // Old day files are compressed and the history index checked
+            // against the day files, off the main thread: a rebuild reads the
+            // whole history.
+            std::thread::spawn(|| {
+                match samples::compress_old() {
+                    Ok(0) => {}
+                    Ok(count) => calibration::log(&format!("compressed {count} old day files")),
+                    Err(error) => {
+                        calibration::log(&format!("compressing day files failed: {error}"))
+                    }
+                }
+                if let Err(error) = history_index::ensure() {
+                    calibration::log(&format!("history index unavailable: {error}"));
+                }
+            });
             engine::start(handle.clone());
             engine::start_snap_watch(handle.clone());
             start_hover_interactivity(handle.clone());

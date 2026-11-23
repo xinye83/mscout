@@ -22,6 +22,7 @@ serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 wz_reader = { version = "0.0.26", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 image = { version = "0.25", default-features = false }
 
 [target.'cfg(windows)'.dependencies]

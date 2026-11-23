@@ -40,16 +40,26 @@ fn day_files(dir: &Path) -> Result<Vec<(NaiveDate, PathBuf)>, String> {
     let mut days: Vec<(NaiveDate, PathBuf)> = fs::read_dir(dir)
         .map_err(|e| e.to_string())?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("jsonl"))
         .filter_map(|path| {
-            let day = path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .and_then(|stem| NaiveDate::parse_from_str(stem, "%Y-%m-%d").ok())?;
+            let name = path.file_name()?.to_str()?;
+            let stem = name
+                .strip_suffix(".jsonl")
+                .or_else(|| name.strip_suffix(".jsonl.gz"))?;
+            let day = NaiveDate::parse_from_str(stem, "%Y-%m-%d").ok()?;
             Some((day, path))
         })
         .collect();
     days.sort();
+    // A day both compressed and not (an interrupted compression) is read once,
+    // from the plain file, which is the one appends went to.
+    days.dedup_by(|later, earlier| {
+        later.0 == earlier.0 && {
+            if is_compressed(&earlier.1) {
+                std::mem::swap(later, earlier);
+            }
+            true
+        }
+    });
     Ok(days)
 }
 
@@ -58,7 +68,7 @@ fn day_files(dir: &Path) -> Result<Vec<(NaiveDate, PathBuf)>, String> {
 /// write leaves) or not JSON is skipped and counted, never fatal: one bad line
 /// used to fail the whole read and blank the history window.
 fn read_day(path: &Path) -> std::io::Result<(Vec<Value>, usize)> {
-    let bytes = fs::read(path)?;
+    let bytes = read_bytes(path)?;
     let mut rows = Vec::new();
     let mut bad = 0usize;
     for line in bytes.split(|byte| *byte == b'\n') {
@@ -76,6 +86,88 @@ fn read_day(path: &Path) -> std::io::Result<(Vec<Value>, usize)> {
         }
     }
     Ok((rows, bad))
+}
+
+fn is_compressed(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("gz")
+}
+
+/// A day file's bytes, decompressed when it is a `.jsonl.gz`.
+fn read_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
+    let bytes = fs::read(path)?;
+    if !is_compressed(path) {
+        return Ok(bytes);
+    }
+    let mut out = Vec::new();
+    std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&bytes[..]), &mut out)?;
+    Ok(out)
+}
+
+/// Write a day file back in the form it was in.
+fn write_day(path: &Path, text: &[u8]) -> std::io::Result<()> {
+    if !is_compressed(path) {
+        return crate::fsutil::write_atomic(path, text);
+    }
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(text)?;
+    crate::fsutil::write_atomic(path, &encoder.finish()?)
+}
+
+/// Day files are compressed once they are this many days old. Nothing is
+/// dropped: the rows stay, about 28 times smaller (measured on real history),
+/// and every reader opens either form.
+pub const COMPRESS_AFTER_DAYS: i64 = 30;
+
+/// Compress the day files older than [`COMPRESS_AFTER_DAYS`]. The compressed
+/// copy is written and checked before the plain file is removed, so an
+/// interruption leaves the plain file (which readers then prefer).
+pub fn compress_old() -> Result<usize, String> {
+    let today = chrono::Local::now().date_naive();
+    let _guard = lock();
+    let mut done = 0usize;
+    for (day, path) in day_files(&samples_dir()?)? {
+        if is_compressed(&path) || (today - day).num_days() < COMPRESS_AFTER_DAYS {
+            continue;
+        }
+        let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+        let gz = path.with_extension("jsonl.gz");
+        write_day(&gz, &bytes).map_err(|e| e.to_string())?;
+        if read_bytes(&gz).map_err(|e| e.to_string())? != bytes {
+            let _ = fs::remove_file(&gz);
+            return Err(format!("compressing {} did not round-trip", path.display()));
+        }
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
+        done += 1;
+    }
+    Ok(done)
+}
+
+/// Every good row of every day file, oldest first: what the history index is
+/// rebuilt from.
+pub fn all_rows() -> Result<Vec<Value>, String> {
+    let _guard = lock();
+    let mut rows = Vec::new();
+    for (_, path) in day_files(&samples_dir()?)? {
+        let (day_rows, _) = read_day(&path).map_err(|e| e.to_string())?;
+        rows.extend(day_rows.into_iter().filter(|row| !is_bad(row)));
+    }
+    rows.sort_by_key(|row| time_of(row).unwrap_or(0));
+    Ok(rows)
+}
+
+/// The good rows of the last `seconds` before the latest row.
+pub fn recent_rows(seconds: i64) -> Result<Vec<Value>, String> {
+    let _guard = lock();
+    let days = day_files(&samples_dir()?)?;
+    let mut rows = Vec::new();
+    for (_, path) in days.iter().rev().take(2) {
+        let (day_rows, _) = read_day(path).map_err(|e| e.to_string())?;
+        rows.extend(day_rows.into_iter().filter(|row| !is_bad(row)));
+    }
+    rows.sort_by_key(|row| time_of(row).unwrap_or(0));
+    let latest = rows.last().and_then(time_of).unwrap_or(0);
+    rows.retain(|row| time_of(row).is_some_and(|t| t >= latest - seconds));
+    Ok(rows)
 }
 
 /// Rows the reader knows were wrong (`"bad": true`, set by the repair) are
@@ -100,7 +192,12 @@ pub fn append(record: &Value) -> Result<(), String> {
     let path = dir.join(format!("{}.jsonl", day.format("%Y-%m-%d")));
     let mut line = serde_json::to_string(record).map_err(|e| e.to_string())?;
     line.push('\n');
-    append_line(&path, &line).map_err(|e| e.to_string())
+    append_line(&path, &line).map_err(|e| e.to_string())?;
+    // The index takes its own lock; the history lock is released first, since a
+    // rebuild holds the index lock while it reads the history.
+    drop(_guard);
+    crate::history_index::observe(record);
+    Ok(())
 }
 
 /// Append one complete line. The line goes out in a single `write_all`, so a
@@ -279,7 +376,7 @@ pub fn repair() -> Result<RepairSummary, String> {
     let mut lines_per_file: Vec<Vec<String>> = Vec::new();
     let mut rows: Vec<(usize, usize, Value)> = Vec::new();
     for (file_index, path) in files.iter().enumerate() {
-        let bytes = fs::read(path).map_err(|e| e.to_string())?;
+        let bytes = read_bytes(path).map_err(|e| e.to_string())?;
         let mut lines: Vec<String> = Vec::new();
         for line in String::from_utf8_lossy(&bytes).lines() {
             if let Ok(value) = serde_json::from_str::<Value>(line) {
@@ -338,7 +435,7 @@ pub fn repair() -> Result<RepairSummary, String> {
 
         if changed {
             let text = lines.join("\n");
-            crate::fsutil::write_atomic(&files[file_index], format!("{text}\n").as_bytes())
+            write_day(&files[file_index], format!("{text}\n").as_bytes())
                 .map_err(|e| e.to_string())?;
             changed_files += 1;
         }
@@ -355,6 +452,16 @@ pub fn repair() -> Result<RepairSummary, String> {
         })
         .count();
 
+    drop(_guard);
+    if changed_files > 0 {
+        // Flagged rows leave the index's sums; recompute them.
+        if let Err(error) = crate::history_index::rebuild() {
+            crate::calibration::log(&format!(
+                "history index rebuild after repair failed: {error}"
+            ));
+        }
+    }
+
     Ok(RepairSummary {
         checked,
         flagged: total,
@@ -362,21 +469,48 @@ pub fn repair() -> Result<RepairSummary, String> {
     })
 }
 
+/// A fresh samples folder under its own data dir. Tests that touch the global
+/// history (here and in `history_index`) run one at a time through this, since
+/// they share a dir.
+#[cfg(test)]
+pub(crate) fn with_history(test: impl FnOnce(&Path)) {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let dir = samples_dir().expect("samples dir");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("samples dir");
+    test(&dir);
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
-    /// A fresh samples folder under its own data dir. Tests that touch the
-    /// global history run one at a time through this, since they share a dir.
-    fn with_history(test: impl FnOnce(&Path)) {
-        static SERIAL: Mutex<()> = Mutex::new(());
-        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
-        let dir = samples_dir().expect("samples dir");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("samples dir");
-        test(&dir);
-        let _ = fs::remove_dir_all(&dir);
+    use super::with_history;
+
+    #[test]
+    fn an_old_day_is_compressed_and_still_read() {
+        with_history(|dir| {
+            let old = chrono::Local::now() - chrono::Duration::days(COMPRESS_AFTER_DAYS + 2);
+            let t = old.timestamp();
+            for offset in 0..3 {
+                append(&json!({"t": t + offset, "lv": 5, "exp": offset, "map": "M"}))
+                    .expect("append");
+            }
+            assert_eq!(compress_old().expect("compress"), 1);
+            let names: Vec<String> = fs::read_dir(dir)
+                .expect("dir")
+                .filter_map(|e| e.ok()?.file_name().into_string().ok())
+                .collect();
+            assert!(
+                names.iter().all(|name| name.ends_with(".jsonl.gz")),
+                "{names:?}"
+            );
+            assert_eq!(read(t, t + 2, None).expect("read").len(), 3);
+            assert_eq!(all_rows().expect("all").len(), 3);
+        });
     }
 
     fn row(t: i64, lv: u32, exp: i64) -> Value {
