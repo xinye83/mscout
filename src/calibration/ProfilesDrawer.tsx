@@ -37,18 +37,23 @@ export default function ProfilesDrawer({
   const sizeOptions = Array.from(
     new Set([
       ...(liveSize ? [liveSize] : []),
-      ...profiles.map((profile) => `${profile.clientW}x${profile.clientH}`),
+      ...profiles.flatMap((profile) => profile.games),
     ]),
   ).sort();
   const chosenSize = sizeChoice ?? liveSize ?? sizeOptions[0] ?? null;
+  // Profiles are keyed by the game's 1x picture, which several window sizes can
+  // share; the drawer lists them by the window sizes they have read.
   const shownProfiles = profiles.filter(
-    (profile) => `${profile.clientW}x${profile.clientH}` === chosenSize,
+    (profile) => chosenSize !== null && profile.games.includes(chosenSize),
   );
   const sameSet = (profile: ProfileSummary) =>
-    client !== null &&
-    profile.clientW === client.w &&
-    profile.clientH === client.h &&
+    liveSize !== null &&
+    profile.games.includes(liveSize) &&
     profile.uiMode === liveMode;
+  const pictureNote = (profile: ProfileSummary) =>
+    `${profile.clientW}x${profile.clientH}` === chosenSize
+      ? ""
+      : ` · reads a ${profile.clientW}×${profile.clientH} picture`;
 
   const clear = async (profile: ProfileSummary) => {
     setBusyKey(profile.key);
@@ -65,8 +70,9 @@ export default function ProfilesDrawer({
       <div className="drawer-head">
         <strong>Profiles</strong>
         <span className="muted small">
-          Boxes, digits and labels are kept per picture size and UI size, and
-          the engine uses the pair matching the live window. Above 768 lines the
+          Boxes, digits and labels are kept per UI size and per the game's 1x
+          picture, which several window sizes can share; each is listed under
+          the window sizes it has read. Above 768 lines the
           UI size is detected from the game, so the choice below only applies at
           768 lines and below, where every UI size looks the same.
         </span>
@@ -127,6 +133,7 @@ export default function ProfilesDrawer({
                   : ""}
                 {profile.name ? ` · ${profile.name}` : ""}
                 {profile.job ? ` · ${profile.job}` : ""}
+                {pictureNote(profile)}
               </span>
             </div>
             <div className="profile-tags">

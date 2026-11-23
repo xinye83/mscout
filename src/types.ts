@@ -197,6 +197,8 @@ export type ProfileSummary = {
   job: string | null;
   source: string;
   glyphSize: string;
+  /** The game client sizes this profile serves, as `1920x1200`. */
+  games: string[];
 };
 
 /** One option of the game's Graphics → UI Size setting. */

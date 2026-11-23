@@ -39,6 +39,12 @@ pub struct Profile {
     pub streets: Vec<Template>,
     #[serde(default)]
     pub identities: Identities,
+    /// The game client sizes this profile has read, as `1920x1200`. A profile
+    /// is keyed by the 1x picture's size, which several client sizes can share
+    /// (1366x768, 1920x1080 and 2560x1440 Default all read a 1366x768 picture)
+    /// and which is not a size the game's menu offers (1228x768 is 1920x1200).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub games: Vec<String>,
 }
 
 impl Profile {
@@ -84,7 +90,27 @@ impl Profile {
             job: self.identities.job.as_ref().map(|t| t.label.clone()),
             source: self.atlas.source.clone(),
             glyph_size,
+            // A profile that has not read since sizes were recorded is shown
+            // by its picture size, which is the client size for any profile
+            // made before reading moved to the 1x picture.
+            games: if self.games.is_empty() {
+                vec![format!("{}x{}", self.client_w, self.client_h)]
+            } else {
+                self.games.clone()
+            },
         }
+    }
+
+    /// Record the game client size this profile is reading for. Whether it
+    /// was new, so the caller saves.
+    fn note_game(&mut self, client: (u32, u32)) -> bool {
+        let game = format!("{}x{}", client.0, client.1);
+        if self.games.contains(&game) {
+            return false;
+        }
+        self.games.push(game);
+        self.games.sort();
+        true
     }
 }
 
@@ -102,6 +128,8 @@ pub struct ProfileSummary {
     pub job: Option<String>,
     pub source: String,
     pub glyph_size: String,
+    /// The game client sizes the profile serves, as `1920x1200`.
+    pub games: Vec<String>,
 }
 
 struct Active {
@@ -261,9 +289,15 @@ pub fn activate(client_w: u32, client_h: u32) -> Result<Profile, String> {
     // decides where every UI Size draws the same pixels.
     let ui_mode = crate::native::mode_for(client_w, client_h).unwrap_or_else(settings::ui_mode);
     let key = format!("{client_w}x{client_h}{}", ui_mode.suffix());
+    let client = crate::native::client_for(client_w, client_h);
     let mut active = lock(&ACTIVE);
-    if let Some(current) = active.as_ref() {
+    if let Some(current) = active.as_mut() {
         if current.key == key {
+            if let Some(client) = client {
+                if current.profile.note_game(client) {
+                    save_or_log(&current.profile);
+                }
+            }
             return Ok(current.profile.clone());
         }
     }
@@ -290,6 +324,12 @@ pub fn activate(client_w: u32, client_h: u32) -> Result<Profile, String> {
             None => Profile::new_for_mode(client_w, client_h, ui_mode),
         },
     };
+    let mut profile = profile;
+    if let Some(client) = client {
+        if profile.note_game(client) {
+            save_or_log(&profile);
+        }
+    }
     *active = Some(Active {
         key,
         profile: profile.clone(),
@@ -503,6 +543,16 @@ mod tests {
             Profile::new_for_mode(1920, 1080, UiMode::Ideal).key(),
             "1920x1080@ideal"
         );
+    }
+
+    #[test]
+    fn a_profile_lists_the_game_sizes_it_has_read() {
+        let mut profile = Profile::new_for_mode(1366, 768, UiMode::Default);
+        assert_eq!(profile.summary().games, vec!["1366x768".to_string()]);
+        assert!(profile.note_game((2560, 1440)));
+        assert!(profile.note_game((1920, 1080)));
+        assert!(!profile.note_game((1920, 1080)), "recorded once");
+        assert_eq!(profile.summary().games, vec!["1920x1080", "2560x1440"]);
     }
 
     #[test]

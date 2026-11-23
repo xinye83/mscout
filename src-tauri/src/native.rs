@@ -586,20 +586,34 @@ pub struct Prepared {
     pub mode: UiMode,
 }
 
-/// The last prepared picture's size and UI Size, so the profile chosen for a
-/// prepared frame follows the detected UI Size rather than the setting.
-static LAST: Mutex<Option<(u32, u32, UiMode)>> = Mutex::new(None);
+/// The last prepared frame: its picture's size, its UI Size and the game
+/// client size it came from. The profile chosen for a prepared frame follows
+/// the detected UI Size rather than the setting, and records the client size.
+#[derive(Clone, Copy)]
+struct Last {
+    picture: (u32, u32),
+    mode: UiMode,
+    client: (u32, u32),
+}
+
+static LAST: Mutex<Option<Last>> = Mutex::new(None);
 
 /// The UI Size the last prepared frame was read with, whatever its size.
 pub fn last_mode() -> Option<UiMode> {
     let last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    last.map(|(_, _, mode)| mode)
+    last.map(|last| last.mode)
 }
 
 /// The UI Size detected for the last prepared picture of this size.
 pub fn mode_for(width: u32, height: u32) -> Option<UiMode> {
     let last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    last.and_then(|(w, h, mode)| (w == width && h == height).then_some(mode))
+    last.and_then(|last| (last.picture == (width, height)).then_some(last.mode))
+}
+
+/// The game client size the last prepared picture of this size came from.
+pub fn client_for(width: u32, height: u32) -> Option<(u32, u32)> {
+    let last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    last.and_then(|last| (last.picture == (width, height)).then_some(last.client))
 }
 
 /// The 1x picture behind a captured client frame, the one every reader and
@@ -616,6 +630,7 @@ pub fn prepare_whole(frame: Frame, setting: UiMode) -> Prepared {
 }
 
 fn prepare_with(frame: Frame, setting: UiMode, whole: bool) -> Prepared {
+    let client = (frame.width, frame.height);
     let mode = detect_mode(&frame).unwrap_or(setting);
     let scaling = match Scaling::for_client(frame.width, frame.height, mode) {
         Scaling::Stretched {
@@ -654,7 +669,11 @@ fn prepare_with(frame: Frame, setting: UiMode, whole: bool) -> Prepared {
         }
     };
     let mut last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    *last = Some((frame.width, frame.height, mode));
+    *last = Some(Last {
+        picture: (frame.width, frame.height),
+        mode,
+        client,
+    });
     Prepared { frame, mode }
 }
 

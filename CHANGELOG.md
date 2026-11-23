@@ -24,6 +24,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **A window caught mid-resize no longer gets a profile.** A client size is
   only used once it has held for two seconds, so a passing `1920x1081` is not
   saved as a profile and picked again later.
+- **Calibration lists profiles by game resolution.** Profiles are kept per
+  1x picture, so the Profiles drawer offered sizes the game never shows
+  (1228×768 for 1920×1200). Each profile now records the window sizes it has
+  read, and the drawer lists those.
 - **A name at Default Ratio 1920×1080 reads right.** "Eurovein" read as
   "Eurovejn" with no job; reading the 1x picture fixes it.
 
