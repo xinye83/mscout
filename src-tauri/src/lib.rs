@@ -239,7 +239,7 @@ fn toggle_visible<R: Runtime>(app: &AppHandle<R>) {
 /// A drag and the automatic anchor are both reasonable places to sit; without a way
 /// back, a single accidental drag would permanently pin the panel away from the
 /// corner it is designed to hug.
-fn reset_overlay_position<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn forget_overlay_position<R: Runtime>(app: &AppHandle<R>) {
     if let Err(error) = settings::clear_overlay_position() {
         crate::calibration::log(&format!("could not clear the overlay position: {error}"));
     }
@@ -363,7 +363,7 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "target" => window_target::open_target_picker(app),
             "calibrate" => calibration::open_calibration_window(app),
             "history" => open_history(app),
-            "reset-position" => reset_overlay_position(app),
+            "reset-position" => forget_overlay_position(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -460,6 +460,7 @@ pub fn run() {
             }
             build_tray(&handle)?;
             engine::start(handle.clone());
+            engine::start_snap_watch(handle.clone());
             start_hover_interactivity(handle.clone());
 
             if std::env::var_os("MSCOUT_OPEN_HISTORY").is_some() {

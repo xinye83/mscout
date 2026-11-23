@@ -526,25 +526,7 @@ fn anchor_overlay<R: Runtime>(
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    let overlay = window
-        .outer_size()
-        .map(|size| (size.width as i32, size.height as i32))
-        .unwrap_or((0, 0));
-    // The monitor the game is on, found from the client's centre.
-    let monitor = window
-        .monitor_from_point(
-            f64::from(screen.x + screen.w / 2),
-            f64::from(screen.y + screen.h / 2),
-        )
-        .ok()
-        .flatten()
-        .map(|monitor| window_target::Rect {
-            x: monitor.position().x,
-            y: monitor.position().y,
-            w: monitor.size().width as i32,
-            h: monitor.size().height as i32,
-        });
-    let anchor = overlay_anchor(screen, overlay, monitor);
+    let anchor = home_position(&window, screen);
     if engine.anchored == Some(anchor) {
         return;
     }
@@ -569,6 +551,100 @@ fn size_settled(since: &mut Option<((u32, u32), std::time::Instant)>, size: (u32
             false
         }
     }
+}
+
+/// The overlay's home: where it sits while it follows the game window
+/// ([`overlay_anchor`] for this window's size and the game's monitor).
+fn home_position<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    screen: window_target::Rect,
+) -> (i32, i32) {
+    let overlay = window
+        .outer_size()
+        .map(|size| (size.width as i32, size.height as i32))
+        .unwrap_or((0, 0));
+    // The monitor the game is on, found from the client's centre.
+    let monitor = window
+        .monitor_from_point(
+            f64::from(screen.x + screen.w / 2),
+            f64::from(screen.y + screen.h / 2),
+        )
+        .ok()
+        .flatten()
+        .map(|monitor| window_target::Rect {
+            x: monitor.position().x,
+            y: monitor.position().y,
+            w: monitor.size().width as i32,
+            h: monitor.size().height as i32,
+        });
+    overlay_anchor(screen, overlay, monitor)
+}
+
+/// How close, in physical pixels, a dropped overlay's top-left has to be to
+/// its home for the drop to count as "put it back".
+const SNAP_DISTANCE: i32 = 40;
+
+/// How long the overlay has to stay still after moving for the move to count
+/// as finished: a drag reports positions continuously while it lasts.
+const SNAP_SETTLE: Duration = Duration::from_millis(400);
+
+/// Whether an overlay dropped at `position` snaps to `home`. Exactly at home is
+/// where the engine itself puts it, so that is not a drop.
+fn snaps(position: (i32, i32), home: (i32, i32)) -> bool {
+    let (dx, dy) = (position.0 - home.0, position.1 - home.1);
+    position != home && dx * dx + dy * dy <= SNAP_DISTANCE * SNAP_DISTANCE
+}
+
+/// Watch for the player dropping the overlay near its home at the game
+/// window's top-right corner, and snap it back there: it lands exactly on the
+/// corner and follows the game window again, as the tray's reset does. A drop
+/// anywhere else keeps the dragged position.
+pub fn start_snap_watch<R: Runtime>(app: AppHandle<R>) {
+    std::thread::spawn(move || {
+        let mut last: Option<(i32, i32)> = None;
+        let mut moved_at: Option<std::time::Instant> = None;
+        loop {
+            std::thread::sleep(Duration::from_millis(150));
+            let Some(window) = app.get_webview_window("main") else {
+                continue;
+            };
+            let Ok(position) = window.outer_position() else {
+                continue;
+            };
+            let position = (position.x, position.y);
+            if last != Some(position) {
+                // The first reading is where the overlay starts, not a move.
+                if last.is_some() {
+                    moved_at = Some(std::time::Instant::now());
+                }
+                last = Some(position);
+                continue;
+            }
+            let Some(at) = moved_at else {
+                continue;
+            };
+            if at.elapsed() < SNAP_SETTLE {
+                continue;
+            }
+            moved_at = None;
+            let selector = app.state::<window_target::TargetState>().selector();
+            let Some(screen) = window_target::status_for(&selector).screen else {
+                continue;
+            };
+            let home = home_position(&window, screen);
+            if !snaps(position, home) {
+                continue;
+            }
+            if window
+                .set_position(tauri::PhysicalPosition::new(home.0, home.1))
+                .is_ok()
+            {
+                last = Some(home);
+                crate::forget_overlay_position(&app);
+                crate::calibration::log("overlay dropped near the game window; snapped back");
+            }
+        }
+    });
 }
 
 /// Where the overlay's top-left goes: just outside the game client's top-right
@@ -1695,6 +1771,21 @@ mod tests {
         let started = since.expect("recorded").1;
         since = Some(((1920, 1080), started - SIZE_SETTLE));
         assert!(size_settled(&mut since, (1920, 1080)));
+    }
+
+    #[test]
+    fn a_drop_near_home_snaps_and_a_drop_elsewhere_stays() {
+        let home = (2260, 0);
+        assert!(snaps((2280, 25), home), "close to the corner");
+        assert!(
+            !snaps((2260, 0), home),
+            "already home: the engine put it there"
+        );
+        assert!(!snaps((2400, 0), home), "dragged away on purpose");
+        assert!(
+            !snaps((2260 + SNAP_DISTANCE, 1), home),
+            "just outside the radius"
+        );
     }
 
     #[test]

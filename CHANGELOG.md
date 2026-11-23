@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- **Drag the overlay back to snap it home.** Once moved by hand, the overlay
+  stayed where it was dropped; putting it back meant the tray's reset. Dropping
+  it within about 40 pixels of its spot at the game window's top-right corner
+  now snaps it there, and it follows the game window again.
+
 ## [0.10.0] - 2026-11-22
 
 ### Added
