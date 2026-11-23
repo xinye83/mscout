@@ -168,7 +168,10 @@ mod platform {
 /// must never be silent. Success is recorded too: a toast leaves no trace once
 /// Windows dismisses it, so the log is the only evidence it fired.
 pub fn notify(notice: Notice<'_>) {
-    if platform::show(APP_ID, notice.title(), notice.body()) {
+    // Tests run on the developer's desktop: a real toast there is noise, so a
+    // test build only logs.
+    let shown = !cfg!(test) && platform::show(APP_ID, notice.title(), notice.body());
+    if shown {
         crate::calibration::log(&format!("notification shown: {}", notice.title()));
     } else {
         crate::calibration::log(&format!(
@@ -188,13 +191,6 @@ mod tests {
         let notice = Notice::Degraded("Ctrl+Alt+M is taken");
         assert_eq!(notice.title(), "MScout — running without a feature");
         assert_eq!(notice.body(), "Ctrl+Alt+M is taken");
-    }
-
-    #[test]
-    fn a_notification_failure_does_not_panic() {
-        // The real call is a WinRT activation; what matters is that an unavailable
-        // shell is a reported false, never a panic.
-        notify(Notice::Degraded("test reason"));
     }
 
     #[test]
