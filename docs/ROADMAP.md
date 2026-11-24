@@ -17,14 +17,6 @@ in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
   2160-line Ideal capture settles it. The Default picture-width rounding is
   measured only at 16:9 and 16:10; a windowed size such as 1600×900 checks it
   at another width. Add each capture to `testdata/` as a scene.
-- [ ] **Filtered glyph variants (atlas coverage).** The digit sweep found a live
-  `8` that the seeded atlas does not represent: at 8×11 the correct `8` scores
-  ~29 while `6`/`9` score ~10–12. A 20-EXP error can pass the percentage
-  rounding and be recorded. A percentage `3` also scores as `8`; the frame check
-  repairs that percentage, but the raw glyph is still wrong. Generate
-  blurred/thresholded variants from the client glyphs at the measured size, or
-  learn a variant only after an EXP/level/pct-consistent read. Rerun the digit
-  sweep and promote its known-gap expectations to exact.
 - [ ] **Exact 1x map label match.** On the 1x picture the label is drawn in
   1-bit Arial Bold at a fixed size, so it can be matched exactly against the
   client's map table rendered the same way, instead of Windows OCR plus the
@@ -56,12 +48,6 @@ in [DECISIONS.md](DECISIONS.md). Remove an item when it ships.
 
 ## Product
 
-- [ ] **Overlay on a full-monitor game.** The overlay's top-left is put at the
-  client's top-right corner (`engine::anchor_overlay`). When the game fills its
-  monitor (2560×1440 on a 2560×1440 display) that corner is on the next
-  display, so the overlay jumps there. Keep it on the game's monitor: place it
-  inside the client's top-right corner when the outside one is off that
-  monitor.
 - [ ] **History window, the rest of the design.** It now has 1/7/30-day and
   all-time ranges from the index, a summary, sessions and per-map tables and
   CSV export. Still to add: custom ranges, a rate pane under the EXP chart

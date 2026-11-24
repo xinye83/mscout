@@ -7,16 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Added
-- **Active-time rates.** The overlay's rates and ETA now count only time spent
-  gaining (gains no more than 30 s apart), so standing still no longer drags
-  them down; the old wall-clock figure stays as "with breaks", with its own ETA.
-  The ETA shows a range from the session's pace.
 - **Sessions.** Play is split into sessions (ten minutes without a gain ends
   one). The overlay shows the running session: length, active time, EXP,
   levels, deaths and EXP lost, and the best 5 minutes.
-- **A rate graph on the overlay**, showing the 5-minute rate over the last
-  hour with the session average and markers for deaths, level-ups and map
-  changes, in place of the cumulative EXP curve.
 - **%/h and kill estimates** (kills/h and kills to level from the typical
   gain), and a choice of which extra figures the collapsed overlay shows.
 - **History: sessions, maps and export.** An all-time range, a sessions table,
@@ -29,6 +22,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   stayed where it was dropped; putting it back meant the tray's reset. Dropping
   it within about 40 pixels of its spot at the game window's top-right corner
   now snaps it there, and it follows the game window again.
+
+### Changed
+- **Rates use active time.** The overlay's rates and ETA now count only time spent
+  gaining (gains no more than 30 s apart), so standing still no longer drags
+  them down; the old wall-clock figure stays as "with breaks", with its own ETA.
+  The ETA shows a range from the session's pace.
+- **The overlay graphs the rate**, showing the 5-minute rate over the last
+  hour with the session average and markers for deaths, level-ups and map
+  changes, in place of the cumulative EXP curve.
 
 ## [0.10.0] - 2026-11-22
 

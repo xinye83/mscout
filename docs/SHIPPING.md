@@ -10,11 +10,12 @@ stays in `data/`.
 | Item | Why it is safe to ship | Notes |
 |---|---|---|
 | Rust/React executable, UI, icons | our code and art | — |
-| Preset calibration boxes (`src-tauri/presets/*.json`) | measured **geometry** only | Every preset has `expGlyphs = levelGlyphs = mapGlyphs = 0`, no maps/identities. Shipped pairs: **1366×768 and 1920×1080 at Default, Ideal and Filtered**. 1920×1200 has no preset and falls back to calibration. See [PRESETS.md](PRESETS.md). |
+| Preset calibration boxes (`src-tauri/presets/*.json`) | measured **geometry** only | Every preset has `expGlyphs = levelGlyphs = mapGlyphs = 0`, no maps/identities. Shipped files: **1366×768 and 1920×1080 at Default, Ideal and Filtered**; every other size derives its boxes from 1366×768 on the 1x picture. See [PRESETS.md](PRESETS.md). |
 | EXP table | game **numbers**, not art | `exp_table.rs` / `expTable.ts`; 1–49 confirmed, 50–89 estimated and labelled, 90–100 anchored. |
 | Detection constants and rate math | our logic | minimap panel colour/proportions, ROI rules, rate windows. |
 | Job-name vocabulary (`jobs::JOB_NAMES`) | a closed set of **class labels**, not client content | 5 trees + 10 second jobs + 10 reserved third jobs; no art, no per-client strings. See D33 for why this one list ships while the map table does not. |
 | Docs, tray/overlay assets | ours | — |
+| SQLite, compiled in through `rusqlite` (`bundled`) | public domain (SQLite), MIT (rusqlite) | holds the derived history index only; no data ships with it. |
 
 Nothing else is bundled: no glyph atlases, no map-name list, no fonts, no
 fingerprints.
@@ -53,7 +54,9 @@ fingerprints/letters; the app does not download or install fonts.
 - `data/profiles/<W>x<H>[@mode].json` — boxes, EXP/level/identity atlases
   (seeded from the client/Arial), taught map/street fingerprints, identities.
   Player-specific and may contain derived Nexon/Arial glyphs.
-- `data/samples/`, `data/map-samples/`, logs, backups.
+- `data/samples/` (day files, gzipped after 30 days), `data/index.sqlite3`
+  (derived history index), `data/exports/` (CSV the player saved),
+  `data/map-samples/`, logs, backups.
 - `data/fonts/` — extracted Noto TTF if used for diagnostics.
 - `data/settings.json` — target window, UI Size, `mscwDir`.
 - `fonts/` — local reference copies of `arial.ttf` and `Font_000.wz`
