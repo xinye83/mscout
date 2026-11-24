@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-23
+
 ### Added
 - **Sessions.** Play is split into sessions (ten minutes without a gain ends
   one). The overlay shows the running session: length, active time, EXP,
@@ -561,7 +563,8 @@ First release. Read-only: it observes the screen and never interacts with the ga
 - **Docs.** Setup guide, behavioral spec, roadmap, decision log, data formats, dev notes.
 - **Tests.** Rust unit tests for the EXP table, glyph segmentation and matching, thresholding, settings/profile round-trips and window enumeration, plus `#[ignore]`d diagnostics for live capture.
 
-[Unreleased]: https://github.com/xinye83/mscout/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/xinye83/mscout/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/xinye83/mscout/releases/tag/v0.11.0
 [0.10.0]: https://github.com/xinye83/mscout/releases/tag/v0.10.0
 [0.9.0]: https://github.com/xinye83/mscout/releases/tag/v0.9.0
 [0.8.0]: https://github.com/xinye83/mscout/releases/tag/v0.8.0
